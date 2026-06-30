@@ -333,3 +333,81 @@ describe("table border presets", () => {
     }
   });
 });
+
+const createGridTable = (rowCount: number, colCount: number, caretCol: number): EditorState => {
+  const rows = Array.from({ length: rowCount }, (_row, r) =>
+    schema.node(
+      "tableRow",
+      null,
+      Array.from({ length: colCount }, (_col, c) =>
+        schema.node("tableCell", { borders: null }, [
+          schema.node("paragraph", null, [schema.text(`R${r}C${c}`)]),
+        ]),
+      ),
+    ),
+  );
+  const doc = schema.node("doc", null, [schema.node("table", null, rows)]);
+
+  const caretText = `R0C${caretCol}`;
+  let caretPos: number | null = null;
+  doc.descendants((node, pos) => {
+    if (caretPos === null && node.isText && node.text === caretText) {
+      caretPos = pos;
+    }
+  });
+  if (caretPos === null) {
+    throw new Error(`Expected caret text ${caretText}`);
+  }
+
+  return EditorState.create({ doc, schema, selection: TextSelection.create(doc, caretPos) });
+};
+
+const rowCellCounts = (doc: PMNode): number[] => {
+  const counts: number[] = [];
+  doc.descendants((node) => {
+    if (node.type.name !== "tableRow") {
+      return true;
+    }
+    let cells = 0;
+    node.forEach((child) => {
+      if (child.type.name === "tableCell" || child.type.name === "tableHeader") {
+        cells += 1;
+      }
+    });
+    counts.push(cells);
+    return false;
+  });
+  return counts;
+};
+
+// A collapsed-caret column insert must add exactly one column to every row. The
+// command builds insert positions against the original table while the
+// transaction grows, so positions must be mapped through `tr.mapping` (or the
+// inserts batched right-to-left); otherwise later rows' cells land in earlier
+// rows and the table gains several columns instead of one.
+describe("addColumn position mapping (collapsed caret)", () => {
+  test("addColumnRight inserts exactly one column, uniformly across every row", () => {
+    let state = createGridTable(3, 3, 0);
+    expect(rowCellCounts(state.doc)).toEqual([3, 3, 3]);
+
+    state = runTableCommand(state, "addColumnRight");
+
+    expect(rowCellCounts(state.doc)).toEqual([4, 4, 4]);
+  });
+
+  test("addColumnRight from the last column appends one trailing column to every row", () => {
+    let state = createGridTable(3, 3, 2);
+
+    state = runTableCommand(state, "addColumnRight");
+
+    expect(rowCellCounts(state.doc)).toEqual([4, 4, 4]);
+  });
+
+  test("addColumnLeft inserts exactly one column, uniformly across every row", () => {
+    let state = createGridTable(3, 3, 1);
+
+    state = runTableCommand(state, "addColumnLeft");
+
+    expect(rowCellCounts(state.doc)).toEqual([4, 4, 4]);
+  });
+});

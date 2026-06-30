@@ -125,15 +125,40 @@ test.describe("typing + undo", () => {
     expect(afterUndo).toBe(before);
   });
 
-  // KNOWN ISSUE (reported, not asserted): redo after a grouped undo does not
-  // restore the typed text on current `main`. Cmd/Ctrl+Shift+Z + Cmd/Ctrl+Y
-  // both fire the redo (the editor's `canRedo()` flips true -> false), but the
-  // restored document does not contain the burst — the redo entry holds a stale
-  // (pre-typing) snapshot. Separately, the document-level `useHistory` keydown
-  // handler matches `event.key === "z"`, which is "Z" while Shift is held, so
-  // Shift+Z alone never reaches it (only Ctrl/Cmd+Y does). Skipped until the
-  // history redo is fixed, rather than asserting broken behaviour.
-  test.skip("redo restores an undone burst", () => {});
+  test("redo after a grouped undo restores the typed burst (Shift+Z and Ctrl/Cmd+Y)", async ({
+    page,
+  }) => {
+    await mountFixture(page, "sample.docx");
+    await page.locator(".layout-paragraph").first().click();
+    const before = await docText(page);
+    expect(before).not.toContain("Qbxz");
+
+    await page.keyboard.type("Qbxz", { delay: 15 });
+    await page.waitForTimeout(150);
+    expect(await docText(page)).toContain("Qbxz");
+
+    // Grouped undo reverts the whole burst back to the pre-typing text.
+    await page.keyboard.press(`${MOD}+z`);
+    await page.waitForTimeout(150);
+    expect(await docText(page)).toBe(before);
+
+    // The standard redo chord (Shift held) restores the entire burst. With
+    // Shift down the browser reports the uppercase "Z"; the history shortcut is
+    // matched case-insensitively so this chord triggers redo.
+    await page.keyboard.press(`${MOD}+Shift+z`);
+    await page.waitForTimeout(150);
+    expect(await docText(page)).toContain("Qbxz");
+
+    // Undo once more, then redo via the alternate Ctrl/Cmd+Y chord also restores
+    // the burst (not a stale, pre-typing snapshot).
+    await page.keyboard.press(`${MOD}+z`);
+    await page.waitForTimeout(150);
+    expect(await docText(page)).toBe(before);
+
+    await page.keyboard.press(`${MOD}+y`);
+    await page.waitForTimeout(150);
+    expect(await docText(page)).toContain("Qbxz");
+  });
 });
 
 test.describe("find", () => {
@@ -190,13 +215,14 @@ test.describe("table", () => {
     const rowsAfterInsert = await countNodes(page, "tableRow");
     expect(rowsAfterInsert).toBeGreaterThan(rows0);
 
-    // Insert a column right -> the first row gains at least one cell.
+    // Insert a column right -> the first row gains exactly one cell (a collapsed
+    // caret must add a single column, uniformly, not one per existing column).
     await (await openTableCellMenu(page))
       .getByRole("menuitem", { name: "Insert column right" })
       .click();
     await page.waitForTimeout(250);
     const colsAfterInsert = await firstRowCellCount(page);
-    expect(colsAfterInsert).toBeGreaterThan(cols0);
+    expect(colsAfterInsert).toBe(cols0 + 1);
 
     // Delete a row -> row count shrinks again.
     await (await openTableCellMenu(page)).getByRole("menuitem", { name: "Delete row" }).click();
@@ -218,6 +244,29 @@ test.describe("header/footer", () => {
       () => document.querySelector("[data-hf-r-id] .ProseMirror")?.textContent ?? "",
     );
 
+  // Text of every header in the *saved* document model. `getDocument()`
+  // (buildCurrentDocument) flushes the persistent hidden header/footer views
+  // into the returned Document, so this is exactly what a "Save As .docx" would
+  // serialise — the round-trip persistence path, independent of any UI commit.
+  const savedHeaderText = (page: Page) =>
+    page.evaluate(() => {
+      const doc = globalThis.__folioPlayground?.getEditorRef()?.getDocument() as
+        | { package?: { headers?: unknown } }
+        | null;
+      const collect = (node: unknown): string => {
+        if (typeof node === "string") return node;
+        if (node === null || typeof node !== "object") return "";
+        const record = node as Record<string, unknown>;
+        if (typeof record["text"] === "string") return record["text"];
+        const content = record["content"];
+        if (Array.isArray(content)) return content.map(collect).join("");
+        return collect(content);
+      };
+      const headers = doc?.package?.headers;
+      const values = headers instanceof Map ? [...headers.values()] : Object.values(headers ?? {});
+      return values.map((value) => collect(value)).join("");
+    });
+
   test("double-clicking the header enters edit mode and edits land in the header", async ({
     page,
   }) => {
@@ -238,14 +287,19 @@ test.describe("header/footer", () => {
 
     // The typed text lands in the live header content editor.
     expect(await headerContent(page)).toContain("HdrMark");
+
+    // Round-trip persistence: the edit is already in the saved document model
+    // (getDocument flushes the persistent header/footer views), so a save would
+    // write it into the .docx without depending on any UI commit step.
+    expect(await savedHeaderText(page)).toContain("HdrMark");
   });
 
-  // NOTE: committing the header edit back into the .docx (the save-on-body-click
-  // / save-on-exit path) could not be driven reliably from Playwright — a
-  // synthetic body click tears down the hidden header editors before the save
-  // reads them, so the edit is dropped instead of persisted. The edit itself
-  // (above) is asserted; the round-trip persistence is reported rather than
-  // asserted on flaky synthetic events.
+  // NOTE: the *UI* save-on-body-click / save-on-exit commit path is not driven
+  // here. While the inline header overlay is open the painted body paragraph is
+  // not hittable, so a synthetic body click times out (a Playwright limitation,
+  // not a product bug). Persistence itself is asserted above via getDocument():
+  // the persistent hidden HF view holds the edit and is flushed on save, so the
+  // edit is never dropped.
 });
 
 test.describe("image", () => {

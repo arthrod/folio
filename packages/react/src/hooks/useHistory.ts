@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
-import { HistoryManager } from "@stll/folio-core/managers/HistoryManager";
+import { HistoryManager, classifyHistoryShortcut } from "@stll/folio-core/managers/HistoryManager";
 import type { HistoryEntry } from "@stll/folio-core/managers/HistoryManager";
 
 export type { HistoryEntry } from "@stll/folio-core/managers/HistoryManager";
@@ -161,21 +161,18 @@ export function useHistory<T>(
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Ctrl+Z or Cmd+Z for undo
-      if ((event.ctrlKey || event.metaKey) && event.key === "z" && !event.shiftKey) {
-        event.preventDefault();
-        api.undo();
+      // Ctrl/Cmd+Z (undo), Ctrl/Cmd+Shift+Z and Ctrl/Cmd+Y (redo). The shared
+      // classifier matches `key` case-insensitively, so a held Shift reporting
+      // the uppercase "Z" still routes to redo.
+      const shortcut = classifyHistoryShortcut(event);
+      if (!shortcut) {
         return;
       }
-
-      // Ctrl+Y or Cmd+Shift+Z for redo
-      if (
-        ((event.ctrlKey || event.metaKey) && event.key === "y") ||
-        ((event.ctrlKey || event.metaKey) && event.key === "z" && event.shiftKey)
-      ) {
-        event.preventDefault();
+      event.preventDefault();
+      if (shortcut === "undo") {
+        api.undo();
+      } else {
         api.redo();
-        return;
       }
     };
 

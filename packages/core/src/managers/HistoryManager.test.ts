@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { HistoryManager } from "./HistoryManager";
+import { HistoryManager, classifyHistoryShortcut } from "./HistoryManager";
 
 describe("HistoryManager", () => {
   test("push records undo entries and exposes the current state", () => {
@@ -125,5 +125,39 @@ describe("HistoryManager", () => {
       manager;
     loaderView.reset({ id: 1 });
     expect(loaderView.state).toEqual({ id: 1 });
+  });
+});
+
+describe("classifyHistoryShortcut", () => {
+  const event = (key: string, mods: { ctrl?: boolean; meta?: boolean; shift?: boolean } = {}) => ({
+    key,
+    ctrlKey: mods.ctrl ?? false,
+    metaKey: mods.meta ?? false,
+    shiftKey: mods.shift ?? false,
+  });
+
+  test("Ctrl/Cmd+Z is undo", () => {
+    expect(classifyHistoryShortcut(event("z", { ctrl: true }))).toBe("undo");
+    expect(classifyHistoryShortcut(event("z", { meta: true }))).toBe("undo");
+  });
+
+  test("Ctrl/Cmd+Y is redo", () => {
+    expect(classifyHistoryShortcut(event("y", { ctrl: true }))).toBe("redo");
+    expect(classifyHistoryShortcut(event("Y", { meta: true }))).toBe("redo");
+  });
+
+  test("Ctrl/Cmd+Shift+Z is redo even though Shift reports the uppercase key", () => {
+    // The browser delivers `event.key === "Z"` (uppercase) while Shift is held;
+    // a case-sensitive `=== "z"` check would miss the standard redo chord.
+    expect(classifyHistoryShortcut(event("Z", { meta: true, shift: true }))).toBe("redo");
+    expect(classifyHistoryShortcut(event("Z", { ctrl: true, shift: true }))).toBe("redo");
+    // Defensive: a lowercase "z" with Shift (some synthetic event sources) too.
+    expect(classifyHistoryShortcut(event("z", { meta: true, shift: true }))).toBe("redo");
+  });
+
+  test("ignores chords without a Ctrl/Cmd modifier or unrelated keys", () => {
+    expect(classifyHistoryShortcut(event("z"))).toBeNull();
+    expect(classifyHistoryShortcut(event("a", { meta: true }))).toBeNull();
+    expect(classifyHistoryShortcut(event("Z", { shift: true }))).toBeNull();
   });
 });

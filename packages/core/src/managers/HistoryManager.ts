@@ -56,6 +56,39 @@ export type HistoryManagerOptions<T> = {
 export const defaultHistoryIsEqual = <T>(a: T, b: T): boolean =>
   JSON.stringify(a) === JSON.stringify(b);
 
+/** History action a keyboard chord maps to. */
+export type HistoryShortcut = "undo" | "redo";
+
+/** Minimal keyboard-event shape the shortcut classifier reads. */
+export type HistoryShortcutEvent = {
+  key: string;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+};
+
+/**
+ * Classify a keydown as an undo/redo shortcut, framework-agnostically.
+ *
+ * `key` is compared case-insensitively: while Shift is held the browser reports
+ * the uppercase `"Z"`, so the standard redo chord Ctrl/Cmd+Shift+Z would slip
+ * past an exact `=== "z"` check and never trigger redo. Ctrl/Cmd+Z is undo;
+ * Ctrl/Cmd+Shift+Z and Ctrl/Cmd+Y are redo.
+ */
+export const classifyHistoryShortcut = (event: HistoryShortcutEvent): HistoryShortcut | null => {
+  if (!event.ctrlKey && !event.metaKey) {
+    return null;
+  }
+  const key = event.key.toLowerCase();
+  if (key === "y") {
+    return "redo";
+  }
+  if (key === "z") {
+    return event.shiftKey ? "redo" : "undo";
+  }
+  return null;
+};
+
 export class HistoryManager<T> extends Subscribable<HistorySnapshot<T>> {
   private currentState: T;
   private readonly initialState: T;

@@ -1282,7 +1282,7 @@ export const TablePluginExtension = createExtension({
                 cellAttrs["width"] = newColWidthPercent;
                 cellAttrs["widthType"] = "pct";
                 const newCell = nodeTypeTableCell.create(cellAttrs, paragraph);
-                tr = tr.insert(cellPos, newCell);
+                tr = tr.insert(tr.mapping.map(cellPos), newCell);
               }
               cellPos += cell.nodeSize;
               colIdx += Number(cell.attrs["colspan"]) || 1;
@@ -1297,7 +1297,7 @@ export const TablePluginExtension = createExtension({
               cellAttrs["width"] = newColWidthPercent;
               cellAttrs["widthType"] = "pct";
               const newCell = nodeTypeTableCell.create(cellAttrs, paragraph);
-              tr = tr.insert(cellPos, newCell);
+              tr = tr.insert(tr.mapping.map(cellPos), newCell);
             }
           }
           rowPos += row.nodeSize;
@@ -1385,7 +1385,7 @@ export const TablePluginExtension = createExtension({
                 cellAttrs["width"] = newColWidthPercent;
                 cellAttrs["widthType"] = "pct";
                 const newCell = nodeTypeTableCell.create(cellAttrs, paragraph);
-                tr = tr.insert(cellPos, newCell);
+                tr = tr.insert(tr.mapping.map(cellPos), newCell);
                 insertedCount += 1;
               }
             });
@@ -1399,7 +1399,7 @@ export const TablePluginExtension = createExtension({
               cellAttrs["width"] = newColWidthPercent;
               cellAttrs["widthType"] = "pct";
               const newCell = nodeTypeTableCell.create(cellAttrs, paragraph);
-              tr = tr.insert(cellPos, newCell);
+              tr = tr.insert(tr.mapping.map(cellPos), newCell);
             }
           }
           rowPos += row.nodeSize;
