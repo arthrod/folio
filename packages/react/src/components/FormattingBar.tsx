@@ -15,10 +15,14 @@ import {
   BaselineIcon,
   BoldIcon,
   ChevronDownIcon,
+  ImageIcon,
   ItalicIcon,
   MoreHorizontalIcon,
   PilcrowIcon,
   Redo2Icon,
+  SeparatorHorizontalIcon,
+  TableIcon,
+  TableOfContentsIcon,
   UnderlineIcon,
   Undo2Icon,
 } from "lucide-react";
@@ -39,6 +43,10 @@ import { StylePicker } from "./ui/StylePicker";
 
 const ICON_SIZE = 16;
 const INLINE_SECONDARY_CONTROLS_MIN_WIDTH = 760;
+
+/** Default grid the Insert Table button requests (the toolbar has no size picker). */
+const DEFAULT_TABLE_ROWS = 2;
+const DEFAULT_TABLE_COLUMNS = 2;
 
 /** Document color presets — hex values for OOXML compatibility. */
 const DOCUMENT_COLOR_PRESETS: ColorPreset[] = [
@@ -96,6 +104,11 @@ export function FormattingBar(props: FormattingBarProps) {
     documentStyles,
     theme,
     onRefocusEditor,
+    onInsertImage,
+    onInsertTable,
+    showTableInsert = true,
+    onInsertPageBreak,
+    onInsertTOC,
     priorityExtra,
     inlineExtra,
     stylePickerLabel,
@@ -216,6 +229,41 @@ export function FormattingBar(props: FormattingBarProps) {
     },
     [disabled, onFormat, onRefocusEditor],
   );
+
+  // After an insert, return focus to the editor so the caret lands in the new
+  // content. Mouse clicks refocus via the bar's mouse-up handler, but keyboard
+  // activation (Tab + Enter/Space) does not, so each insert refocuses itself.
+  const handleInsertImage = useCallback(() => {
+    if (!disabled && onInsertImage) {
+      onInsertImage();
+      requestAnimationFrame(() => onRefocusEditor?.());
+    }
+  }, [disabled, onInsertImage, onRefocusEditor]);
+
+  const handleInsertTable = useCallback(() => {
+    if (!disabled && onInsertTable) {
+      onInsertTable(DEFAULT_TABLE_ROWS, DEFAULT_TABLE_COLUMNS);
+      requestAnimationFrame(() => onRefocusEditor?.());
+    }
+  }, [disabled, onInsertTable, onRefocusEditor]);
+
+  const handleInsertPageBreak = useCallback(() => {
+    if (!disabled && onInsertPageBreak) {
+      onInsertPageBreak();
+      requestAnimationFrame(() => onRefocusEditor?.());
+    }
+  }, [disabled, onInsertPageBreak, onRefocusEditor]);
+
+  const handleInsertTOC = useCallback(() => {
+    if (!disabled && onInsertTOC) {
+      onInsertTOC();
+      requestAnimationFrame(() => onRefocusEditor?.());
+    }
+  }, [disabled, onInsertTOC, onRefocusEditor]);
+
+  const showTableButton = showTableInsert && Boolean(onInsertTable);
+  const hasInsertControls =
+    Boolean(onInsertImage) || showTableButton || Boolean(onInsertPageBreak) || Boolean(onInsertTOC);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -560,6 +608,57 @@ export function FormattingBar(props: FormattingBarProps) {
             <UnderlineIcon size={ICON_SIZE} />
           </ToolbarButton>
         </ToolbarGroup>
+
+        {/* Insert group — each control is opt-in: it renders only when its
+            handler (and flag, for tables) is provided by the consumer. */}
+        {hasInsertControls && (
+          <>
+            <ToolbarSeparator />
+            <ToolbarGroup label={t("insertGroup")}>
+              {onInsertImage && (
+                <ToolbarButton
+                  onClick={handleInsertImage}
+                  disabled={disabled}
+                  title={t("insertImage")}
+                  ariaLabel={t("insertImage")}
+                >
+                  <ImageIcon size={ICON_SIZE} />
+                </ToolbarButton>
+              )}
+              {showTableButton && (
+                <ToolbarButton
+                  onClick={handleInsertTable}
+                  disabled={disabled}
+                  title={t("insertTable")}
+                  ariaLabel={t("insertTable")}
+                  testId="toolbar-insert-table"
+                >
+                  <TableIcon size={ICON_SIZE} />
+                </ToolbarButton>
+              )}
+              {onInsertPageBreak && (
+                <ToolbarButton
+                  onClick={handleInsertPageBreak}
+                  disabled={disabled}
+                  title={t("insertPageBreak")}
+                  ariaLabel={t("insertPageBreak")}
+                >
+                  <SeparatorHorizontalIcon size={ICON_SIZE} />
+                </ToolbarButton>
+              )}
+              {onInsertTOC && (
+                <ToolbarButton
+                  onClick={handleInsertTOC}
+                  disabled={disabled}
+                  title={t("insertTableOfContents")}
+                  ariaLabel={t("insertTableOfContents")}
+                >
+                  <TableOfContentsIcon size={ICON_SIZE} />
+                </ToolbarButton>
+              )}
+            </ToolbarGroup>
+          </>
+        )}
 
         {showSecondaryInline ? (
           <>
