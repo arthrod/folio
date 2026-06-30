@@ -8,6 +8,10 @@ publish = false
 name = "docx-parse-bench"
 path = "src/main.rs"
 
+[[bin]]
+name = "docx-roundtrip"
+path = "src/roundtrip.rs"
+
 [dependencies]
 docx-rs = "0.4"
 

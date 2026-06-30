@@ -48,3 +48,18 @@ per parse:
 
 docx-rs (Rust) parses a large document ~4× faster than folio-JS — the bar the
 folio-core rewrite should clear.
+
+## Round-trip fidelity — why folio can't just adopt docx-rs
+
+An editor must re-serialize exactly what it parsed (lossless round-trip).
+docx-rs **cannot**: `read_docx → build → pack` panics on all three fixtures with
+`internal error: entered unreachable code` (`run.rs:370`). Its reader and writer
+are separate, misaligned models — the reader produces `RunChild::InstrTextString`
+(from `w:instrText`, the instruction text inside fields: page numbers, TOC,
+cross-references, dates — ubiquitous), and the writer has `=> unreachable!()` for
+it. So docx-rs is an excellent parse-speed reference, but its model is not a
+foundation folio can build an editor on. The reusable layer is one level down:
+`quick-xml`, the XML reader docx-rs is built on.
+
+Reproduce: `cargo build --release` in `./rust`, then
+`bun benchmarks/cross-language/roundtrip-check.ts`.
