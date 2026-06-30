@@ -13,7 +13,7 @@
 //   - `layout-engine/measure`  — pure measurement helpers (canvas / font math)
 //
 // Every other cross-layer import is forbidden. The matching architecture
-// test (`packages/folio/src/core/__tests__/layer-boundaries.test.ts`) walks
+// test (`packages/core/src/__tests__/layer-boundaries.test.ts`) walks
 // the same import edges with `Bun.Glob` and asserts the same rule, so a
 // loosened lint config cannot silently re-introduce the cycle.
 //
@@ -29,16 +29,13 @@
 //   import { Page, FOOTNOTE_SEPARATOR_HEIGHT } from "../layout-engine/types";
 //   import { measureParagraph } from "../layout-engine/measure";
 
-const PAINTER_PREFIX = "src/core/layout-painter/";
-const BRIDGE_PREFIX = "src/core/layout-bridge/";
-const ENGINE_PREFIX = "src/core/layout-engine/";
+const PAINTER_PREFIX = "packages/core/src/layout-painter/";
+const BRIDGE_PREFIX = "packages/core/src/layout-bridge/";
+const ENGINE_PREFIX = "packages/core/src/layout-engine/";
 
 type Layer = "painter" | "bridge" | "engine";
 
-const matchesLayerPrefix = (
-  normalizedPath: string,
-  prefix: string,
-): boolean => {
+const matchesLayerPrefix = (normalizedPath: string, prefix: string): boolean => {
   // Anchor on a path separator (or the string start) so a directory that merely
   // contains the prefix as a substring cannot false-match, mirroring isCoreFile.
   // `bare` is the prefix without its trailing slash, for the barrel-target case
@@ -70,17 +67,11 @@ const layerOf = (absolutePath: string): Layer | null => {
 // directory. Returns a normalized path string we can prefix-match against the
 // layer constants. Non-relative specifiers (bare packages, "@stll/...") are
 // out of scope for this rule and return null.
-const resolveCoreTarget = (
-  importerPath: string,
-  specifier: string,
-): string | null => {
+const resolveCoreTarget = (importerPath: string, specifier: string): string | null => {
   if (!specifier.startsWith(".")) {
     return null;
   }
-  const importerDir = importerPath
-    .replaceAll("\\", "/")
-    .split("/")
-    .slice(0, -1);
+  const importerDir = importerPath.replaceAll("\\", "/").split("/").slice(0, -1);
   const parts = specifier.split("/");
   const stack = [...importerDir];
   for (const part of parts) {
@@ -112,10 +103,7 @@ const stripExtAndIndex = (resolved: string): string => {
   return value;
 };
 
-const ALLOWED_PAINTER_TO_ENGINE_SUFFIXES = [
-  "layout-engine/types",
-  "layout-engine/measure",
-];
+const ALLOWED_PAINTER_TO_ENGINE_SUFFIXES = ["layout-engine/types", "layout-engine/measure"];
 
 const isAllowedPainterToEngine = (resolvedTarget: string): boolean => {
   const stripped = stripExtAndIndex(resolvedTarget);
@@ -226,7 +214,7 @@ const checkEdge = (context: RuleContext, importNode: AstNode): void => {
 // ---------------------------------------------------------------------------
 // React-free core seam.
 //
-// `packages/folio/src/core/` is the headless, framework-neutral core: the
+// `packages/core/src/` is the headless, framework-neutral core: the
 // document model, OOXML I/O, and the layout pipeline. It must not import a UI
 // framework, so adapters (React today; a Vue adapter, a Tauri shell, or a Rust
 // core tomorrow) can all sit on top of one shared core. Forbid React and the
@@ -235,7 +223,7 @@ const checkEdge = (context: RuleContext, importNode: AstNode): void => {
 // graph, which is exactly the coupling this seam removes.
 // ---------------------------------------------------------------------------
 
-const CORE_PREFIX = "src/core/";
+const CORE_PREFIX = "packages/core/src/";
 
 const FORBIDDEN_IN_CORE = ["react", "react-dom", "@stll/ui"];
 
@@ -243,9 +231,7 @@ const isCoreFile = (importerPath: string): boolean => {
   const normalized = importerPath.replaceAll("\\", "/");
   // Anchor on a path separator (or the string start) so a directory that merely
   // contains the prefix as a substring cannot false-match.
-  return (
-    normalized.startsWith(CORE_PREFIX) || normalized.includes(`/${CORE_PREFIX}`)
-  );
+  return normalized.startsWith(CORE_PREFIX) || normalized.includes(`/${CORE_PREFIX}`);
 };
 
 const isForbiddenInCore = (specifier: string): boolean => {
@@ -257,10 +243,7 @@ const isForbiddenInCore = (specifier: string): boolean => {
   return false;
 };
 
-const checkReactFreeCore = (
-  context: RuleContext,
-  importNode: AstNode,
-): void => {
+const checkReactFreeCore = (context: RuleContext, importNode: AstNode): void => {
   const specifier = importSpecifierOf(importNode);
   if (specifier === null || !isForbiddenInCore(specifier)) {
     return;
@@ -370,10 +353,7 @@ const checkModelPurity = (context: RuleContext, importNode: AstNode): void => {
     return;
   }
 
-  if (
-    stripped.includes("/layout-engine/") &&
-    !isAllowedModelEngineTarget(stripped)
-  ) {
+  if (stripped.includes("/layout-engine/") && !isAllowedModelEngineTarget(stripped)) {
     context.report({ node: importNode, messageId: "modelImpureData" });
   }
 };
@@ -430,7 +410,7 @@ export default {
         type: "problem",
         messages: {
           reactInCore:
-            "packages/folio/src/core is the headless, framework-neutral core " +
+            "packages/core/src is the headless, framework-neutral core " +
             "and must not import React, react-dom, or @stll/ui (type-only " +
             "imports included). Keep framework code in the adapter layer " +
             "(components/, hooks/, paged-editor/); if core needs a shared CSS " +

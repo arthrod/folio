@@ -49,9 +49,7 @@ const isCi = (): boolean => {
  * fc.assert(fc.property(arb, predicate), propertyConfig({ numRuns: 200 }));
  * ```
  */
-export const propertyConfig = <Ts>(
-  params: fc.Parameters<Ts> = {},
-): fc.Parameters<Ts> => {
+export const propertyConfig = <Ts>(params: fc.Parameters<Ts> = {}): fc.Parameters<Ts> => {
   const factor = readNumRunsFactor(process.env[NUM_RUNS_FACTOR_ENV]);
   const baseNumRuns = params.numRuns ?? FAST_CHECK_DEFAULT_NUM_RUNS;
   return {

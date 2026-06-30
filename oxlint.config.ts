@@ -61,7 +61,7 @@ export default library({
   ignorePatterns: [
     // Module-augmentation files must use `interface` for declaration merging;
     // oxlint's --fix would rewrite it to `type` and break the augmentation.
-    "types/**/*.d.ts",
+    "packages/react/types/**/*.d.ts",
   ],
   overrides: [
     {
@@ -81,8 +81,9 @@ export default library({
     },
     {
       // Build/profiling/validation scripts: operational glue that prints to the
-      // terminal and consumes untyped dynamic data.
-      files: ["scripts/**/*.{ts,tsx}"],
+      // terminal and consumes untyped dynamic data. Covers the shared root
+      // scripts (prepare-publish, validate-dist) and each package's own scripts.
+      files: ["scripts/**/*.{ts,tsx}", "packages/*/scripts/**/*.{ts,tsx}"],
       rules: {
         "no-console": "off",
         "typescript/no-unsafe-assignment": "off",
@@ -101,9 +102,9 @@ export default library({
       // `.oxlint-plugins/folio-layer-boundaries.ts` and the matching test at
       // `src/core/__tests__/layer-boundaries.test.ts`.
       files: [
-        "src/core/layout-bridge/**/*.{ts,tsx}",
-        "src/core/layout-engine/**/*.{ts,tsx}",
-        "src/core/layout-painter/**/*.{ts,tsx}",
+        "packages/core/src/layout-bridge/**/*.{ts,tsx}",
+        "packages/core/src/layout-engine/**/*.{ts,tsx}",
+        "packages/core/src/layout-painter/**/*.{ts,tsx}",
       ],
       rules: {
         "folio-layer-boundaries/no-upstream-import": "error",
@@ -114,7 +115,7 @@ export default library({
       // react-dom, and @stll/ui (type-only imports included) anywhere under
       // core/, so adapters can all sit on one shared core. See the matching
       // test at `src/core/__tests__/react-free-core.test.ts`.
-      files: ["src/core/**/*.{ts,tsx}"],
+      files: ["packages/core/src/**/*.{ts,tsx}"],
       rules: {
         "folio-layer-boundaries/no-react-in-core": "error",
       },
@@ -124,9 +125,9 @@ export default library({
       // importing ProseMirror, DOM render, React, @stll/ui, or engine behavior.
       // See the matching test at `src/core/__tests__/model-purity.test.ts`.
       files: [
-        "src/core/types/**/*.ts",
-        "src/core/layout-engine/types.ts",
-        "src/core/layout-engine/measure/measureTypes.ts",
+        "packages/core/src/types/**/*.ts",
+        "packages/core/src/layout-engine/types.ts",
+        "packages/core/src/layout-engine/measure/measureTypes.ts",
       ],
       rules: {
         "folio-layer-boundaries/model-is-pure-data": "error",

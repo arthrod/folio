@@ -1,17 +1,8 @@
 {
-  "name": "@stll/folio",
+  "name": "@stll/folio-monorepo",
   "version": "0.1.0",
-  "description": "A modern .docx-compatible document editor for the browser, built on ProseMirror and React.",
-  "keywords": [
-    "document-editor",
-    "docx",
-    "editor",
-    "ooxml",
-    "prosemirror",
-    "react",
-    "word",
-    "wysiwyg"
-  ],
+  "private": true,
+  "description": "folio monorepo: @stll/folio-core (headless .docx engine) + @stll/folio-react (React editor).",
   "homepage": "https://github.com/stella/folio",
   "bugs": {
     "url": "https://github.com/stella/folio/issues"
@@ -22,70 +13,26 @@
     "type": "git",
     "url": "https://github.com/stella/folio.git"
   },
-  "type": "module",
-  "packageManager": "bun@1.3.14",
-  "sideEffects": [
-    "**/*.css"
+  "workspaces": [
+    "packages/*"
   ],
-  "exports": {
-    ".": "./src/index.ts",
-    "./core": "./src/core/index.ts",
-    "./markdown": "./src/core/markdown/index.ts",
-    "./server": "./src/server.ts",
-    "./editor.css": "./src/styles/editor.css"
-  },
-  "publishConfig": {
-    "access": "public"
-  },
+  "type": "module",
   "scripts": {
-    "clean": "git clean -xdf dist .cache .turbo node_modules",
-    "build": "rm -rf dist && tsdown && bun scripts/build-css.ts",
-    "build:css": "bun scripts/build-css.ts",
-    "prepack": "bun run build",
-    "pack:dry-run": "bun pm pack --dry-run",
-    "validate-dist": "bun scripts/validate-dist.ts",
-    "typecheck": "tsgo --noEmit -p tsconfig.build.json",
-    "lint": "bun --bun oxlint -c oxlint.config.ts src scripts test",
-    "lint:fix": "bun --bun oxlint -c oxlint.config.ts --fix src scripts test",
+    "clean": "git clean -xdf packages/*/dist .cache .turbo node_modules",
+    "build": "bun --filter '@stll/folio-core' build && bun --filter '@stll/folio-react' build",
+    "build:core": "bun --filter '@stll/folio-core' build",
+    "build:react": "bun --filter '@stll/folio-react' build",
+    "typecheck": "bun --filter '*' typecheck",
+    "test": "bun --filter '*' test",
+    "lint": "bun --bun oxlint -c oxlint.config.ts packages scripts test",
+    "lint:fix": "bun --bun oxlint -c oxlint.config.ts --fix packages scripts test",
     "format": "oxfmt .",
-    "perf": "bun scripts/profile-editor.ts",
-    "test": "bun test src",
-    "test:property": "bun test $(grep -rlF 'fc.assert' src --include='*.test.ts')",
+    "validate-dist": "bun scripts/validate-dist.ts core && bun scripts/validate-dist.ts react",
+    "validate-dist:core": "bun scripts/validate-dist.ts core",
+    "validate-dist:react": "bun scripts/validate-dist.ts react",
     "test:visual": "bunx playwright test",
     "test:visual:update": "bunx playwright test --update-snapshots",
     "test:visual:report": "bunx playwright show-report"
-  },
-  "dependencies": {
-    "@base-ui/react": "1.6.0",
-    "@fontsource/arimo": "^5.2.8",
-    "@fontsource/caladea": "^5.2.8",
-    "@fontsource/carlito": "^5.2.8",
-    "@fontsource/cousine": "^5.2.7",
-    "@fontsource/noto-sans-arabic": "^5.2.7",
-    "@fontsource/tinos": "^5.2.7",
-    "@stll/docx-core": "^0.1.0",
-    "@stll/docx-utils": "^0.1.0",
-    "@stll/template-conditions": "^0.1.0",
-    "better-result": "2.9.2",
-    "csstype": "^3.1.3",
-    "fast-xml-parser": "^5.9.3",
-    "jszip": "3.10.1",
-    "lucide-react": "1.21.0",
-    "marked": "^18.0.5",
-    "prosemirror-commands": "^1.7.1",
-    "prosemirror-dropcursor": "^1.8.2",
-    "prosemirror-gapcursor": "^1.4.1",
-    "prosemirror-history": "^1.5.0",
-    "prosemirror-keymap": "^1.2.3",
-    "prosemirror-model": "^1.25.9",
-    "prosemirror-state": "^1.4.4",
-    "prosemirror-tables": "^1.8.5",
-    "prosemirror-transform": "^1.12.0",
-    "prosemirror-view": "^1.41.8",
-    "utif2": "^4.1.0",
-    "valibot": "1.4.1",
-    "y-prosemirror": "^1.3.7",
-    "yjs": "^13.6.31"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
@@ -94,6 +41,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@typescript/native-preview": "7.0.0-dev.20260624.1",
+    "better-result": "2.9.2",
     "fast-check": "^4.8.0",
     "lightningcss": "1.32.0",
     "oxfmt": "0.56.0",
@@ -102,11 +50,8 @@
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "tsdown": "0.22.3",
-    "typescript": "6.0.3"
+    "typescript": "6.0.3",
+    "use-intl": "^4.13.0"
   },
-  "peerDependencies": {
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "use-intl": ">=4.0.0"
-  }
+  "packageManager": "bun@1.3.14"
 }

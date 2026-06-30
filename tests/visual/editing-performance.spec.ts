@@ -1,16 +1,13 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import type { DocxEditorRef } from "../../src/components/DocxEditor.props";
+import type { DocxEditorRef } from "../../packages/react/src/components/DocxEditor.props";
 import type {
   HiddenEditorPhase,
   LayoutInstrumentation,
   LayoutPhase,
-} from "../../src/core/layout-engine/layoutInstrumentation";
-import type {
-  CounterBucket,
-  LayoutMeasurementStats,
-} from "../support/layoutMeasurement";
+} from "../../packages/core/src/layout-engine/layoutInstrumentation";
+import type { CounterBucket, LayoutMeasurementStats } from "../support/layoutMeasurement";
 
 const PARAGRAPH_COUNT = 1500;
 const TYPING_TEXT = "abc";
@@ -57,30 +54,22 @@ test("typing in a large document does not remeasure every block during the burst
 
   await page.goto(`/?paragraphs=${PARAGRAPH_COUNT}`);
   await page.waitForSelector('[data-testid="folio-editor"]');
-  await page.waitForFunction(
-    () => document.querySelectorAll(".layout-page").length >= 20,
-  );
+  await page.waitForFunction(() => document.querySelectorAll(".layout-page").length >= 20);
   await page.evaluate(async () => {
     await document.fonts.ready;
   });
   await page.waitForTimeout(650);
 
-  await expect(
-    page.locator(".paged-editor__hidden-pm .ProseMirror"),
-  ).toHaveCount(0);
+  await expect(page.locator(".paged-editor__hidden-pm .ProseMirror")).toHaveCount(0);
 
-  const initialStats = await page.evaluate(
-    () => globalThis.__folioLayoutMeasurementStats,
-  );
+  const initialStats = await page.evaluate(() => globalThis.__folioLayoutMeasurementStats);
   console.info("folio initial layout diagnostic", {
     hiddenStateCreations: initialStats?.hiddenStateCreations,
     initialMeasureBlockCalls: initialStats?.measureBlockCalls,
     initialReasons: initialStats?.layoutReasons,
     paragraphCount: PARAGRAPH_COUNT,
   });
-  expect(initialStats?.measureBlockCalls).toBeLessThanOrEqual(
-    INITIAL_LOAD_MEASURE_BLOCK_BUDGET,
-  );
+  expect(initialStats?.measureBlockCalls).toBeLessThanOrEqual(INITIAL_LOAD_MEASURE_BLOCK_BUDGET);
   expect(totalHiddenStateCreations(initialStats)).toBe(1);
 
   await page.evaluate(() => {
@@ -114,9 +103,7 @@ test("typing in a large document does not remeasure every block during the burst
   expect(hiddenHost.pmRootSpellcheck).toBe("false");
   expect(hiddenHost.pmRootTranslate).toBe("no");
 
-  const stats = await page.evaluate(
-    () => globalThis.__folioLayoutMeasurementStats,
-  );
+  const stats = await page.evaluate(() => globalThis.__folioLayoutMeasurementStats);
   const downstreamPmStartAfter = await readFirstPmStartOnRenderedPage(page, 1);
 
   console.info("folio typing burst layout diagnostic", {
@@ -133,35 +120,23 @@ test("typing in a large document does not remeasure every block during the burst
   });
 
   expect(stats?.layoutCompletions).toBeGreaterThan(0);
-  expect(stats?.layoutCompletions).toBeLessThanOrEqual(
-    BURST_LAYOUT_COMPLETION_BUDGET,
-  );
-  expect(stats?.measureBlockCalls).toBeLessThanOrEqual(
-    BURST_MEASURE_BLOCK_BUDGET,
-  );
-  expect(downstreamPmStartAfter).toBe(
-    downstreamPmStartBefore + TYPING_TEXT.length,
-  );
+  expect(stats?.layoutCompletions).toBeLessThanOrEqual(BURST_LAYOUT_COMPLETION_BUDGET);
+  expect(stats?.measureBlockCalls).toBeLessThanOrEqual(BURST_MEASURE_BLOCK_BUDGET);
+  expect(downstreamPmStartAfter).toBe(downstreamPmStartBefore + TYPING_TEXT.length);
 });
 
-test("fixture initial load does not perform duplicate font-ready relayout", async ({
-  page,
-}) => {
+test("fixture initial load does not perform duplicate font-ready relayout", async ({ page }) => {
   await installLayoutMeasurement(page);
 
   await page.goto("/?file=docx-editor-demo.docx");
   await page.waitForSelector('[data-testid="folio-editor"]');
-  await page.waitForFunction(
-    () => document.querySelectorAll(".layout-page").length >= 3,
-  );
+  await page.waitForFunction(() => document.querySelectorAll(".layout-page").length >= 3);
   await page.evaluate(async () => {
     await document.fonts.ready;
   });
   await page.waitForTimeout(300);
 
-  const stats = await page.evaluate(
-    () => globalThis.__folioLayoutMeasurementStats,
-  );
+  const stats = await page.evaluate(() => globalThis.__folioLayoutMeasurementStats);
   console.info("folio fixture initial layout diagnostic", {
     layoutCompletions: stats?.layoutCompletions,
     layoutReasons: stats?.layoutReasons,
@@ -170,9 +145,7 @@ test("fixture initial load does not perform duplicate font-ready relayout", asyn
 
   expect(stats?.layoutCompletions).toBe(1);
   expect(stats?.layoutReasons["font-ready"] ?? 0).toBe(0);
-  expect(stats?.measureBlockCalls).toBeLessThanOrEqual(
-    DEMO_INITIAL_MEASURE_BLOCK_BUDGET,
-  );
+  expect(stats?.measureBlockCalls).toBeLessThanOrEqual(DEMO_INITIAL_MEASURE_BLOCK_BUDGET);
 });
 
 test("incremental layout after editing stays stable and matches a fresh full relayout", async ({
@@ -182,9 +155,7 @@ test("incremental layout after editing stays stable and matches a fresh full rel
 
   await page.goto(`/?paragraphs=${PARAGRAPH_COUNT}`);
   await page.waitForSelector('[data-testid="folio-editor"]');
-  await page.waitForFunction(
-    () => document.querySelectorAll(".layout-page").length >= 20,
-  );
+  await page.waitForFunction(() => document.querySelectorAll(".layout-page").length >= 20);
   await page.evaluate(async () => {
     await document.fonts.ready;
   });
@@ -201,12 +172,8 @@ test("incremental layout after editing stays stable and matches a fresh full rel
   await page.keyboard.type(TYPING_TEXT, { delay: 20 });
   await page.waitForTimeout(300);
 
-  const idleStats = await page.evaluate(
-    () => globalThis.__folioLayoutMeasurementStats,
-  );
-  expect(idleStats?.measureBlockCalls).toBeLessThanOrEqual(
-    IDLE_MEASURE_BLOCK_BUDGET,
-  );
+  const idleStats = await page.evaluate(() => globalThis.__folioLayoutMeasurementStats);
+  expect(idleStats?.measureBlockCalls).toBeLessThanOrEqual(IDLE_MEASURE_BLOCK_BUDGET);
 
   const idleSnapshot = await readLayoutSnapshot(page);
   const layoutCompletionsBeforeRelayout = await page.evaluate(
@@ -218,8 +185,7 @@ test("incremental layout after editing stays stable and matches a fresh full rel
   });
   await page.waitForFunction(
     (previousCount) =>
-      (globalThis.__folioLayoutMeasurementStats?.layoutCompletions ?? 0) >
-      previousCount,
+      (globalThis.__folioLayoutMeasurementStats?.layoutCompletions ?? 0) > previousCount,
     layoutCompletionsBeforeRelayout,
   );
 
@@ -228,25 +194,17 @@ test("incremental layout after editing stays stable and matches a fresh full rel
   expect(idleSnapshot).toEqual(fullRelayoutSnapshot);
 });
 
-test("virtualized long documents render later pages on scroll", async ({
-  page,
-}) => {
+test("virtualized long documents render later pages on scroll", async ({ page }) => {
   await page.goto(`/?paragraphs=${PARAGRAPH_COUNT}`);
   await page.waitForSelector('[data-testid="folio-editor"]');
-  await page.waitForFunction(
-    () => document.querySelectorAll(".layout-page").length >= 20,
-  );
+  await page.waitForFunction(() => document.querySelectorAll(".layout-page").length >= 20);
   await page.evaluate(async () => {
     await document.fonts.ready;
   });
   await page.waitForTimeout(250);
 
-  const initialRenderedPages = await page
-    .locator(".layout-page-content")
-    .count();
-  expect(initialRenderedPages).toBeLessThanOrEqual(
-    INITIAL_RENDERED_PAGE_BUDGET,
-  );
+  const initialRenderedPages = await page.locator(".layout-page-content").count();
+  expect(initialRenderedPages).toBeLessThanOrEqual(INITIAL_RENDERED_PAGE_BUDGET);
 
   const targetPage = page.locator('.layout-page[data-page-index="20"]');
   await targetPage.scrollIntoViewIfNeeded();
@@ -263,10 +221,7 @@ async function installLayoutMeasurement(browserPage: Page): Promise<void> {
       "measure-blocks": { count: 0, totalMs: 0 },
       "render-pages": { count: 0, totalMs: 0 },
     });
-    const makeHiddenEditorPhaseCounters = (): Record<
-      HiddenEditorPhase,
-      CounterBucket
-    > => ({
+    const makeHiddenEditorPhaseCounters = (): Record<HiddenEditorPhase, CounterBucket> => ({
       "editor-state": { count: 0, totalMs: 0 },
       "editor-view": { count: 0, totalMs: 0 },
       "to-prose-doc": { count: 0, totalMs: 0 },
@@ -317,24 +272,16 @@ async function installLayoutMeasurement(browserPage: Page): Promise<void> {
   });
 }
 
-function totalHiddenStateCreations(
-  stats: LayoutMeasurementStats | undefined,
-): number {
+function totalHiddenStateCreations(stats: LayoutMeasurementStats | undefined): number {
   if (!stats) {
     return 0;
   }
-  return (
-    stats.hiddenStateCreations.mount +
-    stats.hiddenStateCreations["external-document"]
-  );
+  return stats.hiddenStateCreations.mount + stats.hiddenStateCreations["external-document"];
 }
 
 async function readLayoutSnapshot(browserPage: Page) {
   return browserPage.evaluate((): LayoutSnapshot => {
-    const layout = globalThis.__folioPlayground
-      ?.getEditorRef()
-      ?.getEditorRef()
-      ?.getLayout();
+    const layout = globalThis.__folioPlayground?.getEditorRef()?.getEditorRef()?.getLayout();
 
     if (!layout) {
       throw new Error("Expected a PagedEditor layout snapshot");
@@ -382,9 +329,7 @@ async function readFirstPmStartOnRenderedPage(
 
 async function readHiddenEditorHostInfo(browserPage: Page) {
   return browserPage.evaluate(() => {
-    const host = document.querySelector<HTMLElement>(
-      ".paged-editor__hidden-pm",
-    );
+    const host = document.querySelector<HTMLElement>(".paged-editor__hidden-pm");
     const wrapper = host?.parentElement;
     const pmRoot = host?.querySelector<HTMLElement>(".ProseMirror");
     if (!host || !wrapper || !pmRoot) {
