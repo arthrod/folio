@@ -3100,8 +3100,23 @@ export function renderPages(
     delete pc.__pageObserver;
   }
 
-  // Clear existing content
-  container.innerHTML = "";
+  // Remove only the page shells this painter owns (identified by the page
+  // class). A host may portal an overlay layer (e.g. the HF caret/selection)
+  // into this same container; `innerHTML = ""` would yank those nodes out
+  // from under their React owner and throw `removeChild: not a child` on the
+  // next reconcile. Preserve foreign children, and insert the rebuilt shells
+  // before the first one so the overlay stays above the repainted pages
+  // (unchanged z-order).
+  const pageShellClass = options.pageClassName ?? PAGE_CLASS_NAMES.page;
+  const isPageShell = (el: Element): boolean =>
+    el.className.split(/\s+/u).includes(pageShellClass);
+  const existingChildren = Array.from(container.children);
+  const overlayBefore = existingChildren.find((el) => !isPageShell(el)) ?? null;
+  for (const el of existingChildren) {
+    if (isPageShell(el)) {
+      el.remove();
+    }
+  }
   delete pc.__pageRenderState;
 
   applyContainerStyles(container, pageGap);
@@ -3116,7 +3131,7 @@ export function renderPages(
       // Small document: render all pages eagerly
       const { context, pageOptions } = buildPageRenderArgs(page, totalPages, options);
       const pageEl = renderPage(page, context, pageOptions);
-      container.append(pageEl);
+      container.insertBefore(pageEl, overlayBefore);
       pageShells.push(pageEl);
     } else {
       // Large document: create lightweight shell with correct dimensions
@@ -3127,7 +3142,7 @@ export function renderPages(
       pageEl.dataset["pageIndex"] = String(i);
       applyPageStyles(pageEl, page.size.w, page.size.h, options);
       syncPageBorderOverlay(pageEl, page, options, doc);
-      container.append(pageEl);
+      container.insertBefore(pageEl, overlayBefore);
       pageShells.push(pageEl);
     }
   }

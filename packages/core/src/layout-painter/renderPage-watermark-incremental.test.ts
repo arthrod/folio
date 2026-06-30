@@ -481,4 +481,25 @@ describe("renderPages watermark overlays", () => {
     expect(container.children.at(0)).toBe(firstShell);
     expect(firstShell.textContent).toBe("4");
   });
+
+  test("a full rebuild preserves a foreign overlay child and keeps it above the pages", () => {
+    const container = fakeDocument.createElement("div");
+    // A host (e.g. React via createPortal) puts an overlay layer — the HF
+    // caret/selection — into the same container the painter owns. The
+    // full-rebuild clear must not wipe it; `innerHTML = ""` did, throwing
+    // `removeChild: not a child` when React next reconciled the portal.
+    const overlay = fakeDocument.createElement("div");
+    overlay.className = "hf-overlay";
+    container.append(overlay);
+
+    renderPages(makePages("h1"), container as unknown as HTMLElement, {
+      document: fakeDocument as unknown as Document,
+    });
+
+    expect(container.children.includes(overlay)).toBe(true);
+    // Pages were painted, and the overlay stays last (above them).
+    expect(container.children.length).toBeGreaterThan(1);
+    expect(container.children.at(-1)).toBe(overlay);
+    expect(container.children.at(0)).not.toBe(overlay);
+  });
 });
