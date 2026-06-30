@@ -1,0 +1,122 @@
+name: Publish
+
+# Publishes @stll/folio to npm with SLSA provenance via OIDC trusted publishing
+# (no long-lived NPM_TOKEN).
+#
+# Least privilege: packing and publishing are separate jobs. The `pack` job runs
+# the untrusted build (bun install, build, prepare-publish, bun pm pack) with NO
+# id-token, so a compromised build/postinstall script cannot mint an OIDC
+# credential. Only the `publish` job — which downloads the prebuilt tarball and
+# runs the hardened action — is granted id-token: write.
+#
+# Prerequisite (one-time, by a maintainer on npmjs.com): configure an npm
+# "trusted publisher" for @stll/folio pointing at this repository and this
+# workflow file. The hardened action refuses to fall back to token auth, so the
+# first publish will fail until the trusted publisher exists.
+#
+# Auto-release: a version bump to package.json merged to main publishes that
+# version. The hardened action is idempotent: it skips a name@version already on
+# the registry. Manual dispatch with `publish` unchecked builds + packs only (a
+# dry run).
+
+env:
+  NODE_VERSION: "22"
+  NPM_VERSION: "11.11.1"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - package.json
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish to npm (leave unchecked for a build + pack dry run)
+        type: boolean
+        default: false
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  pack:
+    name: Build and pack
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # deliberately NO id-token: untrusted build scripts run here
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: "package.json"
+
+      - run: bun install --frozen-lockfile
+
+      - name: Build and pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Build, then transform package.json from its in-repo source shape
+          # (exports -> ./src/*.ts) to the published dist shape (exports ->
+          # ./dist, real .d.ts, no src). No restore needed: ephemeral checkout.
+          #
+          # Pack with `bun pm pack`, NOT `npm pack`: only Bun rewrites the
+          # `catalog:` / `workspace:` dependency protocols to concrete versions
+          # in the published package.json. (folio already pins concrete versions,
+          # so this is a no-op safeguard.)
+          bun run build
+          bun scripts/prepare-publish.ts .
+          mkdir -p release-artifacts
+          bun pm pack --destination "${GITHUB_WORKSPACE}/release-artifacts"
+          sha256sum release-artifacts/*.tgz >> release-artifacts/SHA256SUMS
+
+      - name: Upload tarball
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: npm-tarball
+          path: release-artifacts/
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    name: Publish @stll/folio
+    needs: pack
+    # Auto-publish on a version-bump push; on manual dispatch, only when ticked.
+    if: ${{ github.event_name == 'push' || inputs.publish }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC only here; build scripts already ran in the pack job
+      attestations: write # build provenance attestation for the published tarball
+    steps:
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+
+      - name: Install npm for trusted publishing
+        # --ignore-scripts: this job holds id-token: write, so do not run any
+        # lifecycle hooks from the fetched npm package before the hardened
+        # publish step (npm itself needs none to run).
+        run: npm install --global --ignore-scripts "npm@${{ env.NPM_VERSION }}"
+
+      - name: Download tarball
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: npm-tarball
+          path: release-artifacts/
+
+      - name: Resolve tarball path
+        id: tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          tgz="$(ls release-artifacts/*.tgz)"
+          echo "path=${tgz}" >> "${GITHUB_OUTPUT}"
+
+      - name: Publish to npm
+        uses: stella/.github/.github/actions/npm-publish-hardened@96b8912e0786548c4e62046ce3965769991dd0e0
+        with:
+          tarball: ${{ steps.tarball.outputs.path }}
