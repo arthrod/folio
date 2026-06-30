@@ -1,9 +1,14 @@
 /**
- * Table types and utilities used by DocxEditor's table command handler.
- * Extracted from the original TableToolbar — types + pure functions only.
+ * Table model operations — framework-agnostic types and pure functions over the
+ * folio document model's `Table`, `TableRow`, and `TableCell` shapes.
+ *
+ * Extracted from the React `table-types` module (originally the TableToolbar) so
+ * the cell-selection manager and any adapter can share one implementation of the
+ * add/delete row/column, merge, and split math. Pure data in, pure data out — no
+ * ProseMirror, no DOM, no React.
  */
 
-import type { Table, TableCell, TableRow } from "@stll/folio-core/types/document";
+import type { Table, TableCell, TableRow } from "../types/document";
 
 export type TableAction =
   | "addRowAbove"

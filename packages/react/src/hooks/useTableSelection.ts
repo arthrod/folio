@@ -1,42 +1,26 @@
 /**
  * useTableSelection Hook
  *
- * Thin React wrapper around the framework-agnostic TableSelectionManager.
- * Provides table selection tracking and table operation dispatch.
+ * Thin React binding around the framework-agnostic TableSelectionManager. The
+ * manager owns the selection state and the table-operation dispatch; this hook
+ * subscribes to its snapshot via `useSyncExternalStore` and forwards the host
+ * `onChange` / `onSelectionChange` callbacks.
  */
 
-import { useState, useCallback, useMemo } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 
-import type { TableContext, TableSelection, TableAction } from "../components/ui/table-types";
-import {
-  createTableContext,
-  addRow,
-  deleteRow,
-  addColumn,
-  deleteColumn,
-  mergeCells,
-  splitCell,
-  getColumnCount,
-} from "../components/ui/table-types";
 import {
   TableSelectionManager,
-  getTableFromDocument,
-  updateTableInDocument,
-  deleteTableFromDocument,
+  type TableSelectionState,
 } from "@stll/folio-core/managers/TableSelectionManager";
-import type { Document, Table } from "@stll/folio-core/types/document";
+import type { Document } from "@stll/folio-core/types/document";
+import type { TableAction, TableContext } from "@stll/folio-core/utils/tableOperations";
 
 // ============================================================================
 // TYPES
 // ============================================================================
 
-export type TableSelectionState = {
-  context: TableContext | null;
-  table: Table | null;
-  tableIndex: number | null;
-  rowIndex: number | null;
-  columnIndex: number | null;
-};
+export type { TableSelectionState } from "@stll/folio-core/managers/TableSelectionManager";
 
 export type UseTableSelectionReturn = {
   state: TableSelectionState;
@@ -62,170 +46,51 @@ export function useTableSelection({
   onChange,
   onSelectionChange,
 }: UseTableSelectionOptions): UseTableSelectionReturn {
-  // Create the manager once
   const manager = useMemo(() => new TableSelectionManager(), []);
-
-  // Higher-level state that includes table context (depends on doc + core selection)
-  const [state, setState] = useState<TableSelectionState>({
-    context: null,
-    table: null,
-    tableIndex: null,
-    rowIndex: null,
-    columnIndex: null,
-  });
+  const state = useSyncExternalStore(manager.subscribe, manager.getSnapshot);
 
   const handleCellClick = useCallback(
     (tableIndex: number, rowIndex: number, columnIndex: number) => {
       if (!doc) {
         return;
       }
-
-      const table = getTableFromDocument(doc, tableIndex);
-      if (!table) {
-        manager.clearSelection();
-        setState({
-          context: null,
-          table: null,
-          tableIndex: null,
-          rowIndex: null,
-          columnIndex: null,
-        });
-        return;
+      const context = manager.selectCell(doc, { tableIndex, rowIndex, columnIndex });
+      if (context) {
+        onSelectionChange?.(context);
       }
-
-      manager.selectCell({ tableIndex, rowIndex, columnIndex });
-
-      const selection: TableSelection = { tableIndex, rowIndex, columnIndex };
-      const context = createTableContext(table, selection);
-
-      setState({ context, table, tableIndex, rowIndex, columnIndex });
-      onSelectionChange?.(context);
     },
     [doc, manager, onSelectionChange],
   );
 
   const clearSelection = useCallback(() => {
     manager.clearSelection();
-    setState({
-      context: null,
-      table: null,
-      tableIndex: null,
-      rowIndex: null,
-      columnIndex: null,
-    });
     onSelectionChange?.(null);
   }, [manager, onSelectionChange]);
 
   const handleAction = useCallback(
     (action: TableAction) => {
-      if (
-        !doc ||
-        !state.context ||
-        state.tableIndex === null ||
-        state.rowIndex === null ||
-        state.columnIndex === null
-      ) {
+      if (!doc) {
         return;
       }
-
-      const table = state.table;
-      if (!table) {
+      const result = manager.handleAction(doc, action);
+      if (result.type === "noop") {
         return;
       }
-
-      let newTable: Table | null = null;
-      let newDoc: Document;
-      let newRowIndex = state.rowIndex;
-      let newColumnIndex = state.columnIndex;
-
-      switch (action) {
-        case "addRowAbove":
-          newTable = addRow(table, state.rowIndex, "before");
-          newRowIndex = state.rowIndex + 1;
-          break;
-
-        case "addRowBelow":
-          newTable = addRow(table, state.rowIndex, "after");
-          break;
-
-        case "addColumnLeft":
-          newTable = addColumn(table, state.columnIndex, "before");
-          newColumnIndex = state.columnIndex + 1;
-          break;
-
-        case "addColumnRight":
-          newTable = addColumn(table, state.columnIndex, "after");
-          break;
-
-        case "deleteRow":
-          if (table.rows.length > 1) {
-            newTable = deleteRow(table, state.rowIndex);
-            if (newRowIndex >= newTable.rows.length) {
-              newRowIndex = newTable.rows.length - 1;
-            }
-          }
-          break;
-
-        case "deleteColumn": {
-          const colCount = getColumnCount(table);
-          if (colCount > 1) {
-            newTable = deleteColumn(table, state.columnIndex);
-            const newColCount = getColumnCount(newTable);
-            if (newColumnIndex >= newColCount) {
-              newColumnIndex = newColCount - 1;
-            }
-          }
-          break;
-        }
-
-        case "mergeCells":
-          if (state.context.selection.selectedCells) {
-            newTable = mergeCells(table, state.context.selection);
-          }
-          break;
-
-        case "splitCell":
-          if (state.context.canSplitCell) {
-            newTable = splitCell(table, state.rowIndex, state.columnIndex);
-          }
-          break;
-
-        case "deleteTable":
-          newDoc = deleteTableFromDocument(doc, state.tableIndex);
-          clearSelection();
-          onChange?.(newDoc);
-          return;
-        case "borderAll":
-        case "borderBottom":
-        case "borderInside":
-        case "borderLeft":
-        case "borderNone":
-        case "borderOutside":
-        case "borderRight":
-        case "borderTop":
-        case "selectColumn":
-        case "selectRow":
-        case "selectTable":
-          // Border-style and selection actions are routed through the
-          // toolbar's border/selection handlers — they don't modify
-          // table structure so the dispatcher above has nothing to do.
-          break;
+      if (result.type === "deleted") {
+        onSelectionChange?.(null);
+        onChange?.(result.document);
+        return;
       }
-
-      if (newTable) {
-        newDoc = updateTableInDocument(doc, state.tableIndex, newTable);
-        onChange?.(newDoc);
-
-        handleCellClick(state.tableIndex, newRowIndex, newColumnIndex);
-      }
+      onChange?.(result.document);
+      onSelectionChange?.(result.context);
     },
-    [doc, state, onChange, clearSelection, handleCellClick],
+    [doc, manager, onChange, onSelectionChange],
   );
 
   const isCellSelected = useCallback(
     (tableIndex: number, rowIndex: number, columnIndex: number): boolean =>
       manager.isCellSelected(tableIndex, rowIndex, columnIndex),
-    [manager], // re-derive when state changes
+    [manager],
   );
 
   return {

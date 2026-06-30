@@ -9,12 +9,6 @@ export type CellCoordinates = {
   columnIndex: number;
 };
 
-/** TableSelectionManager snapshot */
-export type TableSelectionSnapshot = {
-  /** Currently selected cell, or null if no selection */
-  selectedCell: CellCoordinates | null;
-};
-
 // ============================================================================
 // CONTEXT MENU
 // ============================================================================

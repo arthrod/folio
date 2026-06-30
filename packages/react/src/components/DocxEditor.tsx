@@ -211,7 +211,7 @@ import { areSelectionFormattingEqual, mapHexToHighlightName } from "./toolbarUti
 import { HyperlinkPopup } from "./ui/HyperlinkPopup";
 import { getBuiltinTableStyle } from "./ui/table-styles";
 import type { TableStylePreset } from "./ui/table-styles";
-import type { TableAction } from "./ui/table-types";
+import type { TableAction } from "@stll/folio-core/utils/tableOperations";
 import { Tooltip } from "./ui/Tooltip";
 import { useFolioComments } from "./useFolioComments";
 

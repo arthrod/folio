@@ -11,7 +11,7 @@ import type { CSSProperties, ReactNode } from "react";
 import type { ColorValue, ParagraphAlignment, Style, Theme } from "@stll/folio-core/types/document";
 import { cn } from "../lib/utils";
 import type { ListState } from "./ui/ListButtons";
-import type { TableAction } from "./ui/table-types";
+import type { TableAction } from "@stll/folio-core/utils/tableOperations";
 import { Tooltip } from "./ui/Tooltip";
 
 // ============================================================================

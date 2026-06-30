@@ -10,8 +10,21 @@
  */
 
 import type { Document, Table } from "../types/document";
+import {
+  addColumn,
+  addRow,
+  createTableContext,
+  deleteColumn,
+  deleteRow,
+  getColumnCount,
+  mergeCells,
+  splitCell,
+  type TableAction,
+  type TableContext,
+  type TableSelection,
+} from "../utils/tableOperations";
 import { Subscribable } from "./Subscribable";
-import type { CellCoordinates, TableSelectionSnapshot } from "./types";
+import type { CellCoordinates } from "./types";
 
 // ============================================================================
 // CONSTANTS
@@ -144,36 +157,197 @@ export function deleteTableFromDocument(doc: Document, tableIndex: number): Docu
 // MANAGER
 // ============================================================================
 
-export class TableSelectionManager extends Subscribable<TableSelectionSnapshot> {
+/**
+ * Tracked table-selection state: the selected cell coordinates plus the derived
+ * {@link TableContext} (and the resolved table) for the current document.
+ */
+export type TableSelectionState = {
+  context: TableContext | null;
+  table: Table | null;
+  tableIndex: number | null;
+  rowIndex: number | null;
+  columnIndex: number | null;
+};
+
+const EMPTY_SELECTION: TableSelectionState = {
+  context: null,
+  table: null,
+  tableIndex: null,
+  rowIndex: null,
+  columnIndex: null,
+};
+
+/**
+ * Outcome of dispatching a structural {@link TableAction} against a document.
+ *  - `noop`: nothing to apply here (no live selection, or a border/selection
+ *    action that the toolbar handles directly).
+ *  - `deleted`: the table was removed and the selection cleared.
+ *  - `updated`: the table was mutated; the selection now tracks the new table.
+ */
+export type TableActionResult =
+  | { type: "noop" }
+  | { type: "deleted"; document: Document }
+  | { type: "updated"; document: Document; context: TableContext };
+
+export class TableSelectionManager extends Subscribable<TableSelectionState> {
   constructor() {
-    super({ selectedCell: null });
+    super(EMPTY_SELECTION);
   }
 
-  /** Select a specific cell. */
-  selectCell(coords: CellCoordinates): void {
-    this.setSnapshot({ selectedCell: coords });
+  /**
+   * Select a cell within `doc`. Resolves the table at `coords.tableIndex` and
+   * derives the full {@link TableContext}. Returns the context, or `null` (and
+   * clears the selection) when that table no longer exists.
+   */
+  selectCell(doc: Document, coords: CellCoordinates): TableContext | null {
+    const table = getTableFromDocument(doc, coords.tableIndex);
+    if (!table) {
+      this.setSnapshot(EMPTY_SELECTION);
+      return null;
+    }
+    const selection: TableSelection = {
+      tableIndex: coords.tableIndex,
+      rowIndex: coords.rowIndex,
+      columnIndex: coords.columnIndex,
+    };
+    const context = createTableContext(table, selection);
+    this.setSnapshot({
+      context,
+      table,
+      tableIndex: coords.tableIndex,
+      rowIndex: coords.rowIndex,
+      columnIndex: coords.columnIndex,
+    });
+    return context;
   }
 
   /** Clear the current selection. */
   clearSelection(): void {
-    this.setSnapshot({ selectedCell: null });
+    this.setSnapshot(EMPTY_SELECTION);
   }
 
-  /** Check if a specific cell is selected. */
+  /** Check if a specific cell is the current selection. */
   isCellSelected(tableIndex: number, rowIndex: number, columnIndex: number): boolean {
-    const { selectedCell } = this.getSnapshot();
-    if (!selectedCell) {
-      return false;
-    }
+    const snapshot = this.getSnapshot();
     return (
-      selectedCell.tableIndex === tableIndex &&
-      selectedCell.rowIndex === rowIndex &&
-      selectedCell.columnIndex === columnIndex
+      snapshot.tableIndex === tableIndex &&
+      snapshot.rowIndex === rowIndex &&
+      snapshot.columnIndex === columnIndex
     );
   }
 
-  /** Get the currently selected cell coordinates, or null. */
-  getSelectedCell(): CellCoordinates | null {
-    return this.getSnapshot().selectedCell;
+  /**
+   * Dispatch a structural table action against `doc`. Mutating actions
+   * (add/delete row or column, merge, split, delete table) return the resulting
+   * document and re-track the selection against it; border-style and selection
+   * actions are routed through the toolbar's own handlers and resolve to `noop`.
+   */
+  handleAction(doc: Document, action: TableAction): TableActionResult {
+    const { context, table, tableIndex, rowIndex, columnIndex } = this.getSnapshot();
+    if (
+      context === null ||
+      table === null ||
+      tableIndex === null ||
+      rowIndex === null ||
+      columnIndex === null
+    ) {
+      return { type: "noop" };
+    }
+
+    let newTable: Table | null = null;
+    let newRowIndex = rowIndex;
+    let newColumnIndex = columnIndex;
+
+    switch (action) {
+      case "addRowAbove":
+        newTable = addRow(table, rowIndex, "before");
+        newRowIndex = rowIndex + 1;
+        break;
+
+      case "addRowBelow":
+        newTable = addRow(table, rowIndex, "after");
+        break;
+
+      case "addColumnLeft":
+        newTable = addColumn(table, columnIndex, "before");
+        newColumnIndex = columnIndex + 1;
+        break;
+
+      case "addColumnRight":
+        newTable = addColumn(table, columnIndex, "after");
+        break;
+
+      case "deleteRow":
+        if (table.rows.length > 1) {
+          newTable = deleteRow(table, rowIndex);
+          if (newRowIndex >= newTable.rows.length) {
+            newRowIndex = newTable.rows.length - 1;
+          }
+        }
+        break;
+
+      case "deleteColumn": {
+        const colCount = getColumnCount(table);
+        if (colCount > 1) {
+          newTable = deleteColumn(table, columnIndex);
+          const newColCount = getColumnCount(newTable);
+          if (newColumnIndex >= newColCount) {
+            newColumnIndex = newColCount - 1;
+          }
+        }
+        break;
+      }
+
+      case "mergeCells":
+        if (context.selection.selectedCells) {
+          newTable = mergeCells(table, context.selection);
+        }
+        break;
+
+      case "splitCell":
+        if (context.canSplitCell) {
+          newTable = splitCell(table, rowIndex, columnIndex);
+        }
+        break;
+
+      case "deleteTable": {
+        const newDoc = deleteTableFromDocument(doc, tableIndex);
+        this.clearSelection();
+        return { type: "deleted", document: newDoc };
+      }
+
+      case "borderAll":
+      case "borderBottom":
+      case "borderInside":
+      case "borderLeft":
+      case "borderNone":
+      case "borderOutside":
+      case "borderRight":
+      case "borderTop":
+      case "selectColumn":
+      case "selectRow":
+      case "selectTable":
+        // Border-style and selection actions are routed through the toolbar's
+        // border/selection handlers — they don't modify table structure, so the
+        // dispatcher above has nothing to do.
+        break;
+    }
+
+    if (!newTable) {
+      return { type: "noop" };
+    }
+
+    const newDoc = updateTableInDocument(doc, tableIndex, newTable);
+    // Re-resolve the selection against the mutated document so the tracked
+    // context reflects the new table shape rather than the pre-mutation one.
+    const nextContext = this.selectCell(newDoc, {
+      tableIndex,
+      rowIndex: newRowIndex,
+      columnIndex: newColumnIndex,
+    });
+    if (!nextContext) {
+      return { type: "noop" };
+    }
+    return { type: "updated", document: newDoc, context: nextContext };
   }
 }
