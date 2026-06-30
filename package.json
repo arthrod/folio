@@ -32,6 +32,7 @@
     "validate-dist:react": "bun scripts/validate-dist.ts react",
     "test:visual": "bunx playwright test",
     "test:interactions": "bunx playwright test --project=interactions",
+    "test:differential": "cd packages/core && bun test src/docx/__tests__/differential.test.ts",
     "test:visual:update": "bunx playwright test --update-snapshots",
     "test:visual:report": "bunx playwright show-report"
   },

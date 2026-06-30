@@ -63,3 +63,25 @@ jobs:
       - name: Run interaction specs
         run: bun run test:interactions
 
+  differential:
+    name: Differential parser parity (folio vs python-docx)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: "package.json"
+
+      - run: bun install --frozen-lockfile
+
+      - name: Install python-docx (the differential reference parser)
+        run: python3 -m pip install --break-system-packages python-docx
+
+      # DIFFERENTIAL_REQUIRED turns a missing python-docx into a failure rather
+      # than a skip, so the full-corpus parity gate cannot silently pass.
+      - name: Differential parity (full corpus)
+        run: bun run test:differential
+        env:
+          DIFFERENTIAL_REQUIRED: "1"
+

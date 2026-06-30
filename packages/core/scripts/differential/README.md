@@ -7,9 +7,13 @@ cases where a spec-faithful implementation still disagreed with how
 mature parsers actually interpret the wire format. Differential testing
 catches that class of issue directly.
 
-The scaffold is intentionally minimal: one orchestrator script, one
-projection helper per side, one smoke test. Scaling to a fixture corpus,
-property-based generators, or CI integration is a follow-up.
+The harness projects folio's parse of every corpus fixture
+(`__tests__/__fixtures__` plus the repo's visual fixtures) into a structural
+shape and asserts it matches the same projection taken from python-docx.
+Locally the suite skips when python-docx is missing so `bun test` stays
+runnable; CI installs python-docx and sets `DIFFERENTIAL_REQUIRED=1`, which
+turns a missing dependency into a failure so the parity gate cannot silently
+pass (`bun run test:differential`). Property-based generators are a follow-up.
 
 ## Why python-docx (and not docx4j)
 

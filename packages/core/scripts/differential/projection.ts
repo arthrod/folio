@@ -186,11 +186,7 @@ export function projectFolioDocument(doc: Document): StructuralProjection {
 
   const visitCell = (cell: TableCell): void => {
     for (const child of cell.content) {
-      if (child.type === "paragraph") {
-        visitParagraph(child);
-      } else {
-        visitTable(child);
-      }
+      visitBlock(child);
     }
   };
 
@@ -204,11 +200,7 @@ export function projectFolioDocument(doc: Document): StructuralProjection {
       childCount: sdt.content.length,
     });
     for (const child of sdt.content) {
-      if (child.type === "paragraph") {
-        visitParagraph(child);
-      } else {
-        visitTable(child);
-      }
+      visitBlock(child);
     }
   };
 

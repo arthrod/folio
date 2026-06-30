@@ -1,32 +1,35 @@
 /**
- * Smoke test for the differential testing harness.
+ * Differential parser testing (folio vs python-docx).
  *
- * Proves the harness wired in `packages/core/scripts/differential/`
- * runs end-to-end against a real fixture and surfaces zero divergences
- * for a parse the team already considers correct. The smoke test does
- * NOT lock in equivalence for the whole corpus — adding more fixtures
- * is intentionally a follow-up so a single PR does not commit the
- * project to maintaining differential parity across the entire fixture
- * suite.
+ * Projects folio's parse of every corpus fixture into a structural shape and
+ * asserts it matches the same projection taken from python-docx — locking in
+ * parse parity across the whole suite, not just a single smoke fixture.
  *
- * If python-docx is not installed on the host (or python3 is missing),
- * the test is skipped rather than failing. This lets contributors
- * without the optional Python dependency run `bun test` cleanly. See
- * `packages/core/scripts/differential/README.md` for setup.
+ * python-docx is an optional host dependency (`pip install python-docx`). When
+ * it is missing the suite SKIPS locally so `bun test` stays runnable without
+ * Python; CI installs python-docx and sets `DIFFERENTIAL_REQUIRED=1`, which
+ * turns a missing dependency into a failure so the gate cannot silently pass.
+ * See `packages/core/scripts/differential/README.md`.
  */
 
 import { describe, expect, test } from "bun:test";
+import { Glob } from "bun";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 import { runDifferential } from "../../../scripts/differential/diff";
 
-const FIXTURE_PATH = path.join(
-  import.meta.dir,
-  "__fixtures__",
-  "regressions",
-  "repack-paragraph-sectpr.docx",
-);
+const REQUIRED = process.env.DIFFERENTIAL_REQUIRED === "1";
+
+// The corpus: the parser fixtures plus the visual fixtures (repo root).
+const FIXTURE_DIRS = [
+  path.join(import.meta.dir, "__fixtures__"),
+  path.resolve(import.meta.dir, "../../../../../tests/visual/fixtures"),
+];
+
+const fixtures = FIXTURE_DIRS.flatMap((dir) => [
+  ...new Glob("**/*.docx").scanSync({ cwd: dir, absolute: true }),
+]).sort();
 
 const isPythonDocxAvailable = (): boolean => {
   const result = spawnSync("python3", ["-c", "import docx"], {
@@ -38,24 +41,37 @@ const isPythonDocxAvailable = (): boolean => {
 
 describe("differential parser harness (folio vs python-docx)", () => {
   if (!isPythonDocxAvailable()) {
-    test.skip("python-docx not installed; see scripts/differential/README.md", () => {});
+    const message =
+      "python-docx not installed; see scripts/differential/README.md";
+    // Locally a missing optional dependency skips; in CI (DIFFERENTIAL_REQUIRED)
+    // it fails so the parity gate cannot silently pass.
+    if (REQUIRED) {
+      test("python-docx is required when DIFFERENTIAL_REQUIRED=1", () => {
+        throw new Error(message);
+      });
+    } else {
+      test.skip(message, () => {});
+    }
     return;
   }
 
-  test("structural projection matches python-docx for a known-good fixture", async () => {
-    const result = await runDifferential(FIXTURE_PATH);
-    if (!result.ok) {
-      if (result.reason === "infra") {
-        throw new Error(`harness infrastructure failure: ${result.message}`);
-      }
-      throw new Error(
-        `unexpected divergence on smoke fixture:\n${JSON.stringify(result.divergences, null, 2)}\n\nfolio: ${JSON.stringify(result.folio, null, 2)}\nreference: ${JSON.stringify(result.reference, null, 2)}`,
-      );
-    }
-    expect(result.ok).toBe(true);
-    // Sanity: confirm the projection actually walked the document
-    // rather than returning trivial zeroes that would also match.
-    expect(result.folio.totalParagraphs).toBeGreaterThan(0);
-    expect(result.folio.totalTables).toBeGreaterThan(0);
+  test("corpus is non-empty", () => {
+    expect(fixtures.length).toBeGreaterThan(0);
   });
+
+  for (const fixture of fixtures) {
+    const name = path.basename(fixture);
+    test(`structural projection matches python-docx: ${name}`, async () => {
+      const result = await runDifferential(fixture);
+      if (!result.ok) {
+        if (result.reason === "infra") {
+          throw new Error(`harness infrastructure failure: ${result.message}`);
+        }
+        throw new Error(
+          `unexpected divergence on ${name}:\n${JSON.stringify(result.divergences, null, 2)}\n\nfolio: ${JSON.stringify(result.folio, null, 2)}\nreference: ${JSON.stringify(result.reference, null, 2)}`,
+        );
+      }
+      expect(result.ok).toBe(true);
+    });
+  }
 });
