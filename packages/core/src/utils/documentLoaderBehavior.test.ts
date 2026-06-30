@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import type { Document } from "@stll/folio-core/types/document";
+import type { Document } from "../types/document";
 import { getDocumentLoadSource } from "./documentLoaderBehavior";
 
 const document: Document = {

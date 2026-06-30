@@ -16,6 +16,23 @@ export type TableSelectionSnapshot = {
 };
 
 // ============================================================================
+// CONTEXT MENU
+// ============================================================================
+
+/** Viewport anchor (px) where the context menu opens. */
+export type ContextMenuAnchor = { x: number; y: number };
+
+/** ContextMenuManager snapshot. */
+export type ContextMenuSnapshot = {
+  isOpen: boolean;
+  position: ContextMenuAnchor;
+  hasSelection: boolean;
+  selectionRange: { from: number; to: number };
+  cursorInTable: boolean;
+  cursorInTrackedChange: boolean;
+};
+
+// ============================================================================
 // ERROR MANAGER
 // ============================================================================
 

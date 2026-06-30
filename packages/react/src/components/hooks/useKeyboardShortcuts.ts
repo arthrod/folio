@@ -1,7 +1,12 @@
 import { useEffect, useRef } from "react";
 import type { RefObject } from "react";
 
-import { getTableContext, deleteTable as pmDeleteTable } from "@stll/folio-core/prosemirror";
+import {
+  classifyEditorKeydown,
+  deleteSelectedTable,
+  isFocusInInputLike,
+  isMacPlatform,
+} from "@stll/folio-core/managers/editorShortcuts";
 import type { PagedEditorRef } from "../../paged-editor/PagedEditor";
 import type { UseFindReplaceReturn } from "../dialogs/useFindReplace";
 
@@ -16,34 +21,6 @@ export type UseKeyboardShortcutsArgs = {
   onDirectPrint: () => void;
 };
 
-function isMacPlatform(): boolean {
-  if (typeof navigator === "undefined") {
-    return false;
-  }
-  return /Mac|iPod|iPhone|iPad/u.test(navigator.platform);
-}
-
-/**
- * `target` is an input-like element that the user is typing into. We must
- * not intercept Delete/Backspace there — only when focus is in the editor
- * surface (or nowhere at all).
- */
-function isFocusInInputLike(
-  target: EventTarget | null,
-  editorDom: HTMLElement | null | undefined,
-): boolean {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-  if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") {
-    return true;
-  }
-  if (target.isContentEditable && target !== editorDom) {
-    return true;
-  }
-  return false;
-}
-
 /**
  * Document-level keyboard shortcuts:
  *  - Cmd/Ctrl+F → open find dialog with selected text
@@ -54,6 +31,10 @@ function isFocusInInputLike(
  *    selections and the layout-overlay table selection). Suppressed when
  *    focus is in a non-editor input/textarea/contenteditable to avoid
  *    deleting tables while the user is typing in a sidebar or dialog.
+ *
+ * Thin React binding: the classification, platform/input predicates, and
+ * whole-table deletion check live in `@stll/folio-core`; this hook owns only
+ * the listener lifecycle, ref freshness, and the host-callback dispatch.
  */
 export function useKeyboardShortcuts({
   pagedEditorRef,
@@ -73,66 +54,39 @@ export function useKeyboardShortcuts({
       callbacksRef.current.findReplace.openFind(selectedText);
     };
 
-    const tryDeleteSelectedTable = (e: KeyboardEvent): boolean => {
+    const handleDeleteSelectedTable = (e: KeyboardEvent) => {
       const view = pagedEditorRef.current?.getView();
-      if (view) {
-        const sel = view.state.selection as {
-          $anchorCell?: unknown;
-          forEachCell?: unknown;
-        };
-        const isCellSel = "$anchorCell" in sel && typeof sel.forEachCell === "function";
-        if (isCellSel) {
-          const context = getTableContext(view.state);
-          if (context.isInTable && context.table) {
-            let totalCells = 0;
-            context.table.descendants((node) => {
-              if (node.type.name === "tableCell" || node.type.name === "tableHeader") {
-                totalCells += 1;
-              }
-            });
-            let selectedCells = 0;
-            (sel as { forEachCell: (fn: () => void) => void }).forEachCell(() => {
-              selectedCells += 1;
-            });
-            if (totalCells > 0 && selectedCells >= totalCells) {
-              e.preventDefault();
-              pmDeleteTable(view.state, view.dispatch);
-              return true;
-            }
-          }
-        }
+      if (view && deleteSelectedTable(view.state, view.dispatch)) {
+        e.preventDefault();
+        return;
       }
       if (callbacksRef.current.tableSelection.state.tableIndex !== null) {
         e.preventDefault();
         callbacksRef.current.tableSelection.handleAction("deleteTable");
-        return true;
       }
-      return false;
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      const cmdOrCtrl = isMacPlatform() ? e.metaKey : e.ctrlKey;
       const editorDom = pagedEditorRef.current?.getView()?.dom;
+      const intent = classifyEditorKeydown(e, {
+        isMac: isMacPlatform(),
+        isInputLike: isFocusInInputLike(e.target, editorDom),
+      });
 
-      if (
-        !cmdOrCtrl &&
-        !e.shiftKey &&
-        !e.altKey &&
-        (e.key === "Delete" || e.key === "Backspace") &&
-        !isFocusInInputLike(e.target, editorDom) &&
-        tryDeleteSelectedTable(e)
-      ) {
-        return;
-      }
-
-      if (cmdOrCtrl && !e.shiftKey && !e.altKey) {
-        if (e.key.toLowerCase() === "f" || e.key.toLowerCase() === "h") {
+      switch (intent.type) {
+        case "deleteSelectedTable":
+          handleDeleteSelectedTable(e);
+          return;
+        case "openFind":
           e.preventDefault();
           openFindFromSelection();
-        } else if (e.key.toLowerCase() === "p" && !e.repeat) {
+          return;
+        case "print":
           e.preventDefault();
           callbacksRef.current.onDirectPrint();
-        }
+          return;
+        case "none":
+          return;
       }
     };
 

@@ -1,12 +1,15 @@
-import { useCallback, useState } from "react";
+import { useCallback, useState, useSyncExternalStore } from "react";
 
-/** Editor mode. Mirrors Google Docs editing/suggesting/viewing semantics. */
-export type EditorMode = "editing" | "suggesting" | "viewing";
+import {
+  EditorModeManager,
+  isReadOnlyMode,
+  isTrackChangesMode,
+  toggledTrackChangesMode,
+} from "@stll/folio-core/managers/EditorModeManager";
+import type { DisplayMode, EditorMode } from "@stll/folio-core/managers/EditorModeManager";
 
-/** How tracked changes render. Drives the display mode dropdown. */
-export const DISPLAY_MODES = ["all-markup", "simple-markup", "no-markup", "original"] as const;
-
-export type DisplayMode = (typeof DISPLAY_MODES)[number];
+export { DISPLAY_MODES } from "@stll/folio-core/managers/EditorModeManager";
+export type { DisplayMode, EditorMode } from "@stll/folio-core/managers/EditorModeManager";
 
 export type UseEditorModeArgs = {
   /** Controlled mode prop, or undefined when uncontrolled. */
@@ -36,6 +39,11 @@ export type UseEditorModeReturn = {
 /**
  * Editor-mode and display-mode state for the DocxEditor.
  *
+ * Thin React binding around the framework-agnostic EditorModeManager. The
+ * manager owns the uncontrolled internal state; this hook layers the
+ * controlled-prop reconciliation (`modeProp` wins) and the `onModeChange`
+ * notification on top.
+ *
  * `editingMode` mirrors Google Docs:
  *  - `"editing"`     → direct edits (default)
  *  - `"suggesting"`  → tracked-change edits
@@ -50,27 +58,36 @@ export function useEditorMode({
   onModeChange,
   readOnlyProp,
 }: UseEditorModeArgs): UseEditorModeReturn {
-  const [editingModeInternal, setEditingModeInternal] = useState<EditorMode>(modeProp ?? "editing");
+  const [manager] = useState(() => new EditorModeManager(modeProp ?? "editing"));
+  const { editingMode: editingModeInternal, displayMode } = useSyncExternalStore(
+    manager.subscribe,
+    manager.getSnapshot,
+  );
   const editingMode = modeProp ?? editingModeInternal;
 
   const setEditingMode = useCallback(
     (mode: EditorMode) => {
       if (!modeProp) {
-        setEditingModeInternal(mode);
+        manager.setEditingMode(mode);
       }
       onModeChange?.(mode);
     },
-    [modeProp, onModeChange],
+    [modeProp, onModeChange, manager],
   );
 
-  const readOnly = readOnlyProp || editingMode === "viewing";
-  const trackChangesOn = editingMode === "suggesting";
+  const readOnly = isReadOnlyMode(editingMode, readOnlyProp);
+  const trackChangesOn = isTrackChangesMode(editingMode);
 
   const toggleTrackChanges = useCallback(() => {
-    setEditingMode(trackChangesOn ? "editing" : "suggesting");
-  }, [setEditingMode, trackChangesOn]);
+    setEditingMode(toggledTrackChangesMode(editingMode));
+  }, [setEditingMode, editingMode]);
 
-  const [displayMode, setDisplayMode] = useState<DisplayMode>("all-markup");
+  const setDisplayMode = useCallback(
+    (mode: DisplayMode) => {
+      manager.setDisplayMode(mode);
+    },
+    [manager],
+  );
 
   return {
     editingMode,

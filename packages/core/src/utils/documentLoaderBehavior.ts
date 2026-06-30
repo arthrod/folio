@@ -1,5 +1,5 @@
-import type { Document } from "@stll/folio-core/types/document";
-import type { DocxInput } from "@stll/folio-core/utils/docxInput";
+import type { Document } from "../types/document";
+import type { DocxInput } from "./docxInput";
 
 export type DocumentLoadSource =
   | {

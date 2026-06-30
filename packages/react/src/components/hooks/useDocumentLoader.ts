@@ -13,8 +13,8 @@ import type { Document } from "@stll/folio-core/types/document";
 import { resetAuthorColors } from "@stll/folio-core/utils/authorColors";
 import type { DocxInput } from "@stll/folio-core/utils/docxInput";
 import { loadFontsWithMapping } from "@stll/folio-core/utils/fontLoader";
+import { getDocumentLoadSource } from "@stll/folio-core/utils/documentLoaderBehavior";
 import type { UseHistoryReturn } from "../../hooks/useHistory";
-import { getDocumentLoadSource } from "./documentLoaderBehavior";
 
 // ---------------------------------------------------------------------------
 // Types

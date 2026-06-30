@@ -1,6 +1,21 @@
 import type { Node as ProseMirrorNode } from "prosemirror-model";
 
-import type { FindMatch } from "../dialogs/findReplaceUtils";
+/**
+ * Positional fields of a document search match that the range resolver needs.
+ *
+ * The React find-replace producer carries a richer match shape (content index,
+ * matched text) for its UI; resolution only consumes the paragraph-relative
+ * offsets, so this declares exactly that subset and keeps core free of any
+ * adapter-side type.
+ */
+export type FindMatchPosition = {
+  /** Index of the paragraph containing the match. */
+  paragraphIndex: number;
+  /** Character offset of the match start within the paragraph. */
+  startOffset: number;
+  /** Character offset of the match end within the paragraph. */
+  endOffset: number;
+};
 
 export type FindMatchRange = {
   from: number;
@@ -9,7 +24,7 @@ export type FindMatchRange = {
 
 export function resolveFindMatchRange(
   doc: ProseMirrorNode,
-  match: FindMatch,
+  match: FindMatchPosition,
 ): FindMatchRange | null {
   let paragraphIndex = 0;
   let resolved: FindMatchRange | null = null;

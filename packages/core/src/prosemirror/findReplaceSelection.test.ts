@@ -28,10 +28,8 @@ describe("Folio find match selection", () => {
     expect(
       resolveFindMatchRange(doc, {
         paragraphIndex: 1,
-        contentIndex: 0,
         startOffset: 7,
         endOffset: 12,
-        text: "stock",
       }),
     ).toEqual({ from: 25, to: 30 });
   });
@@ -48,10 +46,8 @@ describe("Folio find match selection", () => {
     expect(
       resolveFindMatchRange(doc, {
         paragraphIndex: 1,
-        contentIndex: 0,
         startOffset: 7,
         endOffset: 12,
-        text: "stock",
       }),
     ).toEqual({ from: 46, to: 51 });
   });
@@ -70,10 +66,8 @@ describe("Folio find match selection", () => {
     expect(
       resolveFindMatchRange(doc, {
         paragraphIndex: 0,
-        contentIndex: 0,
         startOffset: 4,
         endOffset: 9,
-        text: "stock",
       }),
     ).toEqual({ from: 5, to: 10 });
   });

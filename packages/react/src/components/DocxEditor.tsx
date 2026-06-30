@@ -131,6 +131,7 @@ import {
 } from "@stll/folio-core/prosemirror/extensions/features/ParagraphChangeTrackerExtension";
 // Extension system
 import { createStarterKit } from "@stll/folio-core/prosemirror/extensions/StarterKit";
+import { resolveFindMatchRange } from "@stll/folio-core/prosemirror/findReplaceSelection";
 import { createAICitationDecorationsPlugin } from "@stll/folio-core/prosemirror/plugins/aiCitationDecorations";
 import { createAISuggestionDecorationsPlugin } from "@stll/folio-core/prosemirror/plugins/aiSuggestionDecorations";
 import { createAnonymizationDecorationsPlugin } from "@stll/folio-core/prosemirror/plugins/anonymizationDecorations";
@@ -187,7 +188,6 @@ import { DocxEditorDialogs } from "./DocxEditorDialogs";
 import { DefaultLoadingIndicator, DefaultPlaceholder, ParseError } from "./DocxEditorHelpers";
 import { ErrorBoundary, ErrorProvider } from "./ErrorBoundary";
 import { FormattingBar } from "./FormattingBar";
-import { resolveFindMatchRange } from "./hooks/findReplaceSelection";
 import { useContextMenu } from "./hooks/useContextMenu";
 import type { DocumentLoadState } from "./hooks/useDocumentLoader";
 import { useDocumentLoader } from "./hooks/useDocumentLoader";
