@@ -1,3 +1,11 @@
+/**
+ * zoomScrollAnchor
+ *
+ * Framework-agnostic viewport-center anchoring math for zoom changes. The React
+ * `useZoomAndPageInfo` hook captures an anchor before a zoom change and restores
+ * the scroll position after the layout reflows so the document does not jump.
+ */
+
 export type ViewportCenterZoomAnchor = {
   offsetY: number;
   scaledY: number;

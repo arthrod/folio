@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 
-import { DEFAULT_PAGE_GAP, VIEWPORT_PADDING_TOP } from "../../paged-editor/PagedEditor";
-import type { PagedEditorRef } from "../../paged-editor/PagedEditor";
-import type { ScrollPageInfo } from "../scrollPageInfo";
-import type { ViewportCenterZoomAnchor } from "../zoomScrollAnchor";
+import { computeScrollPageInfo } from "@stll/folio-core/paged-layout/scrollPageInfo";
+import type { ScrollPageInfo } from "@stll/folio-core/paged-layout/scrollPageInfo";
 import {
   getScrollTopForZoomAnchor,
   getViewportCenterZoomAnchorForZoomChange,
-} from "../zoomScrollAnchor";
+} from "@stll/folio-core/paged-layout/zoomScrollAnchor";
+import type { ViewportCenterZoomAnchor } from "@stll/folio-core/paged-layout/zoomScrollAnchor";
+import { DEFAULT_PAGE_GAP, VIEWPORT_PADDING_TOP } from "../../paged-editor/PagedEditor";
+import type { PagedEditorRef } from "../../paged-editor/PagedEditor";
 
 const PAGE_INFO_FADE_MS = 600;
 
@@ -65,31 +66,23 @@ export function useZoomAndPageInfo({
   const updateScrollPageInfo = useCallback(
     (scrollContainer: HTMLDivElement) => {
       const layout = pagedEditorRef.current?.getLayout();
-      if (!layout || layout.pages.length === 0) {
+      if (!layout) {
         return;
       }
 
-      const scrollTop = scrollContainer.scrollTop;
-      const totalPages = layout.pages.length;
-      const scaledViewportCenter = scrollTop + scrollContainer.clientHeight / 2;
-      const viewportCenter = scaledViewportCenter / Math.max(zoomRef.current, Number.EPSILON);
-
-      let accumulatedY = VIEWPORT_PADDING_TOP;
-      let currentPage = 1;
-      for (let i = 0; i < layout.pages.length; i++) {
-        // SAFETY: i is bounded by layout.pages.length
-        const pageHeight = layout.pages[i]!.size.h;
-        const pageEnd = accumulatedY + pageHeight;
-        if (viewportCenter < pageEnd) {
-          currentPage = i + 1;
-          break;
-        }
-        accumulatedY = pageEnd + DEFAULT_PAGE_GAP;
-        currentPage = i + 2;
+      const info = computeScrollPageInfo({
+        pageHeights: layout.pages.map((page) => page.size.h),
+        scrollTop: scrollContainer.scrollTop,
+        clientHeight: scrollContainer.clientHeight,
+        zoom: zoomRef.current,
+        viewportPaddingTop: VIEWPORT_PADDING_TOP,
+        pageGap: DEFAULT_PAGE_GAP,
+      });
+      if (!info) {
+        return;
       }
-      currentPage = Math.min(currentPage, totalPages);
 
-      setScrollPageInfo({ currentPage, totalPages, visible: true });
+      setScrollPageInfo({ ...info, visible: true });
     },
     [pagedEditorRef],
   );

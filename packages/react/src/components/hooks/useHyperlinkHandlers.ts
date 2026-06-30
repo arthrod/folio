@@ -2,6 +2,10 @@ import { useCallback, useState } from "react";
 
 import type { EditorView } from "prosemirror-view";
 
+import {
+  editHyperlinkAtCursor,
+  removeHyperlinkAtCursor,
+} from "@stll/folio-core/prosemirror/commands/hyperlink";
 import { sanitizeExternalUrl } from "@stll/folio-core/utils/urlSecurity";
 import type { HyperlinkPopupData } from "../ui/HyperlinkPopup";
 
@@ -97,69 +101,8 @@ export const useHyperlinkHandlers = ({
         return;
       }
 
-      // Find the full hyperlink mark range at current cursor position
-      const hlType = view.state.schema.marks["hyperlink"];
-      if (!hlType) {
+      if (!editHyperlinkAtCursor(view, { displayText, href })) {
         return;
-      }
-
-      const { $from } = view.state.selection;
-      const linkMark = $from.marks().find((m) => m.type === hlType);
-
-      if (linkMark) {
-        // Collect all contiguous text nodes with the same hyperlink mark
-        const parent = $from.parent;
-        const parentStart = $from.start();
-
-        // Build ranges of consecutive hyperlink-marked nodes
-        type Range = { start: number; end: number };
-        const ranges: Range[] = [];
-        const currentRange = { value: null as Range | null };
-
-        // oxlint-disable-next-line unicorn/no-array-for-each -- ProseMirror Node API
-        parent.forEach((node, offset) => {
-          const nodeStart = parentStart + offset;
-          const nodeEnd = nodeStart + node.nodeSize;
-          const hlMark = node.isText
-            ? node.marks.find(
-                (m) => m.type === hlType && m.attrs["href"] === linkMark.attrs["href"],
-              )
-            : null;
-
-          if (hlMark) {
-            if (currentRange.value !== null) {
-              currentRange.value.end = nodeEnd;
-            } else {
-              currentRange.value = { start: nodeStart, end: nodeEnd };
-            }
-          } else if (currentRange.value !== null) {
-            ranges.push(currentRange.value);
-            currentRange.value = null;
-          }
-        });
-        if (currentRange.value !== null) {
-          ranges.push(currentRange.value);
-        }
-
-        // Find the range that contains the cursor
-        const cursorPos = $from.pos;
-        const targetRange = ranges.find((r) => r.start <= cursorPos && cursorPos <= r.end);
-        if (!targetRange) {
-          return;
-        }
-
-        // Replace the text and mark
-        const tr = view.state.tr;
-        const newMark = hlType.create({
-          href,
-          tooltip: linkMark.attrs["tooltip"],
-        });
-        const textNode = view.state.schema.text(displayText, [
-          ...$from.marks().filter((m) => m.type !== hlType),
-          newMark,
-        ]);
-        tr.replaceWith(targetRange.start, targetRange.end, textNode);
-        view.dispatch(tr.scrollIntoView());
       }
 
       setHyperlinkPopupData(null);
@@ -174,82 +117,9 @@ export const useHyperlinkHandlers = ({
       return;
     }
 
-    const hlType = view.state.schema.marks["hyperlink"];
-    if (!hlType) {
+    if (!removeHyperlinkAtCursor(view, { popupHref: hyperlinkPopupData?.href })) {
       return;
     }
-
-    const { $from } = view.state.selection;
-
-    // Try $from.marks() first, then check the node after the cursor
-    // (ProseMirror may not report marks at boundary positions)
-    let linkMark = $from.marks().find((m) => m.type === hlType);
-    if (!linkMark && $from.nodeAfter) {
-      linkMark = $from.nodeAfter.marks.find((m) => m.type === hlType);
-    }
-    if (!linkMark && $from.nodeBefore) {
-      linkMark = $from.nodeBefore.marks.find((m) => m.type === hlType);
-    }
-
-    // Fall back to searching by href from popup data
-    if (!linkMark && hyperlinkPopupData) {
-      const parent = $from.parent;
-      // oxlint-disable-next-line unicorn/no-array-for-each -- ProseMirror Node API
-      parent.forEach((node) => {
-        if (!linkMark && node.isText) {
-          const m = node.marks.find(
-            (mk) => mk.type === hlType && mk.attrs["href"] === hyperlinkPopupData.href,
-          );
-          if (m) {
-            linkMark = m;
-          }
-        }
-      });
-    }
-
-    if (!linkMark) {
-      return;
-    }
-
-    // Find contiguous range of nodes with matching hyperlink mark
-    const parent = $from.parent;
-    const parentStart = $from.start();
-    type Range = { start: number; end: number };
-    const ranges: Range[] = [];
-    const currentRange = { value: null as Range | null };
-
-    // oxlint-disable-next-line unicorn/no-array-for-each -- ProseMirror Node API
-    parent.forEach((node, offset) => {
-      const nodeStart = parentStart + offset;
-      const nodeEnd = nodeStart + node.nodeSize;
-      const hlMark = node.isText
-        ? node.marks.find((m) => m.type === hlType && m.attrs["href"] === linkMark!.attrs["href"])
-        : null;
-
-      if (hlMark) {
-        if (currentRange.value !== null) {
-          currentRange.value.end = nodeEnd;
-        } else {
-          currentRange.value = { start: nodeStart, end: nodeEnd };
-        }
-      } else if (currentRange.value !== null) {
-        ranges.push(currentRange.value);
-        currentRange.value = null;
-      }
-    });
-    if (currentRange.value !== null) {
-      ranges.push(currentRange.value);
-    }
-
-    const cursorPos = $from.pos;
-    const targetRange = ranges.find((r) => r.start <= cursorPos && cursorPos <= r.end);
-    if (!targetRange) {
-      return;
-    }
-
-    const tr = view.state.tr;
-    tr.removeMark(targetRange.start, targetRange.end, hlType);
-    view.dispatch(tr.scrollIntoView());
 
     setHyperlinkPopupData(null);
     focusActiveEditor();

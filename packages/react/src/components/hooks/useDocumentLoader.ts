@@ -1,20 +1,23 @@
 /**
- * useDocumentLoader — encapsulates DOCX loading, parsing, and buffer management.
+ * useDocumentLoader — thin React binding around DocumentLoaderManager.
  *
- * Extracted from DocxEditor to keep the component focused on rendering.
+ * The manager owns the load-generation counter and the parse → reset → history
+ * → fonts orchestration; this hook keeps the React glue: the prop-change
+ * effects that drive a load, the original buffer ref, and re-binding the host
+ * callbacks each render.
  */
 
-import { useRef, useCallback, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { inspectDocxCompatibility } from "@stll/folio-core/docx/compatibility";
 import type { DocxCompatibility } from "@stll/folio-core/docx/compatibility";
-import { parseDocx } from "@stll/folio-core/docx/parser";
+import { DocumentLoaderManager } from "@stll/folio-core/managers/DocumentLoaderManager";
+import type { DocumentLoadState } from "@stll/folio-core/managers/DocumentLoaderManager";
 import type { Document } from "@stll/folio-core/types/document";
-import { resetAuthorColors } from "@stll/folio-core/utils/authorColors";
-import type { DocxInput } from "@stll/folio-core/utils/docxInput";
-import { loadFontsWithMapping } from "@stll/folio-core/utils/fontLoader";
 import { getDocumentLoadSource } from "@stll/folio-core/utils/documentLoaderBehavior";
+import type { DocxInput } from "@stll/folio-core/utils/docxInput";
 import type { UseHistoryReturn } from "../../hooks/useHistory";
+
+export type { DocumentLoadState } from "@stll/folio-core/managers/DocumentLoaderManager";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -41,11 +44,6 @@ type UseDocumentLoaderParams = {
   setDocumentLoadState: (state: DocumentLoadState) => void;
 };
 
-export type DocumentLoadState =
-  | { status: "loading" }
-  | { status: "ready" }
-  | { status: "error"; message: string };
-
 type UseDocumentLoaderReturn = {
   /** Parse and load a raw DOCX buffer. */
   loadBuffer: (buffer: DocxInput) => Promise<void>;
@@ -70,83 +68,39 @@ export const useDocumentLoader = ({
   onReset,
   setDocumentLoadState,
 }: UseDocumentLoaderParams): UseDocumentLoaderReturn => {
-  // Monotonically increasing generation counter to discard stale async loads
-  const loadGenerationRef = useRef(0);
-
   /** Original DOCX buffer kept for selective save / full repack. */
   const originalBufferRef = useRef<ArrayBuffer | null>(null);
 
-  // -------------------------------------------------------------------
-  // resetForNewDocument
-  // -------------------------------------------------------------------
+  // The manager instance is stable; its bound methods are created once so the
+  // returned references stay referentially stable across renders.
+  const [{ manager, api }] = useState(() => {
+    const instance = new DocumentLoaderManager({
+      history,
+      onError,
+      onCompatibilityChange,
+      onReset,
+      setDocumentLoadState,
+    });
+    return {
+      manager: instance,
+      api: {
+        loadBuffer: instance.loadBuffer.bind(instance),
+        loadParsedDocument: instance.loadParsedDocument.bind(instance),
+        resetForNewDocument: instance.resetForNewDocument.bind(instance),
+      },
+    };
+  });
 
-  const resetForNewDocument = useCallback(() => {
-    resetAuthorColors();
-    onReset();
-  }, [onReset]);
+  // Re-bind host callbacks so the manager always sees the latest closures.
+  manager.setCallbacks({
+    history,
+    onError,
+    onCompatibilityChange,
+    onReset,
+    setDocumentLoadState,
+  });
 
-  // -------------------------------------------------------------------
-  // loadParsedDocument
-  // -------------------------------------------------------------------
-
-  const loadParsedDocument = useCallback(
-    (doc: Document) => {
-      resetForNewDocument();
-      history.reset(doc);
-      onCompatibilityChange?.(inspectDocxCompatibility(doc));
-      setDocumentLoadState({ status: "ready" });
-      // Defer font loading so the first page renders immediately
-      if (doc.requiredFonts && doc.requiredFonts.length > 0) {
-        loadFontsWithMapping(doc.requiredFonts).catch(() => undefined);
-      }
-    },
-    [resetForNewDocument, history, onCompatibilityChange, setDocumentLoadState],
-  );
-
-  // -------------------------------------------------------------------
-  // loadBuffer
-  // -------------------------------------------------------------------
-
-  const loadBuffer = useCallback(
-    async (buffer: DocxInput) => {
-      const generation = ++loadGenerationRef.current;
-      const hasLoadedDocument = history.state !== null;
-      if (!hasLoadedDocument) {
-        setDocumentLoadState({ status: "loading" });
-      }
-
-      try {
-        // Skip blocking font preload during parsing; fonts are loaded
-        // asynchronously by loadParsedDocument after the first render
-        const doc = await parseDocx(buffer, {
-          detectVariables: false,
-          preloadFonts: false,
-        });
-        // Discard result if a newer load was started while we were parsing
-        if (loadGenerationRef.current !== generation) {
-          return;
-        }
-        loadParsedDocument(doc);
-      } catch (error) {
-        if (loadGenerationRef.current !== generation) {
-          return;
-        }
-        const message = error instanceof Error ? error.message : "Failed to parse document";
-        setDocumentLoadState({ status: "error", message });
-        onError?.(error instanceof Error ? error : new Error(message));
-      }
-    },
-    [history.state, loadParsedDocument, onError, setDocumentLoadState],
-  );
-
-  const loaderRef = useRef({ loadBuffer, loadParsedDocument });
-  loaderRef.current = { loadBuffer, loadParsedDocument };
-
-  // -------------------------------------------------------------------
-  // Effects
-  // -------------------------------------------------------------------
-
-  // React to document/documentBuffer prop changes
+  // React to document/documentBuffer prop changes.
   useEffect(() => {
     const source = getDocumentLoadSource({ documentBuffer, initialDocument });
     if (source.type === "none") {
@@ -154,14 +108,14 @@ export const useDocumentLoader = ({
     }
 
     if (source.type === "parsed-document") {
-      loaderRef.current.loadParsedDocument(source.document);
+      api.loadParsedDocument(source.document);
       return;
     }
 
-    void loaderRef.current.loadBuffer(source.buffer);
-  }, [documentBuffer, initialDocument]);
+    void api.loadBuffer(source.buffer);
+  }, [documentBuffer, initialDocument, api]);
 
-  // Keep original buffer for save/export
+  // Keep original buffer for save/export.
   useEffect(() => {
     if (documentBuffer) {
       originalBufferRef.current = documentBuffer instanceof ArrayBuffer ? documentBuffer : null;
@@ -169,9 +123,9 @@ export const useDocumentLoader = ({
   }, [documentBuffer]);
 
   return {
-    loadBuffer,
-    loadParsedDocument,
-    resetForNewDocument,
+    loadBuffer: api.loadBuffer,
+    loadParsedDocument: api.loadParsedDocument,
+    resetForNewDocument: api.resetForNewDocument,
     originalBufferRef,
   };
 };

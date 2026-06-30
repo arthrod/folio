@@ -1,7 +1,9 @@
 import type { FindResult } from "./findReplaceUtils";
 
+export { getAdjacentFindIndex } from "@stll/folio-core/managers/FindReplaceManager";
+export type { FindDirection } from "@stll/folio-core/managers/FindReplaceManager";
+
 export type FindEnterAction = "search" | "next" | "previous";
-export type FindDirection = "next" | "previous";
 
 type GetFindEnterActionOptions = {
   searchText: string;
@@ -19,20 +21,4 @@ export function getFindEnterAction({
   }
 
   return shiftKey ? "previous" : "next";
-}
-
-export function getAdjacentFindIndex(
-  currentIndex: number,
-  totalCount: number,
-  direction: FindDirection,
-): number {
-  if (totalCount <= 0) {
-    return 0;
-  }
-
-  if (direction === "previous") {
-    return currentIndex === 0 ? totalCount - 1 : currentIndex - 1;
-  }
-
-  return (currentIndex + 1) % totalCount;
 }

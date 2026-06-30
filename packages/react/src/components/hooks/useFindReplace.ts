@@ -1,17 +1,21 @@
 /**
  * useFindReplace Hook
  *
- * Encapsulates the document-level find/replace handlers that were previously
- * inline in DocxEditor.tsx. The dialog state itself is managed by
- * `useFindReplace` from `dialogs/useFindReplace.ts`; this hook layers the
- * document-aware operations (find, replace, scroll-to-match) on top.
+ * Thin React binding around the framework-agnostic FindReplaceManager. The
+ * manager owns the active find result (matches + cursor) and runs the
+ * document-level replace operations; this hook keeps the React glue: the
+ * `findResultRef` the dialog reads, the live-document accessor, scroll/select
+ * side effects, and the dialog-state wiring.
+ *
+ * The dialog visibility/search-text state itself is managed by `useFindReplace`
+ * from `dialogs/useFindReplace.ts`; this hook layers the document-aware
+ * operations (find, replace, scroll-to-match) on top.
  */
 
-import { useRef, useCallback } from "react";
+import { useCallback, useMemo, useRef } from "react";
 
+import { FindReplaceManager } from "@stll/folio-core/managers/FindReplaceManager";
 import type { Document } from "@stll/folio-core/types/document";
-import { replaceTextInDocument } from "@stll/folio-core/utils/replaceText";
-import { getAdjacentFindIndex } from "../dialogs/findReplaceInteraction";
 import { findInDocument, scrollToMatch } from "../dialogs/findReplaceUtils";
 import type { FindMatch, FindOptions, FindResult } from "../dialogs/findReplaceUtils";
 import type { UseFindReplaceReturn as FindReplaceStateReturn } from "../dialogs/useFindReplace";
@@ -62,7 +66,8 @@ export function useFindReplace({
   findReplace,
   selectMatch,
 }: UseFindReplaceParams): UseFindReplaceReturn {
-  // Store the current find result for navigation
+  const manager = useMemo(() => new FindReplaceManager<FindMatch>(), []);
+  // Mirror of the manager's result for FindReplaceDialog, which reads the ref.
   const findResultRef = useRef<FindResult | null>(null);
   const { setMatches, goToMatch } = findReplace;
 
@@ -71,137 +76,79 @@ export function useFindReplace({
     [getDocumentState, documentState],
   );
 
-  // Handle find operation
+  const revealMatch = useCallback(
+    (match: FindMatch) => {
+      if (!selectMatch?.(match) && containerRef.current) {
+        scrollToMatch(containerRef.current, match);
+      }
+    },
+    [selectMatch, containerRef],
+  );
+
   const handleFind = useCallback(
     (searchText: string, options: FindOptions): FindResult | null => {
       const currentDocument = readDocumentState();
       if (!currentDocument || !searchText.trim()) {
+        manager.clear();
         findResultRef.current = null;
         return null;
       }
 
       const matches = findInDocument(currentDocument, searchText, options);
-      const result: FindResult = {
-        matches,
-        totalCount: matches.length,
-        currentIndex: 0,
-      };
-
+      const result = manager.setMatches(matches);
       findResultRef.current = result;
       setMatches(matches, 0);
 
-      // Scroll to first match
       if (matches.length > 0) {
         // SAFETY: length > 0 guarantees index 0 exists
-        const firstMatch = matches[0]!;
-        if (!selectMatch?.(firstMatch) && containerRef.current) {
-          scrollToMatch(containerRef.current, firstMatch);
-        }
+        revealMatch(matches[0]!);
       }
 
       return result;
     },
-    [readDocumentState, setMatches, containerRef, selectMatch],
+    [readDocumentState, manager, setMatches, revealMatch],
   );
 
-  // Handle find next
   const handleFindNext = useCallback((): FindMatch | null => {
-    const currentResult = findResultRef.current;
-    if (!currentResult || currentResult.matches.length === 0) {
+    const stepped = manager.navigate("next");
+    if (!stepped) {
       return null;
     }
+    findResultRef.current = manager.getResult();
+    goToMatch(stepped.index);
+    revealMatch(stepped.match);
+    return stepped.match;
+  }, [manager, goToMatch, revealMatch]);
 
-    const newIndex = getAdjacentFindIndex(
-      currentResult.currentIndex,
-      currentResult.matches.length,
-      "next",
-    );
-    const match = currentResult.matches[newIndex];
-    findResultRef.current = {
-      ...currentResult,
-      currentIndex: newIndex,
-    };
-    goToMatch(newIndex);
-
-    // Scroll to the match
-    if (match && !selectMatch?.(match) && containerRef.current) {
-      scrollToMatch(containerRef.current, match);
-    }
-
-    return match || null;
-  }, [goToMatch, containerRef, selectMatch]);
-
-  // Handle find previous
   const handleFindPrevious = useCallback((): FindMatch | null => {
-    const currentResult = findResultRef.current;
-    if (!currentResult || currentResult.matches.length === 0) {
+    const stepped = manager.navigate("previous");
+    if (!stepped) {
       return null;
     }
+    findResultRef.current = manager.getResult();
+    goToMatch(stepped.index);
+    revealMatch(stepped.match);
+    return stepped.match;
+  }, [manager, goToMatch, revealMatch]);
 
-    const newIndex = getAdjacentFindIndex(
-      currentResult.currentIndex,
-      currentResult.matches.length,
-      "previous",
-    );
-    const match = currentResult.matches[newIndex];
-    findResultRef.current = {
-      ...currentResult,
-      currentIndex: newIndex,
-    };
-    goToMatch(newIndex);
-
-    // Scroll to the match
-    if (match && !selectMatch?.(match) && containerRef.current) {
-      scrollToMatch(containerRef.current, match);
-    }
-
-    return match || null;
-  }, [goToMatch, containerRef, selectMatch]);
-
-  // Handle replace current match
   const handleReplace = useCallback(
     (replaceText: string): boolean => {
       const currentDocument = readDocumentState();
-      if (
-        !currentDocument ||
-        !findResultRef.current ||
-        findResultRef.current.matches.length === 0
-      ) {
+      if (!currentDocument) {
         return false;
       }
 
-      const currentMatch = findResultRef.current.matches[findResultRef.current.currentIndex];
-      if (!currentMatch) {
+      const newDoc = manager.replaceCurrent(currentDocument, replaceText);
+      if (!newDoc) {
         return false;
       }
 
-      // Execute replace command
-      try {
-        const newDoc = replaceTextInDocument(
-          currentDocument,
-          {
-            start: {
-              paragraphIndex: currentMatch.paragraphIndex,
-              offset: currentMatch.startOffset,
-            },
-            end: {
-              paragraphIndex: currentMatch.paragraphIndex,
-              offset: currentMatch.endOffset,
-            },
-          },
-          replaceText,
-        );
-
-        handleDocumentChange(newDoc);
-        return true;
-      } catch {
-        return false;
-      }
+      handleDocumentChange(newDoc);
+      return true;
     },
-    [readDocumentState, handleDocumentChange],
+    [readDocumentState, manager, handleDocumentChange],
   );
 
-  // Handle replace all matches
   const handleReplaceAll = useCallback(
     (searchText: string, replaceText: string, options: FindOptions): number => {
       const currentDocument = readDocumentState();
@@ -209,49 +156,19 @@ export function useFindReplace({
         return 0;
       }
 
-      // Find all matches first
       const matches = findInDocument(currentDocument, searchText, options);
-      if (matches.length === 0) {
+      const outcome = manager.replaceAll(currentDocument, matches, replaceText);
+      if (!outcome) {
         return 0;
       }
 
-      // Replace from end to start to maintain correct indices
-      let doc = currentDocument;
-      const sortedMatches = [...matches].toSorted((a, b) => {
-        if (a.paragraphIndex !== b.paragraphIndex) {
-          return b.paragraphIndex - a.paragraphIndex;
-        }
-        return b.startOffset - a.startOffset;
-      });
-
-      for (const match of sortedMatches) {
-        try {
-          doc = replaceTextInDocument(
-            doc,
-            {
-              start: {
-                paragraphIndex: match.paragraphIndex,
-                offset: match.startOffset,
-              },
-              end: {
-                paragraphIndex: match.paragraphIndex,
-                offset: match.endOffset,
-              },
-            },
-            replaceText,
-          );
-        } catch {
-          continue;
-        }
-      }
-
-      handleDocumentChange(doc);
+      handleDocumentChange(outcome.document);
       findResultRef.current = null;
       setMatches([], 0);
 
-      return matches.length;
+      return outcome.replacedCount;
     },
-    [readDocumentState, handleDocumentChange, setMatches],
+    [readDocumentState, manager, handleDocumentChange, setMatches],
   );
 
   return {

@@ -39,6 +39,7 @@ import { useTranslations } from "use-intl";
 import { applyFolioAIEditOperations, createFolioAIEditSnapshot } from "@stll/folio-core/ai-edits";
 import { normalizeBaseDirection } from "@stll/folio-core/docx/normalizeBaseDirection";
 import { getCachedNumberingMap } from "@stll/folio-core/docx/numberingParser";
+import { updateScrollPageTotal } from "@stll/folio-core/paged-layout/scrollPageInfo";
 // ProseMirror editor
 import {
   TextSelection,
@@ -201,7 +202,6 @@ import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useZoomAndPageInfo } from "./hooks/useZoomAndPageInfo";
 import { InlineHeaderFooterEditor } from "./InlineHeaderFooterEditor";
 import type { InlineHeaderFooterEditorRef } from "./InlineHeaderFooterEditor";
-import { updateScrollPageTotal } from "./scrollPageInfo";
 import { detectActiveTrackedChange, detectImageContext } from "./selectionDetection";
 import { buildSelectionFormatting, extractListState } from "./selectionFormattingBuilder";
 import type { TextContextAction, TextContextMenuItem } from "./TextContextMenu";
