@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "agents": {
+    "title": "folio Development Guidelines",
+    "modules": [
+      "stella-public-repo",
+      "engineering",
+      "typescript",
+      "frontend-react",
+      "error-handling",
+      "testing",
+      "linting"
+    ],
+    "local": ".ai/local/agents.md"
+  }
+}
