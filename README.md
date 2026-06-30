@@ -4,8 +4,8 @@
 
 # folio
 
-A Word-document editor for the browser. It opens a real `.docx`, lets you edit
-it, and writes a real `.docx` back — preserving pagination, tables, headers and
+A Word-document editor for the browser. It opens a `.docx`, lets you edit
+it, and writes a `.docx` back — preserving pagination, tables, headers and
 footers, tracked changes, and footnotes.
 
 The OOXML parser, document model, and page-layout engine are React-free, so they
@@ -62,9 +62,9 @@ bun run validate-dist   # clean-room publish-shape validation for both packages
 folio began as a private fork of [Eigenpal](https://eigenpal.com)'s
 [docx-editor](https://github.com/eigenpal/docx-editor) by
 [Jedr Blaszyk](https://github.com/jedrazb). The code has since been extended
-(mostly to match the needs of stella). After the upstream repository was taken
-down, we're publishing folio in case the fork is useful to others as well. The
-original license and copyright are preserved in [`NOTICE.md`](./NOTICE.md).
+(mostly to match the needs of [stella](https://github.com/stella/stella). After the upstream
+repository was taken down, we're publishing folio fork. The original license and copyright are
+preserved in [`NOTICE.md`](./NOTICE.md).
 
 ## License
 
