@@ -1,30 +1,25 @@
 /**
  * History hook for undo/redo functionality
  *
- * Maintains undo/redo stacks with support for:
- * - undo() and redo() operations
- * - canUndo and canRedo state
- * - Keyboard shortcuts (Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z)
- * - Grouping rapid changes to avoid cluttering history
+ * Thin React binding around the framework-agnostic HistoryManager (core). The
+ * manager owns the undo/redo stacks, rapid-change grouping, redo invalidation,
+ * and the snapshot state; this hook keeps the React glue:
+ * - the `useSyncExternalStore` subscription,
+ * - the keyboard shortcuts (Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z),
+ * - the render-cycle timing that lowers the undo/redo re-entrancy guard,
+ * - routing the optional `onUndo` / `onRedo` host callbacks.
  */
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+
+import { HistoryManager } from "@stll/folio-core/managers/HistoryManager";
+import type { HistoryEntry } from "@stll/folio-core/managers/HistoryManager";
+
+export type { HistoryEntry } from "@stll/folio-core/managers/HistoryManager";
 
 // ============================================================================
 // TYPES
 // ============================================================================
-
-/**
- * History entry containing state and metadata
- */
-export type HistoryEntry<T> = {
-  /** The state at this point */
-  state: T;
-  /** Timestamp when this entry was created */
-  timestamp: number;
-  /** Optional description of what changed */
-  description?: string;
-};
 
 /**
  * Options for the useHistory hook
@@ -79,17 +74,6 @@ export type UseHistoryReturn<T> = {
 };
 
 // ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
-
-/**
- * Default equality check using JSON stringify
- */
-function defaultIsEqual<T>(a: T, b: T): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
-
-// ============================================================================
 // HOOK IMPLEMENTATION
 // ============================================================================
 
@@ -104,211 +88,73 @@ export function useHistory<T>(
     maxEntries = 100,
     groupingInterval = 500,
     enableKeyboardShortcuts = true,
-    isEqual = defaultIsEqual,
+    isEqual,
     onUndo,
     onRedo,
     containerRef,
   } = options;
 
-  // Current state
-  const [state, setState] = useState<T>(initialState);
-
-  // History stacks
-  const [undoStack, setUndoStack] = useState<HistoryEntry<T>[]>([]);
-  const [redoStack, setRedoStack] = useState<HistoryEntry<T>[]>([]);
-
-  // Track last push time for grouping
-  const lastPushTimeRef = useRef<number>(0);
-
-  // Track if we're currently in an undo/redo operation
-  const isUndoRedoRef = useRef<boolean>(false);
-
-  /**
-   * Push a new state to history
-   */
-  const push = useCallback(
-    (newState: T, description?: string) => {
-      // Skip if state hasn't changed
-      if (isEqual(state, newState)) {
-        return;
-      }
-
-      // If this is an undo/redo operation, don't push
-      if (isUndoRedoRef.current) {
-        setState(newState);
-        return;
-      }
-
-      const now = Date.now();
-      const timeSinceLastPush = now - lastPushTimeRef.current;
-
-      // Check if we should group with previous entry
-      if (timeSinceLastPush < groupingInterval && undoStack.length > 0) {
-        // Update the most recent entry instead of creating new one
-        setUndoStack((prev) => {
-          const newStack = [...prev];
-          const desc = description || newStack.at(-1)?.description;
-          newStack[newStack.length - 1] = {
-            state, // Keep the state before the grouped changes
-            timestamp: now,
-            ...(desc !== undefined ? { description: desc } : {}),
-          };
-          return newStack;
-        });
-      } else {
-        // Push current state to undo stack
-        setUndoStack((prev) => {
-          const newEntry: HistoryEntry<T> = {
-            state,
-            timestamp: now,
-            ...(description !== undefined ? { description } : {}),
-          };
-
-          // Limit stack size
-          const newStack = [...prev, newEntry];
-          if (newStack.length > maxEntries) {
-            return newStack.slice(newStack.length - maxEntries);
-          }
-          return newStack;
-        });
-      }
-
-      // Clear redo stack on new change
-      setRedoStack([]);
-
-      // Update current state
-      setState(newState);
-
-      // Update last push time
-      lastPushTimeRef.current = now;
-    },
-    [state, isEqual, groupingInterval, maxEntries, undoStack.length],
+  const [manager] = useState(
+    () =>
+      new HistoryManager<T>(initialState, {
+        maxEntries,
+        groupingInterval,
+        ...(isEqual ? { isEqual } : {}),
+      }),
   );
 
-  /**
-   * Undo to previous state
-   */
-  const undo = useCallback((): T | undefined => {
-    if (undoStack.length === 0) {
-      return undefined;
-    }
+  const snapshot = useSyncExternalStore(manager.subscribe, manager.getSnapshot);
 
-    isUndoRedoRef.current = true;
+  // Latest host callbacks + initial state, read by the stable api wrappers so
+  // they never need to change identity across renders.
+  const onUndoRef = useRef(onUndo);
+  onUndoRef.current = onUndo;
+  const onRedoRef = useRef(onRedo);
+  onRedoRef.current = onRedo;
+  const initialStateRef = useRef(initialState);
+  initialStateRef.current = initialState;
 
-    // Pop from undo stack
-    const prevEntry = undoStack.at(-1);
-    if (!prevEntry) {
-      return undefined;
-    }
-    setUndoStack((prev) => prev.slice(0, -1));
+  // Stable api: the manager is the single source of truth, so these wrappers
+  // keep a constant identity. undo/redo layer in the render-cycle timing that
+  // lowers the manager's re-entrancy guard plus the host callbacks.
+  const [api] = useState(() => {
+    const settleUndoRedo = () => {
+      // Lower the guard after React has flushed the render + effects triggered
+      // by the restored state, so a follow-up edit records a fresh entry again.
+      setTimeout(() => manager.endUndoRedo(), 0);
+    };
 
-    // Push current state to redo stack
-    setRedoStack((prev) => [
-      ...prev,
-      {
-        state,
-        timestamp: Date.now(),
-      },
-    ]);
+    const undo = (): T | undefined => {
+      const result = manager.undo();
+      if (result !== undefined) {
+        settleUndoRedo();
+        onUndoRef.current?.(result);
+      }
+      return result;
+    };
 
-    // Restore previous state
-    setState(prevEntry.state);
+    const redo = (): T | undefined => {
+      const result = manager.redo();
+      if (result !== undefined) {
+        settleUndoRedo();
+        onRedoRef.current?.(result);
+      }
+      return result;
+    };
 
-    // Reset flag after state update
-    setTimeout(() => {
-      isUndoRedoRef.current = false;
-    }, 0);
+    return {
+      push: (newState: T, description?: string) => manager.push(newState, description),
+      undo,
+      redo,
+      clear: () => manager.clear(),
+      reset: (newInitialState?: T) => manager.reset(newInitialState ?? initialStateRef.current),
+      getUndoStack: () => manager.getUndoStack(),
+      getRedoStack: () => manager.getRedoStack(),
+      transformAll: (fn: (state: T) => T) => manager.transformAll(fn),
+    };
+  });
 
-    // Call callback
-    onUndo?.(prevEntry.state);
-
-    return prevEntry.state;
-  }, [undoStack, state, onUndo]);
-
-  /**
-   * Redo to next state
-   */
-  const redo = useCallback((): T | undefined => {
-    if (redoStack.length === 0) {
-      return undefined;
-    }
-
-    isUndoRedoRef.current = true;
-
-    // Pop from redo stack
-    const nextEntry = redoStack.at(-1);
-    if (!nextEntry) {
-      return undefined;
-    }
-    setRedoStack((prev) => prev.slice(0, -1));
-
-    // Push current state to undo stack
-    setUndoStack((prev) => [
-      ...prev,
-      {
-        state,
-        timestamp: Date.now(),
-      },
-    ]);
-
-    // Restore next state
-    setState(nextEntry.state);
-
-    // Reset flag after state update
-    setTimeout(() => {
-      isUndoRedoRef.current = false;
-    }, 0);
-
-    // Call callback
-    onRedo?.(nextEntry.state);
-
-    return nextEntry.state;
-  }, [redoStack, state, onRedo]);
-
-  /**
-   * Clear all history
-   */
-  const clear = useCallback(() => {
-    setUndoStack([]);
-    setRedoStack([]);
-  }, []);
-
-  /**
-   * Reset to initial state and clear history
-   */
-  const reset = useCallback(
-    (newInitialState?: T) => {
-      setState(newInitialState ?? initialState);
-      setUndoStack([]);
-      setRedoStack([]);
-      lastPushTimeRef.current = 0;
-    },
-    [initialState],
-  );
-
-  /**
-   * Get undo stack (for debugging)
-   */
-  const getUndoStack = useCallback((): HistoryEntry<T>[] => [...undoStack], [undoStack]);
-
-  /**
-   * Get redo stack (for debugging)
-   */
-  const getRedoStack = useCallback((): HistoryEntry<T>[] => [...redoStack], [redoStack]);
-
-  /**
-   * Transform all stored states (current + undo/redo stacks).
-   * Useful for bulk cleanup such as stripping cached snapshots.
-   */
-  const transformAll = useCallback((fn: (s: T) => T) => {
-    setState((prev) => fn(prev));
-    setUndoStack((prev) => prev.map((entry) => ({ ...entry, state: fn(entry.state) })));
-    setRedoStack((prev) => prev.map((entry) => ({ ...entry, state: fn(entry.state) })));
-  }, []);
-
-  /**
-   * Handle keyboard shortcuts
-   */
+  // Keyboard shortcuts
   useEffect(() => {
     if (!enableKeyboardShortcuts) {
       return;
@@ -318,7 +164,7 @@ export function useHistory<T>(
       // Ctrl+Z or Cmd+Z for undo
       if ((event.ctrlKey || event.metaKey) && event.key === "z" && !event.shiftKey) {
         event.preventDefault();
-        undo();
+        api.undo();
         return;
       }
 
@@ -328,7 +174,7 @@ export function useHistory<T>(
         ((event.ctrlKey || event.metaKey) && event.key === "z" && event.shiftKey)
       ) {
         event.preventDefault();
-        redo();
+        api.redo();
         return;
       }
     };
@@ -340,22 +186,15 @@ export function useHistory<T>(
     return () => {
       target.removeEventListener("keydown", handleKeyDown as EventListener);
     };
-  }, [enableKeyboardShortcuts, undo, redo, containerRef]);
+  }, [enableKeyboardShortcuts, containerRef, api]);
 
   return {
-    state,
-    canUndo: undoStack.length > 0,
-    canRedo: redoStack.length > 0,
-    undoCount: undoStack.length,
-    redoCount: redoStack.length,
-    push,
-    undo,
-    redo,
-    clear,
-    reset,
-    getUndoStack,
-    getRedoStack,
-    transformAll,
+    state: snapshot.state,
+    canUndo: snapshot.canUndo,
+    canRedo: snapshot.canRedo,
+    undoCount: snapshot.undoCount,
+    redoCount: snapshot.redoCount,
+    ...api,
   };
 }
 
@@ -419,127 +258,4 @@ export function useDocumentHistory<
   }, []);
 
   return useHistory(document, { ...options, isEqual });
-}
-
-// ============================================================================
-// UTILITY EXPORTS
-// ============================================================================
-
-/**
- * Create a history manager for non-React usage
- */
-export class HistoryManager<T> {
-  private undoStack: HistoryEntry<T>[] = [];
-  private redoStack: HistoryEntry<T>[] = [];
-  private currentState: T;
-  private readonly maxEntries: number;
-  private readonly groupingInterval: number;
-  private lastPushTime: number = 0;
-  private readonly isEqual: (a: T, b: T) => boolean;
-
-  constructor(
-    initialState: T,
-    options: {
-      maxEntries?: number;
-      groupingInterval?: number;
-      isEqual?: (a: T, b: T) => boolean;
-    } = {},
-  ) {
-    this.currentState = initialState;
-    this.maxEntries = options.maxEntries ?? 100;
-    this.groupingInterval = options.groupingInterval ?? 500;
-    this.isEqual = options.isEqual ?? defaultIsEqual;
-  }
-
-  get state(): T {
-    return this.currentState;
-  }
-
-  get canUndo(): boolean {
-    return this.undoStack.length > 0;
-  }
-
-  get canRedo(): boolean {
-    return this.redoStack.length > 0;
-  }
-
-  push(newState: T, description?: string): void {
-    if (this.isEqual(this.currentState, newState)) {
-      return;
-    }
-
-    const now = Date.now();
-    const timeSinceLastPush = now - this.lastPushTime;
-
-    if (timeSinceLastPush < this.groupingInterval && this.undoStack.length > 0) {
-      // Group with previous entry
-      const lastEntry = this.undoStack.at(-1);
-      if (lastEntry) {
-        lastEntry.timestamp = now;
-      }
-    } else {
-      // Push new entry
-      this.undoStack.push({
-        state: this.currentState,
-        timestamp: now,
-        ...(description !== undefined ? { description } : {}),
-      });
-
-      // Limit stack size
-      if (this.undoStack.length > this.maxEntries) {
-        this.undoStack = this.undoStack.slice(-this.maxEntries);
-      }
-    }
-
-    // Clear redo stack
-    this.redoStack = [];
-
-    // Update state
-    this.currentState = newState;
-    this.lastPushTime = now;
-  }
-
-  undo(): T | undefined {
-    if (this.undoStack.length === 0) {
-      return undefined;
-    }
-
-    const prevEntry = this.undoStack.pop()!;
-
-    this.redoStack.push({
-      state: this.currentState,
-      timestamp: Date.now(),
-    });
-
-    this.currentState = prevEntry.state;
-    return prevEntry.state;
-  }
-
-  redo(): T | undefined {
-    if (this.redoStack.length === 0) {
-      return undefined;
-    }
-
-    const nextEntry = this.redoStack.pop()!;
-
-    this.undoStack.push({
-      state: this.currentState,
-      timestamp: Date.now(),
-    });
-
-    this.currentState = nextEntry.state;
-    return nextEntry.state;
-  }
-
-  clear(): void {
-    this.undoStack = [];
-    this.redoStack = [];
-  }
-
-  reset(newInitialState?: T): void {
-    this.currentState = newInitialState ?? this.currentState;
-    this.undoStack = [];
-    this.redoStack = [];
-    this.lastPushTime = 0;
-  }
 }
