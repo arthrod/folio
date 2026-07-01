@@ -310,3 +310,45 @@ export function findHfSlotForTarget(target: Node | null): {
   }
   return null;
 }
+
+/**
+ * Resolve only the header/footer KIND of the slot under `target`, whether or
+ * not it has an assigned rId yet. `findHfSlotForTarget` matches only a slot
+ * that already carries a `data-rid` (an existing HF part); but the painter also
+ * renders an EMPTY `.layout-page-header` / `.layout-page-footer` box — the
+ * hover-hint and double-click-to-add target — that has no rId. Entering edit
+ * mode to *create* a header needs only the kind (the handler mints the part),
+ * so this looser resolver matches that empty box too.
+ */
+export function findHfSlotKindForTarget(target: Node | null): {
+  kind: HfSlotKind;
+  element: HTMLElement;
+} | null {
+  if (!target) {
+    return null;
+  }
+  if (!hasCloset(target)) {
+    const owner = (target as Node).parentElement;
+    return owner ? findHfSlotKindForTarget(owner) : null;
+  }
+  const header = target.closest(".layout-page-header");
+  if (header) {
+    return { kind: "header", element: header };
+  }
+  const footer = target.closest(".layout-page-footer");
+  if (footer) {
+    return { kind: "footer", element: footer };
+  }
+  // Moved page-layer HF content (a floating image / text box relocated out of
+  // the header/footer box) carries the slot kind on `[data-hf-slot-kind]` — the
+  // same marker `findHfSlotForTarget` resolves — so double-clicking it also
+  // enters edit mode.
+  const associated = target.closest("[data-hf-slot-kind]");
+  if (associated) {
+    const kind = associated.dataset["hfSlotKind"];
+    if (kind === "header" || kind === "footer") {
+      return { kind, element: associated };
+    }
+  }
+  return null;
+}

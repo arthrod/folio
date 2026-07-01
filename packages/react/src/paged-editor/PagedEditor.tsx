@@ -66,6 +66,7 @@ import {
   findHfCaretSpan,
   findHfPmSpans,
   findHfSlotForTarget,
+  findHfSlotKindForTarget,
 } from "@stll/folio-core/layout-bridge/dom/findHfPmSpans";
 import { clickToPosition } from "@stll/folio-core/layout-bridge/engine/clickToPosition";
 import {
@@ -427,6 +428,7 @@ const EMPTY_PLUGINS: Plugin[] = [];
 // (a fresh `[]` per transaction would fail every identity comparison).
 const EMPTY_TEMPLATE_PREVIEW_ENTRIES: readonly TemplatePreviewEntry[] = [];
 const EMPTY_AI_SUGGESTIONS: readonly AISuggestion[] = [];
+const EMPTY_SELECTION_RECTS: SelectionRect[] = [];
 
 const DEFERRED_KEYDOWN_REPLAY_KEYS = new Set([
   "ArrowDown",
@@ -4593,7 +4595,11 @@ export function PagedEditor(props: PagedEditorProps & { ref?: Ref<PagedEditorRef
       // instead of pointlessly re-firing `onHeaderFooterDoubleClick`
       // (Codex #487 P2: 21:49 review).
       if (!readOnly && !hfEditMode && e.detail === 2 && onHeaderFooterDoubleClick) {
-        const slot = findHfSlotForTarget(target);
+        // Kind-only, not `findHfSlotForTarget`: an empty header/footer box has
+        // no `data-rid` yet, so the rId-gated resolver misses it and adding a
+        // header via double-click never fires. Entering edit mode to create one
+        // needs only the kind (the handler mints the part).
+        const slot = findHfSlotKindForTarget(target);
         if (slot) {
           const pageEl = closestHtmlElement(target, "[data-page-number]");
           const pageNum = pageEl ? Number(pageEl.dataset["pageNumber"]) : 1;
@@ -5856,10 +5862,13 @@ export function PagedEditor(props: PagedEditorProps & { ref?: Ref<PagedEditorRef
               painter lays out and paints them (with the accent chip in
               highlighted mode) as part of the pages themselves. */}
 
-          {/* Selection overlay */}
+          {/* Selection overlay. In HF edit mode the body caret/selection is
+              suppressed so it does not linger beside the HF caret — the
+              HfCaretOverlay below owns the caret while a header/footer is
+              being edited. */}
           <SelectionOverlay
-            selectionRects={selectionRects}
-            caretPosition={caretPosition}
+            selectionRects={hfEditMode ? EMPTY_SELECTION_RECTS : selectionRects}
+            caretPosition={hfEditMode ? null : caretPosition}
             isFocused={isFocused}
             pageGap={pageGap}
             markCaretRect
