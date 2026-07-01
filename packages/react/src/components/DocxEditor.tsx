@@ -126,6 +126,10 @@ import {
   setContentControlValueTr,
 } from "@stll/folio-core/prosemirror/commands/contentControls";
 import { setContentControlContentBlocksTr } from "@stll/folio-core/prosemirror/commands/contentControlsBlockFill";
+import {
+  buildPlainTextSlice,
+  CLIPBOARD_READ_ERROR_EVENT,
+} from "@stll/folio-core/prosemirror/commands/pastePlainText";
 import { proseDocToBlocks } from "@stll/folio-core/prosemirror/conversion/fromProseDoc";
 import { ExtensionManager } from "@stll/folio-core/prosemirror/extensions/ExtensionManager";
 import {
@@ -469,6 +473,19 @@ export function DocxEditor({
   onSelectiveSaveTripwire,
 }: DocxEditorProps & { ref?: Ref<DocxEditorRef> }) {
   const t = useTranslations("folio");
+
+  // Surface a failed clipboard read behind the "paste without formatting"
+  // keystroke: the core command owns no UI and emits a bubbling event instead.
+  useEffect(() => {
+    const onClipboardReadError = (): void => {
+      toast(t("clipboardReadFailed"));
+    };
+    document.addEventListener(CLIPBOARD_READ_ERROR_EVENT, onClipboardReadError);
+    return () => {
+      document.removeEventListener(CLIPBOARD_READ_ERROR_EVENT, onClipboardReadError);
+    };
+  }, [t]);
+
   // DocxEditor renders FolioUIProvider itself, so it can't consume its own
   // provider via useFolioUI() (that resolves to the default context). Resolve
   // from the `components` prop directly, with the built-in default as fallback.
@@ -2152,7 +2169,7 @@ export function DocxEditor({
       {
         action: "pasteAsPlainText",
         label: t("pasteUnformatted"),
-        shortcut: `${mod}+Shift+V`,
+        shortcut: `${mod}+Alt+V`,
         dividerAfter: true,
       },
       {
@@ -2302,11 +2319,17 @@ export function DocxEditor({
         case "pasteAsPlainText":
           try {
             const text = await navigator.clipboard.readText();
-            if (text) {
-              view.dispatch(view.state.tr.insertText(text));
+            // The clipboard read is async: bail if the editor unmounted while it
+            // was in flight rather than dispatching against a destroyed view.
+            if (text && !view.isDestroyed) {
+              // replaceSelection with a paragraph slice preserves line breaks;
+              // insertText would flatten them into one paragraph.
+              const slice = buildPlainTextSlice(text, view.state.schema);
+              view.dispatch(view.state.tr.replaceSelection(slice).scrollIntoView());
             }
           } catch {
-            // Clipboard access denied
+            // Surface the failure instead of leaving a dead menu action.
+            toast(t("clipboardReadFailed"));
           }
           break;
         case "delete": {
