@@ -429,6 +429,13 @@ const TRANSACTION_LAYOUT_DEBOUNCE_MS = 32;
 const TRANSACTION_LAYOUT_MAX_DELAY_MS = 96;
 /** Keep the visual caret hidden briefly while typed content relayouts. */
 const SELECTION_REVEAL_AFTER_INPUT_DELAY = 120;
+/**
+ * Readability floor for the autocomplete ghost width: with the caret at the
+ * right content boundary, an unfloored width plus `overflow-wrap: anywhere`
+ * would wrap the suggestion into a one-character-wide vertical column. Near
+ * the margin the ghost overflows slightly past it instead.
+ */
+const AUTOCOMPLETE_GHOST_MIN_WIDTH = 100;
 // Stable empty array to avoid re-creating on each render
 const EMPTY_PLUGINS: Plugin[] = [];
 
@@ -2833,10 +2840,24 @@ export function PagedEditor(props: PagedEditorProps & { ref?: Ref<PagedEditorRef
           return undefined;
         }
 
+        // Bound the ghost text to the caret's page content column so a
+        // multi-line suggestion wraps inside the page instead of running
+        // off the right edge. `caret.x` is page-left relative (same origin
+        // as the page geometry), so the right content boundary is
+        // `size.w - margins.right`; `pageOffsetX` cancels between the two.
+        const caretPage = layout.pages.at(caret.pageIndex);
+        const maxWidth = caretPage
+          ? Math.max(
+              AUTOCOMPLETE_GHOST_MIN_WIDTH,
+              caretPage.size.w - caretPage.margins.right - caret.x,
+            )
+          : undefined;
+
         setAutocompleteCaret({
           x: caret.x + pageOffsetX,
           y: caret.y + pageOffsetY,
           lineHeight: caret.height,
+          maxWidth,
         });
         setAutocompleteText(current.text);
         setAutocompleteIsStreaming(current.status === "streaming");
