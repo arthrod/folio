@@ -41,6 +41,8 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { scanDistUrlTargets } from "./dist-url-targets";
+
 const repoRoot = path.resolve(import.meta.dir, "..");
 const prepareScript = path.join(repoRoot, "scripts", "prepare-publish.ts");
 const tscBin = path.join(repoRoot, "node_modules", ".bin", "tsc");
@@ -317,9 +319,13 @@ if (target === "react") {
 const jsFiles = (await readdir(installedDist, { recursive: true })).filter((f) =>
   f.endsWith(".js"),
 );
-const allJs = (
-  await Promise.all(jsFiles.map(async (f) => await readFile(path.join(installedDist, f), "utf-8")))
-).join("\n");
+const jsContents = await Promise.all(
+  jsFiles.map(async (f) => ({
+    file: f,
+    code: await readFile(path.join(installedDist, f), "utf-8"),
+  })),
+);
+const allJs = jsContents.map((c) => c.code).join("\n");
 // Tell-tale internals that only exist if React's source were bundled.
 const reactSentinels = [
   "react-stack-bottom-frame",
@@ -351,6 +357,25 @@ record(
       ]
         .filter(Boolean)
         .join("; "),
+);
+
+// --- Check: `new URL(..., import.meta.url)` targets ship in dist ------------
+// Every asset a published module references via `new URL("<rel>",
+// import.meta.url)` (worker entries, wasm, fonts) must be a file that actually
+// ships in the tarball. A downstream bundler resolves these specifiers
+// literally against the emitted module (Vite/rolldown's
+// `vite:worker-import-meta-url` treats the worker entry as a build entry), so a
+// dangling target — e.g. a specifier left pointing at a `.ts` source that the
+// package build never emits — aborts the consumer build with UNRESOLVED_ENTRY.
+// Scan logic (skip absolute URLs, strip `?query`/`#hash`) lives in
+// `dist-url-targets.ts` with its own unit tests.
+const urlTargets = scanDistUrlTargets(jsContents, installedDist);
+record(
+  "assets: new URL(..., import.meta.url) targets exist in dist",
+  urlTargets.dangling.length === 0,
+  urlTargets.dangling.length === 0
+    ? `${urlTargets.total} URL target(s) resolve inside dist`
+    : `missing target(s): ${urlTargets.dangling.join("; ")}`,
 );
 
 // --- Check 5 (react only): messages subpath declaration is self-contained ---
