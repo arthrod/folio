@@ -372,6 +372,10 @@ function isEmptyTextRun(run: TextRun): boolean {
  * desync measurer and painter on tab advance for paragraphs with a tab
  * preceding a floating image.
  */
+function isBlockLayoutImageRun(run: ImageRun): boolean {
+  return run.wrapType === "topAndBottom" || run.displayMode === "block";
+}
+
 function measureInlineWidthAfterTab(
   runs: Run[],
   tabIndex: number,
@@ -383,17 +387,40 @@ function measureInlineWidthAfterTab(
     if (!next || isTabRun(next) || isLineBreakRun(next)) {
       break;
     }
+    if (isImageRun(next)) {
+      if (isBlockLayoutImageRun(next)) {
+        break;
+      }
+      if (!isFloatingImageRun(next)) {
+        width += inlineImageBoundingBox(next).width || 0;
+      }
+      continue;
+    }
     if (isTextRun(next)) {
       width += measureTextWidth(next.text || "", runToFontStyle(next));
     } else if (isFieldRun(next)) {
       width += measureTextWidth(fieldMeasureText(next, fieldValues), runToFontStyle(next));
-    } else if (isImageRun(next) && !isFloatingImageRun(next)) {
-      width += next.width || 0;
     } else if (isMathRun(next)) {
       width += measureTextWidth(next.plainText || "[equation]", runToFontStyle(next));
     }
   }
   return width;
+}
+
+function hasFollowingTabOnLine(runs: Run[], tabIndex: number): boolean {
+  for (let i = tabIndex + 1; i < runs.length; i++) {
+    const next = runs[i];
+    if (!next || isLineBreakRun(next)) {
+      break;
+    }
+    if (isImageRun(next) && isBlockLayoutImageRun(next)) {
+      break;
+    }
+    if (isTabRun(next)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -962,10 +989,20 @@ export function measureParagraph(
         ...(attrs?.tabs !== undefined ? { explicitStops: attrs.tabs } : {}),
         leftIndent: pixelsToTwips(indentLeft),
       };
-      const tabWidth = calculateTabWidth(contentX, tabContext, {
+      let tabWidth = calculateTabWidth(contentX, tabContext, {
         followingWidth,
         decimalPrefixWidth,
       }).width;
+
+      const lineRightEdgeX =
+        indentLeft + (isFirstLine ? firstLineOffset + markerInlineWidth : 0) + currentLine.availableWidth + currentLine.leftOffset;
+      if (
+        !hasFollowingTabOnLine(runs, runIndex) &&
+        (tabWidth > 0 || followingWidth > 0) &&
+        contentX + tabWidth + followingWidth > lineRightEdgeX + WIDTH_TOLERANCE
+      ) {
+        tabWidth = Math.max(1, lineRightEdgeX - contentX - followingWidth);
+      }
 
       if (currentLine.width + tabWidth > currentLine.availableWidth + WIDTH_TOLERANCE) {
         // Tab doesn't fit, start new line
