@@ -181,6 +181,39 @@ describe("calculateHeaderFooterVisualBounds", () => {
     expect(bounds).toEqual({ visualTop: 0, visualBottom: 1100 });
   });
 
+  test("uses page-anchored vertical position for floating text box visual bounds", () => {
+    const blocks: FlowBlock[] = [
+      {
+        kind: "textBox",
+        id: "letterhead-box",
+        width: 560,
+        height: 200,
+        displayMode: "float",
+        position: {
+          vertical: { relativeTo: "margin", posOffset: -1_460_500 },
+        },
+        content: [],
+      },
+      {
+        kind: "paragraph",
+        id: "title",
+        runs: [{ kind: "text", text: "Header" }],
+      },
+    ];
+
+    const bounds = calculateHeaderFooterVisualBounds(
+      blocks,
+      [
+        { kind: "textBox", width: 560, height: 200, innerMeasures: [] },
+        { kind: "paragraph", lines: [], totalHeight: 12 },
+      ],
+      12,
+      metrics,
+    );
+
+    expect(bounds).toEqual({ visualTop: -101, visualBottom: 99 });
+  });
+
   test("includes behindDoc images in visualBottom (render+hash signal)", () => {
     // Full-page letterhead: anchored to "margin", posOffset -1460500 EMU
     // (≈ -153px) places the image just above the body margin and its 1117px
@@ -217,6 +250,68 @@ describe("calculateHeaderFooterVisualBounds", () => {
     // marginTop 100 + emuToPixels(-1_460_500) -153 - flowTop 48 = -101;
     // image bottom = top + 1117 = 1016.
     expect(bounds).toEqual({ visualTop: -101, visualBottom: 1016 });
+  });
+
+  test("ignores floating images positioned entirely below the page", () => {
+    const footerMetrics: HeaderFooterMetrics = {
+      ...metrics,
+      section: "footer",
+    };
+    const blocks: FlowBlock[] = [
+      {
+        kind: "paragraph",
+        id: "footer",
+        runs: [
+          {
+            kind: "image",
+            src: "off-page.png",
+            width: 100,
+            height: 80,
+            position: {
+              vertical: { relativeTo: "page", posOffset: 8_000_000 },
+            },
+          },
+        ],
+      },
+    ];
+
+    const bounds = calculateHeaderFooterVisualBounds(
+      blocks,
+      [{ kind: "paragraph", lines: [], totalHeight: 12 }],
+      12,
+      footerMetrics,
+    );
+
+    expect(bounds).toEqual({ visualTop: 0, visualBottom: 12 });
+  });
+
+  test("ignores floating images whose top touches the page bottom edge", () => {
+    const blocks: FlowBlock[] = [
+      {
+        kind: "paragraph",
+        id: "edge",
+        runs: [
+          {
+            kind: "image",
+            src: "edge.png",
+            width: 100,
+            height: 80,
+            position: {
+              vertical: { relativeTo: "page", posOffset: 7_620_000 },
+            },
+          },
+        ],
+      },
+    ];
+
+    const bounds = calculateHeaderFooterVisualBounds(
+      blocks,
+      [{ kind: "paragraph", lines: [], totalHeight: 12 }],
+      12,
+      metrics,
+    );
+
+    expect(bounds).toEqual({ visualTop: 0, visualBottom: 12 });
   });
 });
 
