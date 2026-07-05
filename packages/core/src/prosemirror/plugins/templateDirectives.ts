@@ -73,6 +73,52 @@ const directiveExpr = (meta: MarkerMeta): string => {
   }
 };
 
+/** Block-directive openers ({{#if}}, {{#each}}) that start a gutter-rail band. */
+const BLOCK_OPENER_KINDS = new Set<DirectiveKind>(["if", "each"]);
+/** Block-directive closers ({{/if}}, {{/each}}) that end a gutter-rail band. */
+const BLOCK_CLOSER_KINDS = new Set<DirectiveKind>(["endif", "endeach"]);
+
+/**
+ * Nesting depth (0-based) of every block-directive opener, derived purely from
+ * the scanned ranges by containment: walk the block openers/closers in document
+ * order with a kind-aware stack, and record each opener's depth as the stack size
+ * before it is pushed. Only `block:true` if/each pairs participate (inline markers
+ * resolve within a paragraph and get no rail).
+ *
+ * Matching is kind-aware so a mid-edit / unbalanced template stays sane: a closer
+ * pops the nearest opener of the *same family* ({{/if}} ⇒ {{#if}}, {{/each}} ⇒
+ * {{#each}}), dropping any still-open openers nested above it; a closer with no
+ * matching opener is ignored (never decrements a foreign block's depth). A blind
+ * open/close counter would mis-count here: e.g. a stray {{/each}} between {{#if}}
+ * and a nested {{#each}} would wrongly pull the inner {{#each}} back to depth 0.
+ *
+ * Keyed by the opener's `from` PM position, which is unique per marker, so the
+ * overlay can look a band's depth up from its opener range. This is a pure
+ * function of the ranges (no layout), hence unit-testable in isolation; the
+ * overlay caps the *visual* indentation separately.
+ */
+export const computeBlockDepths = (ranges: readonly DirectiveRange[]): Map<number, number> => {
+  const depths = new Map<number, number>();
+  const stack: DirectiveKind[] = [];
+  const ordered = ranges
+    .filter((r) => r.block && (BLOCK_OPENER_KINDS.has(r.kind) || BLOCK_CLOSER_KINDS.has(r.kind)))
+    .slice()
+    .sort((a, b) => a.from - b.from);
+  for (const range of ordered) {
+    if (BLOCK_OPENER_KINDS.has(range.kind)) {
+      depths.set(range.from, stack.length);
+      stack.push(range.kind);
+      continue;
+    }
+    const wantOpener: DirectiveKind = range.kind === "endif" ? "if" : "each";
+    const matchIdx = stack.lastIndexOf(wantOpener);
+    if (matchIdx !== -1) {
+      stack.length = matchIdx;
+    }
+  }
+  return depths;
+};
+
 export const scanDirectives = (doc: PMNode): DirectiveRange[] => {
   const ranges: DirectiveRange[] = [];
 

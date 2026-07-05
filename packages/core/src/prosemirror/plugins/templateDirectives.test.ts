@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
 import { schema } from "../schema";
-import { scanDirectives } from "./templateDirectives";
+import type { DirectiveRange } from "./templateDirectives";
+import { computeBlockDepths, scanDirectives } from "./templateDirectives";
 
 const docOf = (...paragraphs: string[]) =>
   schema.node(
@@ -72,5 +73,111 @@ describe("scanDirectives", () => {
     expect(tokens).toContain("endeach::false");
     // The field inside the inline loop still gets its chip.
     expect(tokens).toContain("placeholder:items.name:false");
+  });
+});
+
+describe("computeBlockDepths", () => {
+  // Builds a block opener/closer range at a given position. Only `from`, `kind`,
+  // and `block` drive the depth math, so the rest is filler.
+  const blockRange = (from: number, kind: DirectiveRange["kind"]): DirectiveRange => ({
+    from,
+    to: from + 1,
+    kind,
+    expr: "",
+    block: true,
+  });
+
+  test("assigns 0-based depth by containment", () => {
+    // {{#each}} > {{#if}} > {{#if}}  (outer loop, two nested conditions)
+    const ranges: DirectiveRange[] = [
+      blockRange(0, "each"),
+      blockRange(10, "if"),
+      blockRange(20, "endif"),
+      blockRange(30, "if"),
+      blockRange(40, "endif"),
+      blockRange(50, "endeach"),
+    ];
+
+    const depths = computeBlockDepths(ranges);
+
+    expect(depths.get(0)).toBe(0); // each
+    expect(depths.get(10)).toBe(1); // first nested if
+    expect(depths.get(30)).toBe(1); // sibling nested if (back to depth 1)
+  });
+
+  test("deeply nested openers keep climbing (visual cap is the overlay's job)", () => {
+    const ranges: DirectiveRange[] = [
+      blockRange(0, "if"),
+      blockRange(1, "each"),
+      blockRange(2, "if"),
+      blockRange(3, "each"),
+      blockRange(4, "if"),
+      blockRange(5, "each"),
+    ];
+
+    const depths = computeBlockDepths(ranges);
+
+    expect([...depths.values()]).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  test("ignores order of input and inline (block:false) markers", () => {
+    const ranges: DirectiveRange[] = [
+      blockRange(30, "endif"),
+      blockRange(0, "each"),
+      { from: 5, to: 6, kind: "if", expr: "x", block: false }, // inline: no rail
+      blockRange(10, "if"),
+      blockRange(40, "endeach"),
+    ];
+
+    const depths = computeBlockDepths(ranges);
+
+    expect(depths.get(0)).toBe(0); // each
+    expect(depths.get(10)).toBe(1); // if nested inside each
+    expect(depths.has(5)).toBe(false); // inline if excluded
+  });
+
+  test("tolerates unbalanced closers without going negative", () => {
+    const ranges: DirectiveRange[] = [
+      blockRange(0, "endif"), // stray closer, no opener
+      blockRange(10, "if"),
+      blockRange(20, "endif"),
+    ];
+
+    const depths = computeBlockDepths(ranges);
+
+    expect(depths.get(10)).toBe(0);
+  });
+
+  test("kind-aware: a stray {{/each}} does not shrink a foreign block's depth", () => {
+    // {{#if}} {{/each}}(stray, no open each) {{#each}} {{/if}}
+    // A blind open/close counter decrements on the stray {{/each}} and pulls the
+    // nested {{#each}} back to depth 0; kind-aware matching leaves it at depth 1.
+    const ranges: DirectiveRange[] = [
+      blockRange(0, "if"),
+      blockRange(10, "endeach"), // stray: no open each to close
+      blockRange(20, "each"),
+      blockRange(30, "endif"),
+    ];
+
+    const depths = computeBlockDepths(ranges);
+
+    expect(depths.get(0)).toBe(0); // outer if
+    expect(depths.get(20)).toBe(1); // each is still nested inside the open if
+  });
+
+  test("kind-aware: interleaved if/each closers keep opener depths intact", () => {
+    // {{#if}} {{#each}} {{/if}} {{/each}} (crossed nesting): the {{/if}} closes the
+    // if and discards the improperly-nested each, but recorded depths do not shift.
+    const ranges: DirectiveRange[] = [
+      blockRange(0, "if"),
+      blockRange(10, "each"),
+      blockRange(20, "endif"),
+      blockRange(30, "endeach"),
+    ];
+
+    const depths = computeBlockDepths(ranges);
+
+    expect(depths.get(0)).toBe(0);
+    expect(depths.get(10)).toBe(1);
   });
 });
