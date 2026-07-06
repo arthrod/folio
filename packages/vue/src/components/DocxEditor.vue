@@ -82,7 +82,7 @@
         @insert-symbol="showInsertSymbol = true"
         @insert-page-break="handleInsertPageBreakAction"
         @page-setup="showPageSetup = true"
-        @toggle-outline="showOutline = !showOutline"
+        @toggle-outline="outlineSidebar.handleToggleOutline"
         @apply-style="handleApplyStyle"
         @zoom-in="zoomIn"
         @zoom-out="zoomOut"
@@ -323,7 +323,11 @@
           </button>
         </div>
 
-        <OutlineToggleButton v-if="!showOutline" :left-offset="12" @toggle="showOutline = true" />
+        <OutlineToggleButton
+          v-if="!showOutline"
+          :left-offset="12"
+          @toggle="outlineSidebar.handleToggleOutline"
+        />
 
         <PageIndicator
           v-if="scrollPageInfo.totalPages > 1"
@@ -337,7 +341,7 @@
           :headings="outlineHeadings"
           :get-scroll-container="() => pagesRef"
           @close="showOutline = false"
-          @navigate="() => {}"
+          @navigate="outlineSidebar.handleOutlineNavigate"
         />
       </div>
     </div>
@@ -423,6 +427,8 @@ import { useDocxEditorRefApi } from "../composables/useDocxEditorRefApi";
 import { useFormattingActions } from "../composables/useFormattingActions";
 import { useHyperlinkManagement } from "../composables/useHyperlinkManagement";
 import { useImageActions } from "../composables/useImageActions";
+import { useKeyboardShortcuts } from "../composables/useKeyboardShortcuts";
+import { useOutlineSidebar } from "../composables/useOutlineSidebar";
 import { usePageSetupControls } from "../composables/usePageSetupControls";
 import { usePagesPointer } from "../composables/usePagesPointer";
 import { provideDocxPortalClass } from "../composables/usePortalClass";
@@ -552,6 +558,9 @@ const rulerVisible = computed(() => props.showRuler ?? false);
 const stateTick = ref(0);
 const showFindReplace = ref(false);
 const showHyperlink = ref(false);
+// PORT-BLOCKED: no KeyboardShortcutsDialog component ported yet, so F1 / Ctrl+/
+// toggle inert local state (mirrors the colorMode / externalPlugins stubs above).
+const showKeyboardShortcuts = ref(false);
 const showInsertSymbol = ref(false);
 const showImageProperties = ref(false);
 const showPageSetup = ref(false);
@@ -560,7 +569,8 @@ const showSidebar = ref(false);
 const activeSidebarItem = ref<string | null>(null);
 const bookmarks = shallowRef<{ name: string; label?: string }[]>([]);
 
-// Outline headings stay empty until the outline composable is ported.
+// Populated by `useOutlineSidebar` — collected lazily on outline open and
+// re-collected on doc changes while the panel stays open (see below).
 const outlineHeadings = shallowRef<HeadingInfo[]>([]);
 
 const {
@@ -572,6 +582,7 @@ const {
   zoomIn,
   zoomOut,
   handleWheel: handleZoomWheel,
+  handleKeyDown: handleZoomKeyDown,
   ZOOM_PRESETS,
 } = useZoom(props.initialZoom);
 
@@ -583,6 +594,19 @@ function handleWheelZoomGated(event: WheelEvent): void {
   }
   handleZoomWheel(event);
 }
+
+// Global keyboard shortcuts (F1 keyboard-shortcuts dialog, Ctrl+=/-/0 zoom,
+// Ctrl+F/H find-replace, Ctrl+K hyperlink, Ctrl+/ shortcuts toggle). Installs
+// its own window-level listener on mount and tears it down on unmount, so no
+// further wiring is needed here. Mirrors React's Cmd/Ctrl+F find-open path
+// (`useKeyboardShortcuts` in `packages/react/src/components/hooks`), extended
+// with the Vue adapter's additional shortcuts.
+useKeyboardShortcuts({
+  showKeyboardShortcuts,
+  showFindReplace,
+  showHyperlink,
+  handleZoomKeyDown,
+});
 
 // ---- Pipeline -----------------------------------------------------------
 const {
@@ -761,6 +785,22 @@ const {
   reLayout,
   emit: () => {},
   clearOverlay: () => {},
+});
+
+// Document Outline: heading collection + navigate-to-heading, driven off the
+// visible pages viewport (the hidden PM is off-screen — see
+// `scrollVisiblePositionIntoView`'s doc comment). `extractCommentsAndChanges`
+// is unused here: DocxEditor.vue's own sidebar toggle (below) already reads
+// comments reactively off `commentManagement.comments`, so only the
+// outline-specific handlers from this composable are wired.
+const outlineSidebar = useOutlineSidebar({
+  editorView,
+  showOutline,
+  showSidebar,
+  outlineHeadings,
+  activeSidebarItem,
+  extractCommentsAndChanges: () => {},
+  scrollToVisiblePosition: scrollVisiblePositionIntoView,
 });
 
 const {
@@ -1027,7 +1067,7 @@ function handleMenuAction(action: string): void {
       showPageSetup.value = true;
       break;
     case "toggleOutline":
-      showOutline.value = !showOutline.value;
+      outlineSidebar.handleToggleOutline();
       break;
     case "toggleSidebar":
       showSidebar.value = !showSidebar.value;
@@ -1082,6 +1122,9 @@ watch(
   () => props.showOutline,
   (next) => {
     showOutline.value = !!next;
+    // Host-driven open (as opposed to a user click through
+    // `handleToggleOutline`) still needs headings collected.
+    outlineSidebar.recomputeHeadingsIfOpen();
   },
 );
 
@@ -1121,6 +1164,12 @@ watch(isReady, (ready) => {
   // swap keeps the prior pages visible instead of flashing the loading state.
   hasRenderedDocumentOnce.value = true;
 
+  // A document just (re)painted: re-collect headings if the outline panel is
+  // already open — covers the initial-mount `showOutline` prop and a document
+  // swap while the panel stays open (an outline toggle can't fire in either
+  // case, since it was already open before the view existed).
+  outlineSidebar.recomputeHeadingsIfOpen();
+
   // Populate the sidebar from comments embedded in the loaded document
   // (uncontrolled only); controlled hosts own the array via `comments`.
   commentManagement.seedFromDocument();
@@ -1155,6 +1204,7 @@ onMounted(() => {
   });
   const offDoc = editor.on("docChange", () => {
     stateTick.value++;
+    outlineSidebar.recomputeHeadingsIfOpen();
   });
   const offLayout = editor.on("layoutComplete", () => {
     stateTick.value++;
