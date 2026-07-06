@@ -21,7 +21,7 @@ export type ResolvedFont = {
   originalFont: string;
   /** Whether this font has a Google Fonts equivalent */
   hasGoogleEquivalent: boolean;
-  /** OS/2 single-line ratio: (usWinAscent + usWinDescent) / unitsPerEm (no external leading) */
+  /** Single-line height ratio (single-line height ÷ font size). See `FontLineHeight`. */
   singleLineRatio: number;
 };
 
@@ -37,15 +37,91 @@ type FontMapping = {
   googleFont: string;
   category: FontCategory;
   fallbackStack: string[];
-  /** OS/2 single-line ratio: (usWinAscent + usWinDescent) / unitsPerEm (no external leading) */
+  /** Single-line height ratio (single-line height ÷ font size). See `FontLineHeight`. */
   singleLineRatio: number;
 };
 
 /**
- * Default OS/2 single-line ratio for unmapped fonts.
+ * Default single-line ratio for unmapped fonts.
  * Middle of the common range (1.07–1.27) for standard DOCX fonts.
  */
 export const DEFAULT_SINGLE_LINE_RATIO = 1.15;
+
+/**
+ * Evidence backing a font's single-line height ratio.
+ *
+ * - `"hhea"`: the ratio is DERIVED from the font's own `hhea` table metrics
+ *   (never hand-written). This is the verified, measured representation —
+ *   see `singleLineRatioOf` for the formula and its provenance.
+ * - `"legacy"`: an unverified hand-transcribed ratio, kept only for fonts we
+ *   have not yet re-measured against real Word output. `note` records why.
+ *   Do not add new "legacy" entries without a reason; prefer measuring the
+ *   font's `hhea` table instead.
+ * - `"measured"`: a ratio measured directly against real Word rendering when
+ *   the `hhea` formula does not apply (East-Asian faces: Word derives their
+ *   line height from font linking, not the declared font's own `hhea` table).
+ *   `note` records the measurement context.
+ *
+ * Discriminated union so a future edit cannot silently drop the line gap by
+ * hand-writing a decimal in its place — every verified font's ratio must
+ * trace back to its raw metric fields.
+ */
+type FontLineHeight =
+  | {
+      source: "hhea";
+      hheaAscent: number;
+      hheaDescent: number;
+      hheaLineGap: number;
+      unitsPerEm: number;
+    }
+  | { source: "legacy"; ratio: number; note: string }
+  | { source: "measured"; ratio: number; note: string };
+
+/**
+ * Single-line height ratio (single-line height ÷ font size) for a
+ * `FontLineHeight`. This is the ONLY place the derivation formula lives.
+ *
+ * For `"hhea"` sources: `(hheaAscent + |hheaDescent| + hheaLineGap) / unitsPerEm`.
+ * This matches Word's rendered single-line pitch (11pt, single spacing) for
+ * every font measured against real Word output so far (16 fonts, no
+ * exceptions) — Word does NOT drop the font's line gap. Earlier revisions of
+ * this table hand-transcribed ratios from the OS/2 table and omitted the line
+ * gap for most fonts, which undershot Word's rendered line height for several
+ * of them (confirmed against real Word for cambria, trebuchet ms, palatino
+ * linotype, book antiqua, century gothic, consolas, and lucida console; arial
+ * and times new roman were fixed in a prior revision). Future readers: to
+ * correct or add a font, edit its `hhea*`/`unitsPerEm` metric fields, never the
+ * resulting ratio.
+ *
+ * Most CJK fonts are intentionally left on `DEFAULT_SINGLE_LINE_RATIO`: Word's
+ * East-Asian line height is not the run font's hhea ratio (it derives from the
+ * paragraph's `w:eastAsia` slot and East-Asian grid layout, not the ascii
+ * font), so a single per-font constant cannot capture it correctly. The
+ * Japanese Mincho/Gothic entries carry a `"measured"` ratio instead — see
+ * `JP_MEASURED_LINE_HEIGHT`.
+ */
+const singleLineRatioOf = (lineHeight: FontLineHeight): number =>
+  lineHeight.source === "hhea"
+    ? (lineHeight.hheaAscent - lineHeight.hheaDescent + lineHeight.hheaLineGap) /
+      lineHeight.unitsPerEm
+    : lineHeight.ratio;
+
+/**
+ * Word's East-Asian single-line height for the Japanese Mincho/Gothic faces,
+ * measured against real Word output on a NON-grid Japanese document
+ * (10.5pt body renders at 13.68pt line pitch → 13.68 / 10.5 ≈ 1.303). Word
+ * font-links CJK glyphs to the OS default East-Asian face and takes THAT
+ * face's height, so the declared font's own `hhea` table is not the source of
+ * truth here; a section with a `w:docGrid` line grid would override this value
+ * entirely (out of scope). The ratio is approximate for the CJK long tail
+ * (e.g. Yu Mincho renders taller, ≈1.60, when actually installed); it matches
+ * the common MS Mincho/Gothic default.
+ */
+const JP_MEASURED_LINE_HEIGHT: FontLineHeight = {
+  source: "measured",
+  ratio: 1.303,
+  note: "Measured against real Word: 10.5pt Japanese body, non-grid section, renders at 13.68pt line pitch.",
+};
 
 /**
  * Mapping of common DOCX fonts to Google Fonts equivalents
@@ -53,11 +129,13 @@ export const DEFAULT_SINGLE_LINE_RATIO = 1.15;
  * These are metrically compatible fonts that preserve document layout.
  * See: https://wiki.archlinux.org/title/Metric-compatible_fonts
  *
- * singleLineRatio values are derived from each font's OS/2 table:
- * (usWinAscent + usWinDescent) / unitsPerEm
- * These define the Windows GDI "single line" height that OOXML lineRule="auto" uses.
- * sTypoLineGap (external leading) is NOT included — Word excludes it from the
- * lineRule="auto" calculation (ECMA-376 §17.3.1.33).
+ * `singleLineRatio` values are computed by `singleLineRatioOf` from each
+ * font's `FontLineHeight`, never hand-written. For "hhea" entries the raw
+ * `hheaAscent`/`hheaDescent`/`hheaLineGap`/`unitsPerEm` fields below are read
+ * directly from the real font files' `hhea` table; the ratio is whatever
+ * falls out of the formula in `singleLineRatioOf`. "legacy" entries (e.g.
+ * garamond, lucida sans, lucida console) are unverified hand-transcribed
+ * ratios carried over unchanged, pending measurement.
  */
 const FONT_MAPPINGS: Record<string, FontMapping> = {
   // Microsoft Office fonts -> Google equivalents (via Croscore)
@@ -65,31 +143,61 @@ const FONT_MAPPINGS: Record<string, FontMapping> = {
     googleFont: "Carlito",
     category: "sans-serif",
     fallbackStack: ["Calibri", "Carlito", "Arial", "Helvetica", "sans-serif"],
-    singleLineRatio: 1.2207, // 2500/2048
+    singleLineRatio: singleLineRatioOf({
+      source: "hhea",
+      hheaAscent: 1950,
+      hheaDescent: -550,
+      hheaLineGap: 0,
+      unitsPerEm: 2048,
+    }), // 1.2207
   },
   cambria: {
     googleFont: "Caladea",
     category: "serif",
     fallbackStack: ["Cambria", "Caladea", "Georgia", "serif"],
-    singleLineRatio: 1.2676, // 2596/2048
+    singleLineRatio: singleLineRatioOf({
+      source: "hhea",
+      hheaAscent: 1946,
+      hheaDescent: -455,
+      hheaLineGap: 0,
+      unitsPerEm: 2048,
+    }), // 1.1724 (was hand-transcribed 1.2676 — wrong by 8%)
   },
   arial: {
     googleFont: "Arimo",
     category: "sans-serif",
     fallbackStack: ["Arial", "Arimo", "Helvetica", "sans-serif"],
-    singleLineRatio: 1.1172, // (1854+434)/2048 — no sTypoLineGap
+    singleLineRatio: singleLineRatioOf({
+      source: "hhea",
+      hheaAscent: 1854,
+      hheaDescent: -434,
+      hheaLineGap: 67,
+      unitsPerEm: 2048,
+    }), // 1.1499
   },
   "times new roman": {
     googleFont: "Tinos",
     category: "serif",
     fallbackStack: ["Times New Roman", "Tinos", "Times", "serif"],
-    singleLineRatio: 1.1074, // (1825+443)/2048 — no sTypoLineGap
+    singleLineRatio: singleLineRatioOf({
+      source: "hhea",
+      hheaAscent: 1825,
+      hheaDescent: -443,
+      hheaLineGap: 87,
+      unitsPerEm: 2048,
+    }), // 1.1499
   },
   "courier new": {
     googleFont: "Cousine",
     category: "monospace",
     fallbackStack: ["Courier New", "Cousine", "Courier", "monospace"],
-    singleLineRatio: 1.1328, // 2320/2048
+    singleLineRatio: singleLineRatioOf({
+      source: "hhea",
+      hheaAscent: 1705,
+      hheaDescent: -615,
+      hheaLineGap: 0,
+      unitsPerEm: 2048,
+    }), // 1.1328
   },
 
   // Additional common fonts
@@ -97,79 +205,153 @@ const FONT_MAPPINGS: Record<string, FontMapping> = {
     googleFont: "Tinos", // Similar but not perfect match
     category: "serif",
     fallbackStack: ["Georgia", "Tinos", "Times New Roman", "serif"],
-    singleLineRatio: 1.1362, // 2327/2048
+    singleLineRatio: singleLineRatioOf({
+      source: "hhea",
+      hheaAscent: 1878,
+      hheaDescent: -449,
+      hheaLineGap: 0,
+      unitsPerEm: 2048,
+    }), // 1.1362
   },
   verdana: {
     googleFont: "Open Sans", // Similar sans-serif
     category: "sans-serif",
     fallbackStack: ["Verdana", "Open Sans", "Arial", "sans-serif"],
-    singleLineRatio: 1.2153, // 2489/2048
+    singleLineRatio: singleLineRatioOf({
+      source: "hhea",
+      hheaAscent: 2059,
+      hheaDescent: -430,
+      hheaLineGap: 0,
+      unitsPerEm: 2048,
+    }), // 1.2153
   },
   tahoma: {
     googleFont: "Open Sans",
     category: "sans-serif",
     fallbackStack: ["Tahoma", "Open Sans", "Arial", "sans-serif"],
-    singleLineRatio: 1.2075, // 2472/2048
+    singleLineRatio: singleLineRatioOf({
+      source: "hhea",
+      hheaAscent: 2049,
+      hheaDescent: -423,
+      hheaLineGap: 0,
+      unitsPerEm: 2048,
+    }), // 1.2070 (was hand-transcribed 1.2075 — negligible, now derived)
   },
   "trebuchet ms": {
     googleFont: "Fira Sans",
     category: "sans-serif",
     fallbackStack: ["Trebuchet MS", "Fira Sans", "Arial", "sans-serif"],
-    singleLineRatio: 1.1431, // 2341/2048
+    singleLineRatio: singleLineRatioOf({
+      source: "hhea",
+      hheaAscent: 1923,
+      hheaDescent: -455,
+      hheaLineGap: 0,
+      unitsPerEm: 2048,
+    }), // 1.1611 (was hand-transcribed 1.1431 — wrong)
   },
   "comic sans ms": {
     googleFont: "Comic Neue",
     category: "cursive",
     fallbackStack: ["Comic Sans MS", "Comic Neue", "cursive"],
-    singleLineRatio: 1.3936, // 2854/2048
+    singleLineRatio: singleLineRatioOf({
+      source: "hhea",
+      hheaAscent: 2257,
+      hheaDescent: -597,
+      hheaLineGap: 0,
+      unitsPerEm: 2048,
+    }), // 1.3936
   },
   impact: {
     googleFont: "Anton",
     category: "sans-serif",
     fallbackStack: ["Impact", "Anton", "Arial Black", "sans-serif"],
-    singleLineRatio: 1.2197, // 2498/2048
+    singleLineRatio: singleLineRatioOf({
+      source: "hhea",
+      hheaAscent: 2066,
+      hheaDescent: -432,
+      hheaLineGap: 0,
+      unitsPerEm: 2048,
+    }), // 1.2197
   },
   "palatino linotype": {
     googleFont: "EB Garamond",
     category: "serif",
     fallbackStack: ["Palatino Linotype", "EB Garamond", "Palatino", "Georgia", "serif"],
-    singleLineRatio: 1.0259, // 2101/2048
+    singleLineRatio: singleLineRatioOf({
+      source: "hhea",
+      hheaAscent: 2150,
+      hheaDescent: -613,
+      hheaLineGap: 0,
+      unitsPerEm: 2048,
+    }), // 1.3491 (was hand-transcribed 1.0259 — WRONG by 31%)
   },
   "book antiqua": {
     googleFont: "EB Garamond",
     category: "serif",
     fallbackStack: ["Book Antiqua", "EB Garamond", "Palatino", "Georgia", "serif"],
-    singleLineRatio: 1.0259, // 2101/2048
+    singleLineRatio: singleLineRatioOf({
+      source: "hhea",
+      hheaAscent: 1891,
+      hheaDescent: -578,
+      hheaLineGap: 0,
+      unitsPerEm: 2048,
+    }), // 1.2056 (was hand-transcribed 1.0259 — wrong by 17%)
   },
   garamond: {
     googleFont: "EB Garamond",
     category: "serif",
     fallbackStack: ["Garamond", "EB Garamond", "Georgia", "serif"],
-    singleLineRatio: 1.068, // 1068/1000
+    singleLineRatio: singleLineRatioOf({
+      source: "legacy",
+      ratio: 1.068, // 1068/1000
+      note: "Unverified hand-transcribed ratio; not yet measured against real Word output.",
+    }),
   },
   "century gothic": {
     googleFont: "Questrial",
     category: "sans-serif",
     fallbackStack: ["Century Gothic", "Questrial", "Arial", "sans-serif"],
-    singleLineRatio: 1.1611, // 2378/2048
+    singleLineRatio: singleLineRatioOf({
+      source: "hhea",
+      hheaAscent: 2060,
+      hheaDescent: -451,
+      hheaLineGap: 0,
+      unitsPerEm: 2048,
+    }), // 1.2261 (was hand-transcribed 1.1611 — wrong by 6%)
   },
   "lucida sans": {
     googleFont: "Open Sans",
     category: "sans-serif",
     fallbackStack: ["Lucida Sans", "Open Sans", "Arial", "sans-serif"],
-    singleLineRatio: 1.1655, // 2387/2048
+    singleLineRatio: singleLineRatioOf({
+      source: "legacy",
+      ratio: 1.1655, // 2387/2048
+      note: "Unverified hand-transcribed ratio; not yet measured against real Word output.",
+    }),
   },
   "lucida console": {
     googleFont: "Cousine",
     category: "monospace",
     fallbackStack: ["Lucida Console", "Cousine", "Courier New", "monospace"],
-    singleLineRatio: 1.1387, // 2332/2048
+    singleLineRatio: singleLineRatioOf({
+      source: "hhea",
+      hheaAscent: 1616,
+      hheaDescent: -432,
+      hheaLineGap: 0,
+      unitsPerEm: 2048,
+    }), // 1.0000 (was hand-transcribed 1.1387 — wrong; Word renders single-spaced Lucida Console at 1.0×)
   },
   consolas: {
     googleFont: "Inconsolata",
     category: "monospace",
     fallbackStack: ["Consolas", "Inconsolata", "Cousine", "Courier New", "monospace"],
-    singleLineRatio: 1.1626, // 2381/2048
+    singleLineRatio: singleLineRatioOf({
+      source: "hhea",
+      hheaAscent: 1521,
+      hheaDescent: -527,
+      hheaLineGap: 350,
+      unitsPerEm: 2048,
+    }), // 1.1709 (was hand-transcribed 1.1626 — wrong)
   },
 
   // CJK fonts
@@ -177,7 +359,7 @@ const FONT_MAPPINGS: Record<string, FontMapping> = {
     googleFont: "Noto Serif JP",
     category: "serif",
     fallbackStack: ["MS Mincho", "Noto Serif JP", "serif"],
-    singleLineRatio: DEFAULT_SINGLE_LINE_RATIO,
+    singleLineRatio: singleLineRatioOf(JP_MEASURED_LINE_HEIGHT),
   },
   // Native Japanese typeface names as they appear in `theme1.xml`'s
   // `<a:font script="Jpan">` entries (full-width "ＭＳ"). Office stores these
@@ -188,31 +370,31 @@ const FONT_MAPPINGS: Record<string, FontMapping> = {
     googleFont: "Noto Serif JP",
     category: "serif",
     fallbackStack: ["MS Mincho", "ＭＳ 明朝", "Noto Serif JP", "serif"],
-    singleLineRatio: DEFAULT_SINGLE_LINE_RATIO,
+    singleLineRatio: singleLineRatioOf(JP_MEASURED_LINE_HEIGHT),
   },
   "ｍｓ ｐ明朝": {
     googleFont: "Noto Serif JP",
     category: "serif",
     fallbackStack: ["MS PMincho", "ＭＳ Ｐ明朝", "Noto Serif JP", "serif"],
-    singleLineRatio: DEFAULT_SINGLE_LINE_RATIO,
+    singleLineRatio: singleLineRatioOf(JP_MEASURED_LINE_HEIGHT),
   },
   "ms gothic": {
     googleFont: "Noto Sans JP",
     category: "sans-serif",
     fallbackStack: ["MS Gothic", "Noto Sans JP", "sans-serif"],
-    singleLineRatio: DEFAULT_SINGLE_LINE_RATIO,
+    singleLineRatio: singleLineRatioOf(JP_MEASURED_LINE_HEIGHT),
   },
   "ｍｓ ゴシック": {
     googleFont: "Noto Sans JP",
     category: "sans-serif",
     fallbackStack: ["MS Gothic", "ＭＳ ゴシック", "Noto Sans JP", "sans-serif"],
-    singleLineRatio: DEFAULT_SINGLE_LINE_RATIO,
+    singleLineRatio: singleLineRatioOf(JP_MEASURED_LINE_HEIGHT),
   },
   "ｍｓ ｐゴシック": {
     googleFont: "Noto Sans JP",
     category: "sans-serif",
     fallbackStack: ["MS PGothic", "ＭＳ Ｐゴシック", "Noto Sans JP", "sans-serif"],
-    singleLineRatio: DEFAULT_SINGLE_LINE_RATIO,
+    singleLineRatio: singleLineRatioOf(JP_MEASURED_LINE_HEIGHT),
   },
   simhei: {
     googleFont: "Noto Sans SC",
@@ -436,6 +618,48 @@ const CJK_FONT_ALIASES: Record<string, string> = {
   "yu mincho": "ms mincho",
   游明朝: "ms mincho",
 };
+
+/**
+ * The Noto families every CJK entry in `FONT_MAPPINGS` maps to. A mapping
+ * whose `googleFont` is one of these is an East-Asian face; this is the single
+ * classification source for `isCjkFont`, kept as an explicit set (not a name
+ * heuristic) so a future non-Noto CJK mapping must extend it deliberately.
+ */
+const CJK_NOTO_FAMILIES: ReadonlySet<string> = new Set([
+  "Noto Serif JP",
+  "Noto Sans JP",
+  "Noto Serif SC",
+  "Noto Sans SC",
+  "Noto Serif TC",
+  "Noto Sans TC",
+  "Noto Serif KR",
+  "Noto Sans KR",
+]);
+
+/**
+ * True when `family` is a known East-Asian (CJK) typeface — a direct
+ * `FONT_MAPPINGS` CJK entry or a romanized alias of one. Used by the measurer
+ * to decide whether a run's `w:eastAsia` font can supply the line height for
+ * CJK text, or whether Word would font-link to a default East-Asian face
+ * instead (see `CJK_FALLBACK_FONT_FAMILY`). Unmapped families return false:
+ * we cannot know their metrics, so the caller falls back.
+ */
+export function isCjkFont(family: string): boolean {
+  const normalizedName = family.trim().toLowerCase();
+  const mapping = FONT_MAPPINGS[CJK_FONT_ALIASES[normalizedName] ?? normalizedName];
+  return mapping !== undefined && CJK_NOTO_FAMILIES.has(mapping.googleFont);
+}
+
+/**
+ * Font family whose `singleLineRatio` stands in for Word's default East-Asian
+ * face when a CJK-text run declares no usable CJK font (its `w:eastAsia` slot
+ * is absent or names a Latin face like "Century"). Word font-links those
+ * glyphs to the OS default East-Asian font and takes THAT face's taller line
+ * height; MS Mincho carries the measured ratio for it
+ * (`JP_MEASURED_LINE_HEIGHT`, ≈1.303). Line-height resolution only — never
+ * used for width measurement or painting.
+ */
+export const CJK_FALLBACK_FONT_FAMILY = "MS Mincho";
 
 /**
  * Resolve a DOCX font name to a Google Font and CSS fallback stack

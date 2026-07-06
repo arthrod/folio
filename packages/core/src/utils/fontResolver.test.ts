@@ -1,6 +1,163 @@
 import { describe, expect, test } from "bun:test";
 
-import { getGoogleFontEquivalent, resolveFontFamily } from "./fontResolver";
+import { getResolvedData } from "../layout-engine/measure/measureHelpers";
+import {
+  CJK_FALLBACK_FONT_FAMILY,
+  getGoogleFontEquivalent,
+  isCjkFont,
+  resolveFontFamily,
+} from "./fontResolver";
+
+describe("fontResolver — single-line ratios are derived from real hhea metrics", () => {
+  // Expected ratios computed by hand from each font's real `hhea` table:
+  // (hheaAscent + |hheaDescent| + hheaLineGap) / unitsPerEm. Measured against
+  // real Word rendering (11pt, single spacing) for every font in this table.
+  // This locks the facts driving FONT_MAPPINGS — a future edit that
+  // hand-writes a different decimal into the table will fail here.
+  const verifiedRatios: [font: string, expectedRatio: number][] = [
+    ["arial", 1.1499],
+    ["times new roman", 1.1499],
+    ["calibri", 1.2207],
+    ["cambria", 1.1724],
+    ["georgia", 1.1362],
+    ["verdana", 1.2153],
+    ["tahoma", 1.207],
+    ["trebuchet ms", 1.1611],
+    ["courier new", 1.1328],
+    ["consolas", 1.1709],
+    ["comic sans ms", 1.3936],
+    ["impact", 1.2197],
+    ["palatino linotype", 1.3491],
+    ["book antiqua", 1.2056],
+    ["century gothic", 1.2261],
+    ["lucida console", 1.0],
+  ];
+
+  for (const [font, expectedRatio] of verifiedRatios) {
+    test(`${font} → ${expectedRatio}`, () => {
+      expect(resolveFontFamily(font).singleLineRatio).toBeCloseTo(expectedRatio, 4);
+    });
+  }
+});
+
+describe("fontResolver — previously wrong ratios are corrected and reach consumers", () => {
+  // These fonts hand-transcribed a ratio that dropped or mis-stated the line
+  // gap; the corrected values come from the real hhea metrics above. Assert
+  // through `getResolvedData` (the layout engine's public resolution path,
+  // also used by `measureContainer.ts`) to prove the fix reaches consumers,
+  // not just the raw `resolveFontFamily` call.
+  const correctedCases: [font: string, correctedRatio: number][] = [
+    ["cambria", 1.1724], // was hand-transcribed 1.2676 — wrong by 8%
+    ["palatino linotype", 1.3491], // was hand-transcribed 1.0259 — wrong by 31%
+    ["arial", 1.1499], // fixed in a prior revision; still exercised here
+    ["book antiqua", 1.2056], // was hand-transcribed 1.0259 — wrong by 17%
+    ["century gothic", 1.2261], // was hand-transcribed 1.1611 — wrong by 6%
+    ["trebuchet ms", 1.1611], // was hand-transcribed 1.1431 — wrong
+    ["consolas", 1.1709], // was hand-transcribed 1.1626 — wrong
+    ["lucida console", 1.0], // was hand-transcribed 1.1387 — wrong by 14%
+  ];
+
+  for (const [font, correctedRatio] of correctedCases) {
+    test(`${font} resolves to the corrected ratio via getResolvedData`, () => {
+      expect(getResolvedData(font).singleLineRatio).toBeCloseTo(correctedRatio, 4);
+    });
+  }
+});
+
+describe("fontResolver — unverified legacy fonts are left unchanged", () => {
+  // garamond and lucida sans have not been measured against real Word output
+  // (the original fonts aren't available here to read hhea metrics from); their
+  // hand-transcribed ratios must stay exactly as they were before this refactor
+  // introduced the hhea-derived table.
+  const legacyCases: [font: string, unchangedRatio: number][] = [
+    ["garamond", 1.068],
+    ["lucida sans", 1.1655],
+  ];
+
+  for (const [font, unchangedRatio] of legacyCases) {
+    test(`${font} keeps its legacy ratio`, () => {
+      expect(resolveFontFamily(font).singleLineRatio).toBeCloseTo(unchangedRatio, 4);
+    });
+  }
+});
+
+describe("fontResolver — Japanese Mincho/Gothic carry the measured East-Asian line height", () => {
+  // Word font-links CJK glyphs to the default East-Asian face and uses its
+  // taller single-line height; measured against real Word on a non-grid
+  // Japanese document (10.5pt body → 13.68pt line pitch ≈ 1.303×). The value
+  // is approximate for the CJK long tail (Yu Mincho renders ≈1.60 when
+  // actually installed); these families all share the MS Mincho/Gothic default.
+  const measuredJpFaces = [
+    "MS Mincho",
+    "MS Gothic",
+    "ＭＳ 明朝",
+    "ＭＳ Ｐ明朝",
+    "ＭＳ ゴシック",
+    "ＭＳ Ｐゴシック",
+    // Romanized/native aliases sharing the MS Mincho/Gothic entries.
+    "Yu Mincho",
+    "Yu Gothic",
+    "游明朝",
+    "游ゴシック",
+    "Meiryo",
+  ];
+
+  for (const face of measuredJpFaces) {
+    test(`${face} → 1.303`, () => {
+      expect(resolveFontFamily(face).singleLineRatio).toBeCloseTo(1.303, 4);
+    });
+  }
+
+  test("the CJK line-height fallback family resolves to the measured ratio via getResolvedData", () => {
+    // measureParagraph resolves the fallback through getResolvedData, so the
+    // constant must land on the measured 1.303 entry through that path too.
+    expect(getResolvedData(CJK_FALLBACK_FONT_FAMILY).singleLineRatio).toBeCloseTo(1.303, 4);
+  });
+
+  test("the CJK long tail keeps the default ratio until measured", () => {
+    for (const face of ["SimSun", "SimHei", "宋体", "Malgun Gothic", "바탕"]) {
+      expect(resolveFontFamily(face).singleLineRatio).toBeCloseTo(1.15, 4);
+    }
+  });
+});
+
+describe("fontResolver — isCjkFont classifies East-Asian faces", () => {
+  // True only for mapped CJK entries (direct or via romanized alias); Latin
+  // faces and unmapped families are false so the measurer falls back to
+  // CJK_FALLBACK_FONT_FAMILY for them.
+  const cjkFaces = [
+    "MS Mincho",
+    "ms gothic",
+    "ＭＳ Ｐ明朝",
+    "SimSun",
+    "宋体",
+    "微軟正黑體",
+    "Malgun Gothic",
+    "굴림",
+    "Yu Mincho",
+    "Meiryo",
+  ];
+  const nonCjkFaces = [
+    "Arial",
+    "Century",
+    "Calibri",
+    "Times New Roman",
+    "Garamond",
+    "Unknown Face",
+  ];
+
+  for (const face of cjkFaces) {
+    test(`${face} is CJK`, () => {
+      expect(isCjkFont(face)).toBe(true);
+    });
+  }
+
+  for (const face of nonCjkFaces) {
+    test(`${face} is not CJK`, () => {
+      expect(isCjkFont(face)).toBe(false);
+    });
+  }
+});
 
 describe("fontResolver — native CJK theme typefaces map to matched Noto fonts", () => {
   // The names `applyThemeFontLang` writes into the empty `<a:ea>` slot are the
