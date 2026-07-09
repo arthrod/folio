@@ -297,9 +297,12 @@ export function layoutDocument(
     const block = blocks[i]!; // SAFETY: i < blocks.length
     const measure = measures[i]!; // SAFETY: measures.length === blocks.length (validated above)
 
-    // Handle pageBreakBefore on paragraphs
+    // A cached Word pagination marker is advisory: honor it unless another
+    // structural break already opened an empty page for the paragraph.
     if (hasPageBreakBefore(block)) {
       paginator.forcePageBreak();
+    } else if (block.kind === "paragraph" && block.attrs?.renderedPageBreakBefore) {
+      paginator.forcePageBreak({ coalesceBlankPage: true });
     }
 
     // Handle keepNext chains - if this is a chain start, check if chain fits
