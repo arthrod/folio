@@ -506,9 +506,10 @@ describe("measureParagraph justified shrink tolerance", () => {
             attrs: {
               alignment: "justify",
               listMarker: "1.",
+              indent: { left: 36, hanging: 36 },
             },
           },
-          100,
+          136,
         );
 
         expect(measure.lines).toHaveLength(2);
@@ -536,9 +537,10 @@ describe("measureParagraph justified shrink tolerance", () => {
             attrs: {
               alignment: "justify",
               listMarker: "1.",
+              indent: { left: 36, hanging: 36 },
             },
           },
-          100,
+          136,
         );
 
         expect(measure.lines).toHaveLength(3);
@@ -546,6 +548,62 @@ describe("measureParagraph justified shrink tolerance", () => {
       {
         charWidth: fractionalWidth,
       },
+    );
+  });
+
+  test("keeps standard-hanging list continuation lines on the conservative tolerance", () => {
+    withFakeTextMeasure(
+      () => {
+        const measure = measureParagraph(
+          {
+            kind: "paragraph",
+            id: "justified-standard-list-continuation",
+            runs: [
+              { kind: "text", text: "first line" },
+              { kind: "lineBreak" },
+              { kind: "text", text },
+            ],
+            attrs: {
+              alignment: "justify",
+              listMarker: "1.",
+              indent: { left: 24, hanging: 24 },
+            },
+          },
+          124,
+        );
+
+        expect(measure.lines).toHaveLength(3);
+      },
+      {
+        charWidth: fractionalWidth,
+      },
+    );
+  });
+});
+
+describe("measureParagraph document default tab interval", () => {
+  test("advances consecutive tabs on the authored grid", () => {
+    withFakeTextMeasure(
+      () => {
+        const measure = measureParagraph(
+          {
+            kind: "paragraph",
+            id: "authored-default-tabs",
+            runs: [
+              { kind: "text", text: "a".repeat(41) },
+              { kind: "tab" },
+              { kind: "tab" },
+              { kind: "text", text: "x" },
+            ],
+            attrs: { defaultTabStopTwips: 600 },
+          },
+          200,
+        );
+
+        expect(measure.lines).toHaveLength(1);
+        expect(measure.lines[0]?.width).toBe(121);
+      },
+      { charWidth: () => 1 },
     );
   });
 });
