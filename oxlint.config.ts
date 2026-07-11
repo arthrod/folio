@@ -140,6 +140,30 @@ export default library({
       },
     },
     {
+      // Render-storm guards for the React package. folio-react ships WITHOUT
+      // the React Compiler (the tsdown build has no compiler pass, and
+      // consumers import the prebuilt dist), so referential identity is
+      // load-bearing: manual memoization is what keeps the editor's render
+      // pipeline cheap, and an inline value passed as a context `value` (or to
+      // a memoized child) silently defeats every bailout downstream. Consumers
+      // that run the React Compiler over their own app code do not need these
+      // rules; they are scoped to this package's source only.
+      //
+      files: ["packages/react/src/**/*.{ts,tsx}"],
+      plugins: ["react", "react-perf"],
+      rules: {
+        "react/jsx-no-constructed-context-values": "error",
+        // Intrinsic elements do not have React memoization boundaries, so a
+        // fresh DOM prop cannot invalidate a child-component bailout. Keep the
+        // rules strict at every component boundary without forcing no-op
+        // memoization around native event handlers and style objects.
+        "react-perf/jsx-no-jsx-as-prop": ["error", { nativeAllowList: "all" }],
+        "react-perf/jsx-no-new-array-as-prop": ["error", { nativeAllowList: "all" }],
+        "react-perf/jsx-no-new-function-as-prop": ["error", { nativeAllowList: "all" }],
+        "react-perf/jsx-no-new-object-as-prop": ["error", { nativeAllowList: "all" }],
+      },
+    },
+    {
       // Folio model seam. The model type layer is pure data: forbid it from
       // importing ProseMirror, DOM render, React, @stll/ui, or engine behavior.
       // See the matching test at `src/core/__tests__/model-purity.test.ts`.
