@@ -192,6 +192,36 @@
         "vite": "^7.1.11",
       },
     },
+    "packages/premirror-folio-spike": {
+      "name": "@stll/premirror-folio-spike",
+      "version": "0.0.0",
+      "dependencies": {
+        "@handlewithcare/react-prosemirror": "^3.0.0",
+        "@premirror/composer": "workspace:*",
+        "@premirror/core": "workspace:*",
+        "@premirror/prosemirror-adapter": "workspace:*",
+        "@premirror/react": "workspace:*",
+        "@stll/folio-core": "workspace:*",
+        "prosemirror-commands": "^1.5.0",
+        "prosemirror-history": "^1.4.1",
+        "prosemirror-keymap": "^1.2.0",
+        "prosemirror-model": "^1.25.9",
+        "prosemirror-schema-basic": "^1.2.0",
+        "prosemirror-schema-list": "^1.2.0",
+        "prosemirror-state": "^1.4.4",
+        "prosemirror-view": "^1.41.8",
+        "react": "^19.2.7",
+        "react-dom": "^19.2.7",
+      },
+      "devDependencies": {
+        "@types/bun": "1.3.14",
+        "@types/react": "^19.2.17",
+        "@types/react-dom": "^19.2.3",
+        "@vitejs/plugin-react": "^5.0.4",
+        "typescript": "6.0.3",
+        "vite": "^7.1.11",
+      },
+    },
     "packages/premirror-prosemirror-adapter": {
       "name": "@premirror/prosemirror-adapter",
       "version": "0.1.0",
@@ -1011,6 +1041,8 @@
     "@stll/playground-vue": ["@stll/playground-vue@workspace:packages/playground-vue"],
 
     "@stll/premirror-bridge": ["@stll/premirror-bridge@workspace:packages/premirror-bridge"],
+
+    "@stll/premirror-folio-spike": ["@stll/premirror-folio-spike@workspace:packages/premirror-folio-spike"],
 
     "@stll/template-conditions": ["@stll/template-conditions@0.1.0", "", { "dependencies": { "@stll/conditions": "^0.1.0", "better-result": "2.9.2" } }, "sha512-GkgzEDiSqpzG3GexlOfVXHgYiQSME8osQIZ645F9ooQbvDcsTVX5YVpfvmPwe3EOhRol6WjEyO2t/39+hNvQsg=="],
 
