@@ -24,6 +24,13 @@ export type FolioMeasurementFeatureFlags = {
    * runs on the main thread exactly as before.
    */
   workerFontMetrics?: boolean;
+  /**
+   * Fit plain text runs from prepared segment widths (premirror port) via a
+   * registered SegmentFitEngine instead of the word-walk's slice-probe
+   * binary search. Requires an engine (see `setSegmentFitEngine`); with the
+   * flag on but no engine registered, behaviour is unchanged.
+   */
+  segmentFitLineBreaking?: boolean;
 };
 
 declare global {
@@ -38,6 +45,13 @@ declare global {
  */
 export function isWorkerFontMetricsEnabled(): boolean {
   return globalThis.__folioFeatureFlags?.workerFontMetrics === true;
+}
+
+/**
+ * Read the segment-fit flag. Same strict-true semantics as the worker flag.
+ */
+export function isSegmentFitLineBreakingEnabled(): boolean {
+  return globalThis.__folioFeatureFlags?.segmentFitLineBreaking === true;
 }
 
 /**

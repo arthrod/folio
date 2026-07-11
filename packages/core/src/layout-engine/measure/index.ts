@@ -75,6 +75,20 @@ export {
 
 export {
   isWorkerFontMetricsEnabled,
+  isSegmentFitLineBreakingEnabled,
   setFolioMeasurementFlags,
   type FolioMeasurementFeatureFlags,
 } from "./featureFlags";
+
+export {
+  setSegmentFitEngine,
+  resetSegmentFitEngine,
+  getSegmentFitEngine,
+  isSegmentFitActive,
+  styleSupportsSegmentFit,
+  runSegmentFitWalk,
+  type SegmentFitEngine,
+  type SegmentFitLine,
+  type SegmentFitPrepared,
+  type SegmentFitWalkHost,
+} from "./segmentFit";
