@@ -112,26 +112,24 @@ describe("golden: wrapping", () => {
     }
   });
 
-  // UPSTREAM BUG (pinned): char-level force-splitting of space-less runs
-  // corrupts line drafts — lines 0..n-2 come out with EMPTY runs and
-  // overlapping pmRanges ([1,41) [1,81) ...), and every placed segment lands
-  // on the LAST line with x positions running past the frame (observed
-  // x0..3120 for a 624px frame). Long unbroken strings (URLs, hashes) hit
-  // this. `it.fails` pins the bug: this test starts passing the day the
-  // vendored composer is fixed, which is our signal to unpin.
-  it.skip("space-less text splits into valid lines (currently broken upstream; see eigenport#112)", () => {
+  // UPSTREAM BUG (pinned actively; eigenport#112): char-level force-splitting
+  // of space-less runs corrupts line drafts. This test asserts the CURRENT
+  // broken signature so the suite alerts the moment the vendored composer is
+  // fixed (flip the assertions then). bun:test has no it.fails, so an active
+  // characterization replaces the dead it.skip (review finding).
+  it("space-less force-split still shows the pinned upstream corruption (#112)", () => {
     const { snapshot } = buildFixtureDoc([{ text: "x".repeat(200), widthPx: 3120 }]);
     const out = composeLayout(snapshot, null, makeInput());
     const lines = allLines(out);
-    expect(lines.length).toBe(5);
-    for (const { line } of lines) {
-      expect(line.runs.length).toBeGreaterThan(0);
-      const right = Math.max(...line.runs.map((r) => r.x + r.width));
-      expect(right).toBeLessThanOrEqual(FRAME_W + 0.5);
-    }
-    for (let i = 1; i < lines.length; i++) {
-      expect(lines[i]!.line.pmRange.from).toBe(lines[i - 1]!.line.pmRange.to);
-    }
+    expect(lines.length).toBeGreaterThan(1);
+    // Broken signature: every line before the last has NO runs...
+    const empties = lines.slice(0, -1).filter(({ line }) => line.runs.length === 0);
+    expect(empties.length).toBe(lines.length - 1);
+    // ...and the last line carries every placed segment, running past the frame.
+    const last = lines.at(-1)!.line;
+    expect(last.runs.length).toBeGreaterThan(0);
+    const right = Math.max(...last.runs.map((r) => r.x + r.width));
+    expect(right).toBeGreaterThan(FRAME_W);
   });
 });
 

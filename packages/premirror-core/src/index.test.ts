@@ -32,3 +32,13 @@ describe("@premirror/core", () => {
     expect(input.policies.widowLinesMin).toBe(DEFAULT_LAYOUT_POLICIES.widowLinesMin);
   });
 });
+
+describe("defaultPremirrorOptions policies merge (PR #110 review)", () => {
+  it("retains unspecified policy defaults when a partial policies override is given", () => {
+    const options = defaultPremirrorOptions({ policies: { keepWithNextEnabled: false } });
+    expect(options.policies.keepWithNextEnabled).toBe(false);
+    expect(options.policies.widowLinesMin).toBe(DEFAULT_LAYOUT_POLICIES.widowLinesMin);
+    expect(options.policies.orphanLinesMin).toBe(DEFAULT_LAYOUT_POLICIES.orphanLinesMin);
+    expect(options.policies.minSlotWidthPx).toBe(DEFAULT_LAYOUT_POLICIES.minSlotWidthPx);
+  });
+});

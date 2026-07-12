@@ -11,10 +11,11 @@ import {
   useProjectedSelection,
 } from "@premirror/react";
 import { keymap } from "prosemirror-keymap";
-import { EditorState, TextSelection, type Transaction } from "prosemirror-state";
+import { EditorState, Selection, type Transaction } from "prosemirror-state";
 import { baseKeymap, joinBackward, selectNodeBackward, toggleMark } from "prosemirror-commands";
 import { history, redo, undo } from "prosemirror-history";
 import { useCallback, useMemo, useState } from "react";
+import type { ReactElement } from "react";
 
 import { LuBold, LuItalic, LuCode, LuSeparatorHorizontal, LuGithub } from "react-icons/lu";
 
@@ -68,7 +69,7 @@ function buildInitialState(runtime: ReturnType<typeof createPremirror>): EditorS
           if (pos <= 1) return false;
           if (!dispatch) return true;
           dispatch(
-            state.tr.setSelection(TextSelection.create(state.doc, pos - 1)).scrollIntoView(),
+            state.tr.setSelection(Selection.near(state.doc.resolve(pos - 1), -1)).scrollIntoView(),
           );
           return true;
         },
@@ -79,7 +80,7 @@ function buildInitialState(runtime: ReturnType<typeof createPremirror>): EditorS
           if (pos >= max) return false;
           if (!dispatch) return true;
           dispatch(
-            state.tr.setSelection(TextSelection.create(state.doc, pos + 1)).scrollIntoView(),
+            state.tr.setSelection(Selection.near(state.doc.resolve(pos + 1), 1)).scrollIntoView(),
           );
           return true;
         },
@@ -103,7 +104,7 @@ function buildInitialState(runtime: ReturnType<typeof createPremirror>): EditorS
   });
 }
 
-export function App() {
+export function App(): ReactElement {
   const options = useMemo(() => {
     const defaults = defaultPremirrorOptions();
     return {
@@ -218,6 +219,7 @@ export function App() {
           <Toolbar.Separator className="word-toolbar-sep" />
           <span className="word-toolbar-label">Facing</span>
           <Switch.Root
+            aria-label="Facing pages"
             className="word-debug-switch"
             checked={pageLayoutMode === "spread"}
             onCheckedChange={(checked) => {
@@ -229,6 +231,7 @@ export function App() {
           <Toolbar.Separator className="word-toolbar-sep" />
           <span className="word-toolbar-label">Debug</span>
           <Switch.Root
+            aria-label="Debug overlays"
             className="word-debug-switch"
             checked={showDebug}
             onCheckedChange={(checked) => {

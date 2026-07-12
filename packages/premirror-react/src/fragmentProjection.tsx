@@ -13,7 +13,7 @@ import type { LayoutOutput } from "@premirror/core";
 import type { Node as ProseMirrorNode } from "prosemirror-model";
 import { Decoration, DecorationSet } from "prosemirror-view";
 
-import { getPageLayoutGeometry, type PageLayoutMode } from "./index";
+import { getPageLayoutGeometry, type PageLayoutMode } from "./geometry";
 
 type ParagraphBox = {
   from: number;
@@ -36,8 +36,11 @@ function styleForRunPosition(left: number, top: number, lineHeight: number): str
 }
 
 function clampPos(doc: ProseMirrorNode, pos: number): number {
-  const max = Math.max(1, doc.content.size);
-  return Math.max(1, Math.min(pos, max));
+  // Positions BEFORE a node start at 0 (block-0 is the first top-level
+  // paragraph); clamping the low bound to 1 made the first block miss the
+  // blockId fast path (review finding).
+  const max = Math.max(0, doc.content.size);
+  return Math.max(0, Math.min(pos, max));
 }
 
 function paragraphRangeFromBlockId(
@@ -97,7 +100,7 @@ export function buildFragmentDecorations(
     top: number,
     right: number,
     bottom: number,
-  ) => {
+  ): void => {
     const prev = paragraphBoxes.get(key);
     if (!prev) {
       paragraphBoxes.set(key, {
@@ -144,18 +147,14 @@ export function buildFragmentDecorations(
 
           for (const run of line.runs) {
             if (run.pmRange.from >= run.pmRange.to) continue;
-            const runParagraph =
-              fragmentParagraph ??
-              paragraphRangeAtPos(doc, run.pmRange.from) ??
-              paragraphRangeAtPos(
-                doc,
-                run.pmRange.from > 1 ? run.pmRange.from - 1 : run.pmRange.from,
-              );
-            if (!runParagraph) continue;
+            // Runs always belong to their line's paragraph; resolving a run
+            // independently could disagree with the line's box key and
+            // silently drop the decoration (review finding).
+            if (!paragraph) continue;
             runPlacements.push({
               runFrom: run.pmRange.from,
               runTo: run.pmRange.to,
-              paragraphKey: `${runParagraph.from}:${runParagraph.to}`,
+              paragraphKey: `${paragraph.from}:${paragraph.to}`,
               left: pagePlacement.left + frame.bounds.x + run.x,
               top: lineTop,
               width: run.width,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import { createLayoutInputFromOptions, defaultPremirrorOptions } from "@premirror/core";
+import * as composer from "@premirror/composer";
 import { createPremirror } from "@premirror/prosemirror-adapter";
 import { EditorState } from "prosemirror-state";
 
@@ -10,7 +11,7 @@ describe("demo integration", () => {
   it("runs snapshot -> measure -> compose end-to-end", async () => {
     const options = defaultPremirrorOptions();
     const runtime = createPremirror(options);
-    const compose = await import("@premirror/composer");
+    const compose = composer;
 
     const state = EditorState.create({
       schema: demoSchema,

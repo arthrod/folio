@@ -1395,7 +1395,9 @@ export function measureParagraph(
             const trimmedPiece = trimTrailingSpacesAndTabs(piece);
             currentLine.width += width;
             currentLine.trailingWhitespaceWidth =
-              piece === trimmedPiece ? 0 : width - measureTextWidth(trimmedPiece, style);
+              piece === trimmedPiece
+                ? 0
+                : Math.max(0, width - measureTextWidth(trimmedPiece, style));
             currentLine.regularSpaceCount += piece.split(" ").length - 1;
             currentLine.nonBreakingSpaceCount += piece.split("\u00a0").length - 1;
             currentLine.toRun = runIndex;

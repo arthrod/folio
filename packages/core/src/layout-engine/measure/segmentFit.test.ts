@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import type { ParagraphBlock, TextRun } from "../types";
 import { fixedCharWidth, withFakeTextMeasure } from "./__tests__/fakeTextMeasure";
+import { clearAllCaches } from "./cache";
 import { setFolioMeasurementFlags } from "./featureFlags";
 import { measureParagraph } from "./measureParagraph";
 import {
@@ -183,6 +184,48 @@ describe("measureParagraph segment-fit wiring", () => {
       expect(seg.lines.map((l) => [l.fromChar, l.toChar])).toEqual(
         legacy.lines.map((l) => [l.fromChar, l.toChar]),
       );
+    }, fakeMeasure);
+  });
+});
+
+describe("eastAsia dual-font bypass (folio PR #2 review)", () => {
+  test("a run with eastAsiaFontFamily measures legacy-identically and never reaches the engine", () => {
+    withFakeTextMeasure(() => {
+      const mk = () => para([textRun("中文 text mixed 內容", { eastAsiaFontFamily: "SimSun" })]);
+      const legacy = measureParagraph(mk(), 50);
+
+      setFolioMeasurementFlags({ segmentFitLineBreaking: true });
+      const { engine, calls } = makeFakeEngine();
+      setSegmentFitEngine(engine);
+      const seg = measureParagraph(mk(), 50);
+
+      expect(calls.prepares.length).toBe(0);
+      expect(seg.lines.map((l) => [l.fromChar, l.toChar])).toEqual(
+        legacy.lines.map((l) => [l.fromChar, l.toChar]),
+      );
+    }, fakeMeasure);
+  });
+
+  test("clearAllCaches drops the installed engine prepared state", () => {
+    let cleared = 0;
+    const { engine } = makeFakeEngine();
+    setSegmentFitEngine({
+      ...engine,
+      clearCaches: () => {
+        cleared += 1;
+      },
+    });
+    clearAllCaches();
+    expect(cleared).toBe(1);
+  });
+
+  test("empty text never reaches prepare", () => {
+    withFakeTextMeasure(() => {
+      setFolioMeasurementFlags({ segmentFitLineBreaking: true });
+      const { engine, calls } = makeFakeEngine();
+      setSegmentFitEngine(engine);
+      measureParagraph(para([textRun("")]), 50);
+      expect(calls.prepares.length).toBe(0);
     }, fakeMeasure);
   });
 });
