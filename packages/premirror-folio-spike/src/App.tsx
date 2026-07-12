@@ -25,13 +25,19 @@ export function App() {
   const [editorState, setEditorState] = useState<EditorState | null>(null);
   const [skipped, setSkipped] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [pageLayoutMode] = useState<PageLayoutMode>("single");
+  const pageLayoutMode: PageLayoutMode = "single";
 
   useEffect(() => {
     let cancelled = false;
+    // Abort the in-flight fetch on unmount (StrictMode double-mount would
+    // otherwise leave dead network+parse work running) [codeant].
+    const controller = new AbortController();
     (async () => {
       try {
-        const resp = await fetch("sample.docx");
+        const resp = await fetch("sample.docx", { signal: controller.signal });
+        if (!resp.ok) {
+          throw new Error(`Failed to fetch sample.docx: HTTP ${resp.status}`);
+        }
         const buffer = await resp.arrayBuffer();
         const document = await parseDocx(buffer);
         if (cancelled) return;
@@ -57,23 +63,26 @@ export function App() {
     })();
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [runtime]);
 
-  const engine = usePremirrorEngine(
-    editorState
-      ? { editorState, runtime, layoutInput }
-      : {
-          editorState: EditorState.create({ schema: spikeSchema }),
-          runtime,
-          layoutInput,
-        },
-  );
+  // Stable fallback state: a fresh EditorState per loading render would
+  // re-run compose work for nothing.
+  const emptyState = useMemo(() => EditorState.create({ schema: spikeSchema }), []);
+  const engine = usePremirrorEngine({
+    editorState: editorState ?? emptyState,
+    runtime,
+    layoutInput,
+  });
 
+  // Keyed off the doc: selection-only transactions must not rebuild
+  // decorations. (The layout object still changes identity per compose —
+  // narrowing THAT is upstream M2 incremental-invalidation work.)
+  const doc = editorState?.doc ?? null;
   const fragmentDecorations = useMemo(
-    () =>
-      editorState ? buildFragmentDecorations(editorState.doc, engine.layout, pageLayoutMode) : null,
-    [editorState, engine.layout, pageLayoutMode],
+    () => (doc ? buildFragmentDecorations(doc, engine.layout, pageLayoutMode) : null),
+    [doc, engine.layout, pageLayoutMode],
   );
 
   const dispatch = useCallback((tr: Transaction) => {

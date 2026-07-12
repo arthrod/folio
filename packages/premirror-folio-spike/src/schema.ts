@@ -1,20 +1,23 @@
 import { Schema } from "prosemirror-model";
 import { schema as basicSchema } from "prosemirror-schema-basic";
-import { addListNodes } from "prosemirror-schema-list";
 
-const paragraphSpec = basicSchema.spec.nodes.get("paragraph")!;
+const paragraphSpec = basicSchema.spec.nodes.get("paragraph");
+if (!paragraphSpec) {
+  throw new Error("prosemirror-schema-basic no longer defines a paragraph node");
+}
 
-/** CommonMark-ish schema with list nodes and Premirror pagination attrs on paragraphs. */
+/**
+ * Text-only spike schema: basic nodes plus Premirror pagination attrs on
+ * paragraphs. Deliberately NO list nodes — docToPm maps only paragraphs, and
+ * the schema should not advertise capabilities the converter cannot produce
+ * (review finding).
+ */
 export const spikeSchema = new Schema({
-  nodes: addListNodes(
-    basicSchema.spec.nodes.update("paragraph", {
-      ...paragraphSpec,
-      attrs: {
-        manualPageBreakBefore: { default: false },
-      },
-    }),
-    "paragraph block*",
-    "block",
-  ),
+  nodes: basicSchema.spec.nodes.update("paragraph", {
+    ...paragraphSpec,
+    attrs: {
+      manualPageBreakBefore: { default: false },
+    },
+  }),
   marks: basicSchema.spec.marks,
 });

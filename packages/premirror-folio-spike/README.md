@@ -49,3 +49,14 @@ Record pass/fail per item against this spike before the Phase 4 gate:
 Tables, images, headers/footers, footnotes, sections/columns, floats,
 tracked changes, comments. Non-paragraph blocks in the fixture are dropped
 and listed in the header bar.
+
+## Content-mapping notes (review findings)
+
+Hyperlink child runs are kept (their text is user-visible); link marks are a
+spike non-goal. Tab content maps to a literal `\t`; explicit line breaks map
+to a single space because the text-only schema has no `hard_break` node.
+
+## i18n exemption
+
+This spike is a developer-facing example, not product UI: its status strings
+are intentionally hardcoded English and exempt from the library i18n rule.

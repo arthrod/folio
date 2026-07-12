@@ -70,3 +70,38 @@ describe("docToPmDoc", () => {
     expect(doc.child(0).type.name).toBe("paragraph");
   });
 });
+
+describe("hyperlink and tab/break content (PR #3 review)", () => {
+  it("keeps hyperlink child-run text and maps tab/break content", () => {
+    const document = {
+      package: {
+        document: {
+          content: [
+            {
+              type: "paragraph",
+              content: [
+                { type: "run", content: [{ type: "text", text: "See " }] },
+                {
+                  type: "hyperlink",
+                  href: "https://example.com",
+                  children: [{ type: "run", content: [{ type: "text", text: "the docs" }] }],
+                },
+                {
+                  type: "run",
+                  content: [
+                    { type: "tab" },
+                    { type: "text", text: "after" },
+                    { type: "break", breakType: "textWrapping" },
+                    { type: "text", text: "wrap" },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    } as unknown as Document;
+    const { doc } = docToPmDoc(document, spikeSchema);
+    expect(doc.child(0).textContent).toBe("See the docs\tafter wrap");
+  });
+});
