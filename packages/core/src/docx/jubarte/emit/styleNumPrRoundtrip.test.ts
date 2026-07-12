@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { toProseDoc } from "../../prosemirror/conversion/toProseDoc";
-import type { Document, ParagraphFormatting } from "../../types/document";
+import { toProseDoc } from "../../../prosemirror/conversion/toProseDoc";
+import type { Document, ParagraphFormatting } from "../../../types/document";
 import { serializeParagraphFormatting } from "./paragraphSerializer";
 
 describe("serializeParagraphFormatting style-sourced numPr (#765)", () => {

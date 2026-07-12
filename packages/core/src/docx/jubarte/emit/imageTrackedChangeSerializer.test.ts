@@ -15,7 +15,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import type { Deletion, Insertion, Paragraph } from "../../types/document";
+import type { Deletion, Insertion, Paragraph } from "../../../types/document";
 import { serializeParagraph } from "./paragraphSerializer";
 
 const PNG_DATA_URL = "data:image/png;base64,AA==";

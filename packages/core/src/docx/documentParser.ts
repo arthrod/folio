@@ -143,7 +143,7 @@ function extractTableVariables(table: Table): string[] {
  * @param finalSectPr - Final section properties from body
  * @returns Array of sections
  */
-function buildSections(
+export function buildSections(
   content: BlockContent[],
   finalSectPr: SectionProperties | undefined,
 ): Section[] {

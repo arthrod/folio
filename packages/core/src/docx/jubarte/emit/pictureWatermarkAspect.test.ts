@@ -13,8 +13,8 @@
  */
 import { describe, expect, test } from "bun:test";
 
-import type { HeaderFooter } from "../../types/document";
-import { parseHeader } from "../headerFooterParser";
+import type { HeaderFooter } from "../../../types/document";
+import { parseHeader } from "../../headerFooterParser";
 import { serializeHeaderFooter } from "./headerFooterSerializer";
 
 const NS =

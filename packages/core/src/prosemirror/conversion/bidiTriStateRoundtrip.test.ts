@@ -13,7 +13,7 @@
 import { describe, expect, test } from "bun:test";
 import { EditorState } from "prosemirror-state";
 
-import { serializeParagraph } from "../../docx/serializer/paragraphSerializer";
+import { serializeParagraph } from "../../docx/jubarte/emit/paragraphSerializer";
 import type { Document } from "../../types/document";
 import type { ParagraphDirection } from "../paragraphDirection";
 import { schema } from "../schema";

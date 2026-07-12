@@ -8,8 +8,9 @@
  * any rId it can't resolve) and the selective fast-path can't register the new
  * part either. Materialization promotes such an entry to a real part:
  * `word/headerN.xml` + a document relationship under its rId + a
- * `[Content_Types].xml` Override. Selective save must bail so the full-repack
- * path handles it. Prerequisite for watermark header coverage
+ * `[Content_Types].xml` Override. The jubarte save materializes directly
+ * (legacy selective save bailed to the full repack instead). Prerequisite
+ * for watermark header coverage
  * (eigenpal/docx-editor#684) and a standalone fix for the editor's
  * add-header flow.
  */
@@ -207,7 +208,11 @@ describe("header/footer part materialization on save", () => {
     expect(rels).toMatch(new RegExp(`Id="${refRId}"[^>]*Target="header\\d+\\.xml"`, "u"));
   });
 
-  test("selective save bails to full repack when a header is unmaterialized", async () => {
+  test("selective save materializes an unmaterialized header itself", async () => {
+    // Legacy selective save bailed (null) so the caller's full repack would
+    // materialize the part; the jubarte save handles materialization
+    // directly, so a non-null buffer with the header part present is the
+    // contract now.
     const base = await createEmptyDocx();
     const doc = await parseDocx(base, { preloadFonts: false });
     doc.package.headers = new Map([["rId_new_default", { ...firstPageHeader }]]);
@@ -217,7 +222,14 @@ describe("header/footer part materialization on save", () => {
       structuralChange: false,
       hasUntrackedChanges: false,
     });
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    if (!result) {
+      throw new Error("selective save returned null");
+    }
+    const zip = await JSZip.loadAsync(result);
+    expect(Object.keys(zip.files).some((f) => /^word\/header\d+\.xml$/u.test(f))).toBe(true);
+    const reparsed = await parseDocx(result, { preloadFonts: false });
+    expect(reparsed.package.headers?.size).toBe(1);
   });
 
   test("re-keying a colliding header does not overwrite another new header's id", async () => {

@@ -145,7 +145,7 @@ function parseNoteId(element: XmlElement): number {
 // FOOTNOTE PARSING
 // ============================================================================
 
-function parseNoteBlockContent(
+export function parseNoteBlockContent(
   element: XmlElement,
   styles: StyleMap | null,
   theme: Theme | null,

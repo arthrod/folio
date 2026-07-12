@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { Image, Run } from "../../types/document";
 import { parseDrawing } from "../imageParser";
-import { serializeRun } from "../serializer/runSerializer";
+import { serializeRun } from "../jubarte/emit/runSerializer";
 import { parseXml } from "../xmlParser";
 import type { XmlElement } from "../xmlParser";
 

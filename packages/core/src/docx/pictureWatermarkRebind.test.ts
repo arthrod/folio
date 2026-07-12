@@ -187,7 +187,16 @@ describe("picture watermark relationship rebinding (eigenpal #684)", () => {
       structuralChange: false,
       hasUntrackedChanges: false,
     });
-    expect(result).toBeNull();
+    // Legacy selective save bailed (null) so the full repack would handle the
+    // model-driven watermark; the jubarte save writes the header part itself.
+    expect(result).not.toBeNull();
+    if (!result) {
+      throw new Error("selective save returned null");
+    }
+    const zip = await JSZip.loadAsync(result);
+    expect(Object.keys(zip.files).some((f) => /^word\/header\d+\.xml$/u.test(f))).toBe(true);
+    const reparsed = await parseDocx(result, { preloadFonts: false });
+    expect(reparsed.package.headers?.size).toBe(1);
   });
 
   test("rebinds a sibling header whose rId resolves to a different image", async () => {

@@ -9,9 +9,9 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { parseParagraph } from "../paragraphParser";
-import type { XmlElement } from "../xmlParser";
-import { parseXmlDocument } from "../xmlParser";
+import { parseParagraph } from "../../paragraphParser";
+import type { XmlElement } from "../../xmlParser";
+import { parseXmlDocument } from "../../xmlParser";
 import { serializeParagraph } from "./paragraphSerializer";
 
 function parseParagraphXml(xml: string) {

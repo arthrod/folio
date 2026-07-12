@@ -11,7 +11,7 @@ import type { Node as PMNode } from "prosemirror-model";
 import { EditorState, TextSelection } from "prosemirror-state";
 import type { Transaction } from "prosemirror-state";
 
-import { serializeTable } from "../../docx/serializer/tableSerializer";
+import { serializeTable } from "../../docx/jubarte/emit/tableSerializer";
 import type { Document, Table, TableBorders } from "../../types/document";
 import { schema, singletonManager } from "../schema";
 import { fromProseDoc } from "./fromProseDoc";

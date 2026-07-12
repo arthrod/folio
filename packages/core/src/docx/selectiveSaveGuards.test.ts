@@ -77,10 +77,13 @@ describe("memory threshold guard", () => {
     expect(result).not.toBeNull();
   });
 
-  test("returns null when the buffer is over the configured ceiling", async () => {
+  test("saves even when the buffer is over the configured ceiling (guard retired)", async () => {
     const buffer = await makeFixture();
     const doc = await parseDocx(buffer, { preloadFonts: false });
 
+    // The ceiling guarded the legacy patcher's JSZip double-buffering; the
+    // jubarte writer has no such overhead, so maxBytes is accepted for
+    // signature compatibility and no longer bails.
     const result = await attemptSelectiveSave(doc, buffer, {
       changedParaIds: new Set(),
       structuralChange: false,
@@ -88,7 +91,7 @@ describe("memory threshold guard", () => {
       maxBytes: buffer.byteLength - 1,
     });
 
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
   });
 
   test("allows the selective path when the buffer is exactly at the ceiling", async () => {
@@ -121,11 +124,11 @@ describe("memory threshold guard", () => {
     expect(buffer.byteLength).toBeLessThan(DEFAULT_SELECTIVE_SAVE_MAX_BYTES);
   });
 
-  test("crosses the threshold cleanly when padding pushes the buffer over", async () => {
+  test("padding past the retired threshold does not change the outcome", async () => {
     const padded = await makeFixture(8 * 1024);
     const doc = await parseDocx(padded, { preloadFonts: false });
 
-    const tooSmall = await attemptSelectiveSave(doc, padded, {
+    const overCeiling = await attemptSelectiveSave(doc, padded, {
       changedParaIds: new Set(),
       structuralChange: false,
       hasUntrackedChanges: false,
@@ -139,13 +142,16 @@ describe("memory threshold guard", () => {
       maxBytes: padded.byteLength,
     });
 
-    expect(tooSmall).toBeNull();
+    expect(overCeiling).not.toBeNull();
     expect(allowed).not.toBeNull();
   });
 });
 
 describe("fallback contract", () => {
-  test("structural change → null", async () => {
+  // The legacy patcher's content-shaped bail conditions are retired: the
+  // jubarte writer saves structural and untracked changes directly. Only a
+  // save failure (e.g. an invalid model) still signals fallback via null.
+  test("structural change → saved (legacy bail retired)", async () => {
     const buffer = await makeFixture();
     const doc = await parseDocx(buffer, { preloadFonts: false });
 
@@ -155,10 +161,10 @@ describe("fallback contract", () => {
       hasUntrackedChanges: false,
     });
 
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
   });
 
-  test("untracked changes → null", async () => {
+  test("untracked changes → saved (legacy bail retired)", async () => {
     const buffer = await makeFixture();
     const doc = await parseDocx(buffer, { preloadFonts: false });
 
@@ -168,7 +174,7 @@ describe("fallback contract", () => {
       hasUntrackedChanges: true,
     });
 
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
   });
 
   test("new image (data: URL without rId) → null", async () => {

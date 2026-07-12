@@ -17,10 +17,10 @@
 import { describe, expect, test } from "bun:test";
 
 import { parseSectionProperties } from "../sectionParser";
-import { serializeBorder } from "../serializer/borderSerializer";
-import { serializeParagraphFormatting } from "../serializer/paragraphSerializer";
-import { serializeSectionProperties } from "../serializer/sectionPropertiesSerializer";
-import { serializeTableCellFormatting } from "../serializer/tableSerializer";
+import { serializeBorder } from "../jubarte/emit/borderSerializer";
+import { serializeParagraphFormatting } from "../jubarte/emit/paragraphSerializer";
+import { serializeSectionProperties } from "../jubarte/emit/sectionPropertiesSerializer";
+import { serializeTableCellFormatting } from "../jubarte/emit/tableSerializer";
 import { parseStyles } from "../styleParser";
 import { parseTableCellProperties, parseTableProperties } from "../tableParser";
 import type { XmlElement } from "../xmlParser";

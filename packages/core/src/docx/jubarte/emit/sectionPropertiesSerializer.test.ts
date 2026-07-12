@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
-import { parseSectionProperties } from "../sectionParser";
-import type { XmlElement } from "../xmlParser";
-import { parseXmlDocument } from "../xmlParser";
+import { parseSectionProperties } from "../../sectionParser";
+import type { XmlElement } from "../../xmlParser";
+import { parseXmlDocument } from "../../xmlParser";
 import { serializeSectionProperties } from "./sectionPropertiesSerializer";
 
 const parseSectPr = (xml: string) => {

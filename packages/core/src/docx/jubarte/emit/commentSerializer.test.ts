@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import type { Comment } from "../../types/content";
+import type { Comment } from "../../../types/content";
 import { serializeComments } from "./commentSerializer";
 
 function makeComment(id: number, parentId?: number): Comment {

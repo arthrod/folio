@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { serializeParagraph } from "../../docx/serializer/paragraphSerializer";
+import { serializeParagraph } from "../../docx/jubarte/emit/paragraphSerializer";
 import { schema } from "../schema";
 import { fromProseDoc } from "./fromProseDoc";
 
