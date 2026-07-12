@@ -21,12 +21,19 @@ import type {
 import { DEFAULT_LAYOUT_POLICIES } from "@premirror/core";
 
 const UNBOUNDED_WIDTH = 1_000_000_000;
+// Bounded LRU: long editing sessions probe many transient substrings; an
+// uncapped map is a slow leak. Refresh-on-get keeps hot fonts/words resident.
+const PRETEXT_WIDTH_CACHE_MAX = 4000;
 const pretextWidthCache = new Map<string, number>();
 
 function widthByPretext(text: string, font: string): number | null {
   const key = `${font}\n${text}`;
   const cached = pretextWidthCache.get(key);
-  if (cached !== undefined) return cached;
+  if (cached !== undefined) {
+    pretextWidthCache.delete(key);
+    pretextWidthCache.set(key, cached);
+    return cached;
+  }
   try {
     const prepared = prepareWithSegments(text, font, { whiteSpace: "pre-wrap" });
     const line = layoutNextLine(prepared, { segmentIndex: 0, graphemeIndex: 0 }, UNBOUNDED_WIDTH);
@@ -35,6 +42,10 @@ function widthByPretext(text: string, font: string): number | null {
     }
     const width = Math.max(0, line?.width ?? 0);
     pretextWidthCache.set(key, width);
+    if (pretextWidthCache.size > PRETEXT_WIDTH_CACHE_MAX) {
+      const oldest = pretextWidthCache.keys().next().value;
+      if (oldest !== undefined) pretextWidthCache.delete(oldest);
+    }
     return width;
   } catch {
     return null;
@@ -251,7 +262,13 @@ function recalcLineDraft(
     pmFrom = Math.min(pmFrom, r.pmRange.from);
     pmTo = Math.max(pmTo, r.pmRange.to);
   }
-  if (line.runs.length === 0) return;
+  if (line.runs.length === 0) {
+    // A drained line keeps its position but must not span stale content:
+    // collapse to an empty range at its own start so mapping/cursor code
+    // never lands inside a range this line no longer owns.
+    line.pmTo = line.pmFrom;
+    return;
+  }
   line.pmFrom = pmFrom;
   line.pmTo = pmTo;
 }
@@ -364,7 +381,7 @@ function breakBlockIntoLineDrafts(
   let linePmFrom = Number.POSITIVE_INFINITY;
   let linePmTo = 0;
 
-  const flushCurrentLine = () => {
+  const flushCurrentLine = (): void => {
     if (currentParts.length === 0) return;
     lines.push({
       runs: currentParts,
@@ -377,7 +394,7 @@ function breakBlockIntoLineDrafts(
     linePmTo = 0;
   };
 
-  const appendToLine = (pr: PlacedRun, pmFrom: number, pmTo: number) => {
+  const appendToLine = (pr: PlacedRun, pmFrom: number, pmTo: number): void => {
     currentParts.push(pr);
     lineWidthUsed += pr.width;
     linePmFrom = Math.min(linePmFrom, pmFrom);
@@ -537,9 +554,6 @@ function linesThatFitFirstFragment(
     if (alt >= orphanMin) {
       return { fit: alt, reason: "widow_orphan_protection" };
     }
-    if (alt > 0 && alt < orphanMin && remainingLines >= orphanMin) {
-      return { fit: 0, reason: "widow_orphan_protection" };
-    }
     return { fit: 0, reason: "widow_orphan_protection" };
   }
   return { fit, reason: "frame_overflow" };
@@ -562,8 +576,26 @@ function buildMappingIndex(refs: LineRef[]): MappingIndex {
   const sorted = [...refs].sort((a, b) => a.pmFrom - b.pmFrom);
 
   const pmPosToLayout = (pmPos: number): LayoutPoint | null => {
-    for (const r of sorted) {
-      if (pmPos < r.pmFrom) break;
+    // Binary search for the first ref with pmFrom > pmPos, then walk back
+    // over the (rare) refs whose ranges still reach pmPos. Scanning back to
+    // the LOWEST matching index preserves the linear scan's tie-break: a
+    // boundary position (pmPos === pmTo) resolves to the EARLIER line, not
+    // the next line whose pmFrom equals it (pinned by the mapping goldens).
+    let lo = 0;
+    let hi = sorted.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (sorted[mid]!.pmFrom > pmPos) hi = mid;
+      else lo = mid + 1;
+    }
+    let match: LineRef | null = null;
+    for (let i = lo - 1; i >= 0; i--) {
+      const r = sorted[i]!;
+      if (r.pmTo < pmPos && r.pmFrom < pmPos) break;
+      if ((pmPos >= r.pmFrom && pmPos < r.pmTo) || pmPos === r.pmTo) match = r;
+    }
+    if (match) {
+      const r = match;
       if (pmPos >= r.pmFrom && pmPos < r.pmTo) {
         return {
           pageIndex: r.pageIndex,
@@ -630,7 +662,7 @@ export function composeLayout(
   let currentY = 0;
   let pageIndex = 0;
 
-  const flushPage = (reasonForLastFragment?: BreakReason) => {
+  const flushPage = (reasonForLastFragment?: BreakReason): void => {
     if (currentFragments.length === 0) return;
     if (reasonForLastFragment !== undefined) {
       const last = currentFragments[currentFragments.length - 1]!;

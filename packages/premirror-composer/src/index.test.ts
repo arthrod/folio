@@ -1,9 +1,29 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, mock } from "bun:test";
 
 import type { LayoutInput, MeasuredDocumentSnapshot, PremirrorOptions } from "@premirror/core";
 import { createLayoutInputFromOptions, defaultPremirrorOptions } from "@premirror/core";
 
 import { composeLayout } from "./index";
+
+/**
+ * `@chenglou/pretext` resolves to the deterministic local stub under `bun test`
+ * (see UPSTREAM.md), so the real-measurement success path is never exercised
+ * by the tests above (they all supply `measuredRuns` widths instead). We mock
+ * the module boundary (transport layer) to cover both the upstream/production
+ * pretext-success path and the pre-existing no-measurement deterministic
+ * fallback path, without patching the pretext stub's exported functions
+ * directly.
+ */
+function restorePretextStub(): void {
+  mock.module("@chenglou/pretext", () => ({
+    prepareWithSegments: () => ({}),
+    layoutNextLine: () => null,
+  }));
+}
+
+afterEach(() => {
+  restorePretextStub();
+});
 
 function makeInput(overrides?: Partial<PremirrorOptions>): LayoutInput {
   return createLayoutInputFromOptions(defaultPremirrorOptions(overrides));
@@ -104,5 +124,88 @@ describe("@premirror/composer", () => {
     if (!point) return;
     const back = out.mapping.layoutToPmPos(point);
     expect(back).toBe(2);
+  });
+
+  it("uses a real pretext-measured width when no measuredRuns entry exists (upstream pretext path)", () => {
+    // Simulate the real @chenglou/pretext package succeeding, as it would in
+    // production (Vite aliases to the real package; only `bun test` resolves
+    // the deterministic stub via tsconfig paths). Mocking the module boundary
+    // here, rather than patching the stub's functions, exercises the
+    // `widthByPretext` success branch that the stub can never produce.
+    mock.module("@chenglou/pretext", () => ({
+      prepareWithSegments: (text: string) => ({ text }),
+      layoutNextLine: (prepared: unknown) => {
+        const { text } = prepared as { text: string };
+        return {
+          text,
+          width: text.length * 100,
+          end: { segmentIndex: 0, graphemeIndex: text.length },
+        };
+      },
+    }));
+
+    const snapshot: MeasuredDocumentSnapshot = {
+      blocks: [
+        {
+          id: "b1",
+          type: "paragraph",
+          attrs: {},
+          pmRange: { from: 1, to: 4 },
+          runs: [
+            {
+              id: "unmeasured-run",
+              text: "AB",
+              font: "normal 400 16px Inter",
+              marks: {},
+              pmRange: { from: 1, to: 3 },
+            },
+          ],
+        },
+      ],
+      measuredRuns: {},
+    };
+
+    const out = composeLayout(snapshot, null, makeInput());
+    const run = out.pages[0]?.frames[0]?.fragments[0]?.lines[0]?.runs[0];
+    expect(run?.text).toBe("AB");
+    expect(run?.width).toBe(200);
+  });
+
+  it("falls back to the deterministic 7px/char width when no measuredRuns entry exists and pretext fails", () => {
+    // Prior/baseline behavior: when neither `prepared.widthPx` nor pretext
+    // measurement is available, composeLayout must still produce stable
+    // widths via the deterministic fallback rather than throwing or NaN-ing.
+    mock.module("@chenglou/pretext", () => ({
+      prepareWithSegments: () => {
+        throw new Error("pretext unavailable");
+      },
+      layoutNextLine: () => null,
+    }));
+
+    const snapshot: MeasuredDocumentSnapshot = {
+      blocks: [
+        {
+          id: "b1",
+          type: "paragraph",
+          attrs: {},
+          pmRange: { from: 1, to: 4 },
+          runs: [
+            {
+              id: "no-measurement-run",
+              text: "XY",
+              font: "normal 400 16px Inter",
+              marks: {},
+              pmRange: { from: 1, to: 3 },
+            },
+          ],
+        },
+      ],
+      measuredRuns: {},
+    };
+
+    const out = composeLayout(snapshot, null, makeInput());
+    const run = out.pages[0]?.frames[0]?.fragments[0]?.lines[0]?.runs[0];
+    expect(run?.text).toBe("XY");
+    expect(run?.width).toBe(14);
   });
 });
