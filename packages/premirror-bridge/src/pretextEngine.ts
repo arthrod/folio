@@ -10,7 +10,7 @@
  * slice-probe binary search.
  *
  * Divergences from the legacy walk (both Word/CSS-correct on pretext's
- * side, characterized in pretextParity.vitest.ts):
+ * side, characterized in pretextParity.test.ts):
  * - trailing whitespace hangs past the line edge instead of forcing a break;
  * - CJK/Thai text breaks between characters (legacy only breaks at
  *   space/hyphen/tab);
@@ -21,7 +21,7 @@ import { layoutNextLine, prepareWithSegments } from "@chenglou/pretext";
 import type {
   SegmentFitEngine,
   SegmentFitLine,
-} from "@stll/folio-core/layout-engine/measure/index";
+} from "@stll/folio-core/layout-engine/measure/segmentFit";
 
 type LayoutCursor = { segmentIndex: number; graphemeIndex: number };
 
@@ -113,6 +113,10 @@ const OFFSET_UNSAFE = /[\r\f]/;
 export const pretextSegmentFitEngine: SegmentFitEngine = {
   supportsText(text: string): boolean {
     return !OFFSET_UNSAFE.test(text);
+  },
+
+  clearCaches(): void {
+    clearPreparedCache();
   },
 
   prepare(text: string, cssFont: string): unknown {

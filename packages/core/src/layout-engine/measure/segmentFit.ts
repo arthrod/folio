@@ -36,7 +36,11 @@ import type { FontStyle } from "./measureTypes";
 export type SegmentFitLine = {
   /** Exclusive end offset in the run's text (UTF-16 code units). */
   endChar: number;
-  /** Measured advance width of the fitted piece in px (may include a hung trailing space). */
+  /**
+   * Measured advance width of the fitted piece in px. MAY include a hung
+   * trailing space (pretext does); consumers must not assume either way —
+   * the commit path clamps derived trailing-whitespace widths to >= 0.
+   */
   width: number;
   /** Opaque continuation cursor; pass back to `fitLine` for the next piece. */
   cursor: unknown;
@@ -45,6 +49,11 @@ export type SegmentFitLine = {
 /** A prepared (segmented + measured) text handle. Opaque to core. */
 export type SegmentFitPrepared = unknown;
 
+/**
+ * A pluggable line-fitting engine consumed by `measureParagraph` when the
+ * `segmentFitLineBreaking` flag is on. Implementations prepare a text once
+ * (segmenting + measuring) and then fit line pieces by arithmetic.
+ */
 export type SegmentFitEngine = {
   /**
    * Whether the engine can fit `text` with offsets that stay aligned to the
@@ -72,6 +81,13 @@ export type SegmentFitEngine = {
     cursor: unknown | null,
     maxWidth: number,
   ) => SegmentFitLine | null;
+  /**
+   * Drop any prepared/measured state. Invoked via the measuring pipeline's
+   * `clearAllCaches()` so engine caches never outlive a font-environment
+   * change (web fonts finishing to load) that invalidates the canvas
+   * metrics the prepared widths were derived from.
+   */
+  clearCaches?: () => void;
 };
 
 let activeEngine: SegmentFitEngine | null = null;
@@ -85,6 +101,14 @@ export const resetSegmentFitEngine = (): void => {
 };
 
 export const getSegmentFitEngine = (): SegmentFitEngine | null => activeEngine;
+
+/**
+ * Invalidate the installed engine's prepared state. Wired into the
+ * measuring pipeline's `clearAllCaches()`.
+ */
+export const clearSegmentFitEngineCaches = (): void => {
+  activeEngine?.clearCaches?.();
+};
 
 /** The seam is live only when BOTH the flag is on and an engine is installed. */
 export function isSegmentFitActive(): boolean {
@@ -131,6 +155,9 @@ export type SegmentFitWalkHost = {
 export function runSegmentFitWalk(text: string, cssFont: string, host: SegmentFitWalkHost): number {
   const engine = activeEngine;
   if (!engine) {
+    return 0;
+  }
+  if (text.length === 0) {
     return 0;
   }
   if (engine.supportsText && !engine.supportsText(text)) {
