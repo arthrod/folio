@@ -17,3 +17,5 @@
 
 Keep this log current: every local edit to vendored files gets a line here.
 Generic fixes should be PR'd upstream, not fork-drifted.
+
+- 2026-07-12 review sync: vendored sources re-synced from eigenport (PR review fixes: bounded pretext width cache, drained-line pmRange collapse, mapping binary search, policies deep-merge, selection projection interpolation + boundary dedup + geometry module, demo Selection.near). See arthrod/eigenport#110/#118 threads.

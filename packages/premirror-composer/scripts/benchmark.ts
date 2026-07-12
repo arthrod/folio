@@ -68,7 +68,8 @@ for (let i = 0; i < iterations; i++) {
 
 const sorted = [...durations].sort((a, b) => a - b);
 const median = sorted[Math.floor(sorted.length / 2)] ?? 0;
-const p95 = sorted[Math.floor(sorted.length * 0.95)] ?? 0;
+// Nearest-rank p95: floor(n*0.95) selects the max for n=20 (review finding).
+const p95 = sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)] ?? 0;
 
 console.log("Premirror compose benchmark");
 console.log(`iterations: ${iterations}`);

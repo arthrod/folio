@@ -232,7 +232,9 @@ export function defaultPremirrorOptions(overrides?: Partial<PremirrorOptions>): 
   const page = overrides?.page ?? { ...LETTER_PAGE_PX };
   const margins = overrides?.margins ?? { ...DEFAULT_PAGE_MARGINS };
   const typography = overrides?.typography ?? { ...DEFAULT_TYPOGRAPHY };
-  const policies = overrides?.policies ?? { ...DEFAULT_LAYOUT_POLICIES };
+  // Merge per-field like createLayoutInputFromOptions does: a partial
+  // override must not drop the unspecified policy defaults.
+  const policies = { ...DEFAULT_LAYOUT_POLICIES, ...overrides?.policies };
   const features = overrides?.features;
   return {
     page,
