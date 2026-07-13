@@ -1794,6 +1794,14 @@ function convertParagraph(
   );
   const defaultTextFormatting = pmAttrs.defaultTextFormatting as TextFormatting | undefined;
   if (runs.length === 0) {
+    const hasDirectParagraphFormatting =
+      pmAttrs._originalFormatting &&
+      Object.entries(pmAttrs._originalFormatting).some(
+        ([key, value]) => key !== "runProperties" && value !== undefined && value !== null,
+      );
+    if (hasDirectParagraphFormatting) {
+      attrs.hasDirectParagraphFormatting = true;
+    }
     const paragraphMarkFormatting = pmAttrs._originalFormatting?.runProperties;
     if (paragraphMarkFormatting?.fontSize !== undefined) {
       attrs.defaultFontSize = paragraphMarkFormatting.fontSize / 2;
