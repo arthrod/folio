@@ -74,6 +74,25 @@ export class DocxArchiveError extends DocxArchiveError_base {}
 export type DocxParagraphSource = "header" | "body" | "footer";
 
 // @public
+export const ensureParaIds: (docx: Uint8Array | ArrayBuffer, options?: EnsureParaIdsOptions) => Promise<EnsureParaIdsResult>;
+
+// @public
+export class EnsureParaIdsError extends EnsureParaIdsError_base {}
+
+// @public
+export type EnsureParaIdsOptions = {
+    allowSignedPackageMutation?: boolean;
+};
+
+// @public
+export type EnsureParaIdsResult = {
+    docx: Uint8Array; /** Paragraphs that received a paraId (missing or all-zero before). */
+    assigned: number; /** Duplicate paraIds reassigned (the first occurrence keeps the id). */
+    deduplicated: number; /** True when the input already had full, unique coverage. */
+    alreadyComplete: boolean;
+};
+
+// @public
 export const extractDocxText: (bytes: ArrayBuffer | Uint8Array) => Promise<ExtractedDocxText>;
 
 // @public
