@@ -327,7 +327,7 @@ export function createPaginator(options: PaginatorOptions) {
 
     // Keep advancing until we have space
     while (!fits(safeHeight, state)) {
-      const columnCapacity = state.contentBottom - state.topMargin;
+      const columnCapacity = state.contentBottom - columnRegionTop;
       if (safeHeight > columnCapacity) {
         if (state.cursorY !== state.topMargin) {
           state = advanceColumn(state);
@@ -516,6 +516,10 @@ export function createPaginator(options: PaginatorOptions) {
     } else {
       delete state.page.columns;
     }
+
+    // A balanced section temporarily shortens contentBottom. Restore the
+    // physical page boundary before starting the next column layout.
+    state.contentBottom = state.rawContentBottom - state.footnoteHeight;
 
     // Set column region top to current cursor position.
     // This ensures that when advancing columns, new columns start
