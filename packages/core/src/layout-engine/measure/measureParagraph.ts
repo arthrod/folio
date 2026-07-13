@@ -648,6 +648,22 @@ function usesSpaceBasedListMarkerTolerance(block: ParagraphBlock, isFirstLine: b
   );
 }
 
+function isShallowFullHangingListContinuation(
+  block: ParagraphBlock,
+  isFirstLine: boolean,
+): boolean {
+  if (isFirstLine || block.attrs?.listMarker === undefined) {
+    return false;
+  }
+  const hanging = block.attrs.indent?.hanging ?? 0;
+  const left = block.attrs.indent?.left ?? 0;
+  return (
+    hanging > 0 &&
+    hanging < DEFAULT_LIST_HANGING_INDENT_PX &&
+    Math.abs(left - hanging) <= WIDTH_TOLERANCE
+  );
+}
+
 function trimTrailingSpacesAndTabs(text: string): string {
   let end = text.length;
   while (end > 0) {
@@ -1461,25 +1477,27 @@ export function measureParagraph(
         const regularSpaces = countCompressibleSpaces(measuredWord);
         const nonBreakingSpaces = measuredWord.split("\u00a0").length - 1;
         const isFirstLine = lines.length === 0;
+        const usesMarkerSpaceTolerance = usesSpaceBasedListMarkerTolerance(block, isFirstLine);
         const regularSpaceWidth =
-          regularSpaces > 0 && usesSpaceBasedListMarkerTolerance(block, isFirstLine)
+          regularSpaces > 0 && usesMarkerSpaceTolerance
             ? regularSpaces * measureTextWidth(" ", style)
             : 0;
-        const widthTolerance = isJustifiedParagraph
-          ? Math.max(
-              WIDTH_TOLERANCE,
-              usesSpaceBasedListMarkerTolerance(block, isFirstLine)
-                ? (currentLine.regularSpaceWidth + regularSpaceWidth) *
-                    JUSTIFY_LIST_MARKER_SPACE_CONTRACTION_RATIO
-                : currentLine.availableWidth *
-                    justifyShrinkToleranceRatio(
-                      block,
-                      isFirstLine,
-                      currentLine.regularSpaceCount + regularSpaces,
-                      currentLine.nonBreakingSpaceCount + nonBreakingSpaces,
-                    ),
-            )
-          : WIDTH_TOLERANCE;
+        const widthTolerance =
+          isJustifiedParagraph && !isShallowFullHangingListContinuation(block, isFirstLine)
+            ? Math.max(
+                WIDTH_TOLERANCE,
+                usesMarkerSpaceTolerance
+                  ? (currentLine.regularSpaceWidth + regularSpaceWidth) *
+                      JUSTIFY_LIST_MARKER_SPACE_CONTRACTION_RATIO
+                  : currentLine.availableWidth *
+                      justifyShrinkToleranceRatio(
+                        block,
+                        isFirstLine,
+                        currentLine.regularSpaceCount + regularSpaces,
+                        currentLine.nonBreakingSpaceCount + nonBreakingSpaces,
+                      ),
+              )
+            : WIDTH_TOLERANCE;
 
         // If the word itself is longer than a line, hard-break by characters.
         // Use substring measurement (not char-by-char accumulation) to preserve
