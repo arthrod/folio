@@ -101,6 +101,7 @@ const EDITOR_SELECTOR = '[data-testid="folio-editor"]';
 const PAGE_SELECTOR = ".layout-page";
 
 const VIEWPORT = { width: 1400, height: 1000 };
+const SCREENSHOT_VIEWPORT_VERTICAL_CHROME_PX = 200;
 
 const SERVER_PROBE_TIMEOUT_MS = 2000;
 const SERVER_REUSE_PROBE_TIMEOUT_MS = 15_000;
@@ -174,6 +175,8 @@ export type RawLine = {
   text: string;
   rect: RawRect;
   region: Region;
+  /** True when the line's ink box falls fully outside an overflow-clipping ancestor. */
+  fullyClipped?: boolean;
   /** First actually available family from the computed CSS stack of the first
    * `.layout-run`; falls back to the computed stack when canvas probing is unavailable. */
   fontFamilyRaw?: string;
@@ -240,7 +243,7 @@ export const toPageGeom = (rawPage: RawPage): PageGeom => {
 
   const lines: LineBox[] = [];
   for (const rawLine of rawPage.lines) {
-    if (rawLine.rect.width <= 0 || rawLine.rect.height <= 0) {
+    if (rawLine.fullyClipped || rawLine.rect.width <= 0 || rawLine.rect.height <= 0) {
       continue;
     }
     const normText = normalizeLineText(rawLine.text);
@@ -465,6 +468,28 @@ const installCleanScreenshotStyle = async (page: Page): Promise<void> => {
   });
 };
 
+export const screenshotViewportHeight = (pageHeights: number[], currentHeight: number): number => {
+  const tallestPage = Math.max(0, ...pageHeights.filter(Number.isFinite));
+  return Math.max(currentHeight, Math.ceil(tallestPage + SCREENSHOT_VIEWPORT_VERTICAL_CHROME_PX));
+};
+
+const fitViewportToPages = async (page: Page): Promise<void> => {
+  const viewport = page.viewportSize();
+  if (!viewport) {
+    return;
+  }
+  const pageHeights = await page
+    .locator(PAGE_SELECTOR)
+    .evaluateAll((pageEls) => pageEls.map((pageEl) => (pageEl as HTMLElement).offsetHeight));
+  const height = screenshotViewportHeight(pageHeights, viewport.height);
+  if (height === viewport.height) {
+    return;
+  }
+  await page.setViewportSize({ width: viewport.width, height });
+  await waitForLayoutStability(page);
+  await page.waitForTimeout(STABILITY_SETTLE_MS);
+};
+
 /** One `.layout-page` element's identity, listed before any scrolling so the
  * per-page extraction loop below knows what to visit and in what order. */
 type PageMeta = { domIndex: number; pageNumber: number };
@@ -519,6 +544,11 @@ export const extractSinglePage = (page: Page, domIndex: number): Promise<RawPage
       const tableCells = Array.from(el.querySelectorAll(".layout-table-cell"));
       const lineEls = Array.from(el.querySelectorAll(".layout-line")) as HTMLElement[];
       const resolvedFontCache = new Map<string, string>();
+      const clippingValues = new Set(["auto", "clip", "hidden", "scroll"]);
+      const ancestorClipCache = new Map<
+        HTMLElement,
+        { clipsX: boolean; clipsY: boolean; rect?: DOMRect }
+      >();
       const canvasContext = document.createElement("canvas").getContext("2d");
       const fontProbeText = "mmmmmmmmmmlliWW0123456789";
       const genericFamilies = new Set([
@@ -662,10 +692,46 @@ export const extractSinglePage = (page: Page, domIndex: number): Promise<RawPage
           return text;
         };
 
+        const isFullyClipped = (sourceEl: HTMLElement | null, rect: DOMRect): boolean => {
+          let ancestor = (sourceEl ?? lineEl).parentElement;
+          while (ancestor && el.contains(ancestor)) {
+            let clipInfo = ancestorClipCache.get(ancestor);
+            if (!clipInfo) {
+              const computed = getComputedStyle(ancestor);
+              const clipsX = clippingValues.has(computed.overflowX);
+              const clipsY = clippingValues.has(computed.overflowY);
+              clipInfo = {
+                clipsX,
+                clipsY,
+                ...(clipsX || clipsY ? { rect: ancestor.getBoundingClientRect() } : {}),
+              };
+              ancestorClipCache.set(ancestor, clipInfo);
+            }
+            const { clipsX, clipsY, rect: ancestorRect } = clipInfo;
+            if (clipsX || clipsY) {
+              if (!ancestorRect) {
+                throw new Error("clipping ancestor is missing cached geometry");
+              }
+              if (
+                (clipsX && (rect.right <= ancestorRect.left || rect.left >= ancestorRect.right)) ||
+                (clipsY && (rect.bottom <= ancestorRect.top || rect.top >= ancestorRect.bottom))
+              ) {
+                return true;
+              }
+            }
+            if (ancestor === el) {
+              break;
+            }
+            ancestor = ancestor.parentElement;
+          }
+          return false;
+        };
+
         const toRawLine = (text: string, rect: DOMRect, sourceEl: HTMLElement | null) => ({
           text,
           rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
           region,
+          ...(isFullyClipped(sourceEl, rect) ? { fullyClipped: true } : {}),
           ...(visualGroup !== undefined ? { visualGroup } : {}),
           ...fontFrom(sourceEl),
         });
@@ -1009,6 +1075,7 @@ export const createFolioExtractor = async (
       if (pageMeta.length === 0) {
         throw new FolioExtractError(`folio rendered zero pages for ${absoluteDocxPath}`);
       }
+      await fitViewportToPages(page);
       await installCleanScreenshotStyle(page);
       const pagesToExtract =
         options.maxPages === undefined ? pageMeta : pageMeta.slice(0, options.maxPages);

@@ -9,6 +9,7 @@ import {
   meaningfulTextRange,
   parseCssFontFamilies,
   parseFirstFontFamily,
+  screenshotViewportHeight,
   toPageGeom,
 } from "../folioExtract";
 import type { RawLine, RawPage } from "../folioExtract";
@@ -29,6 +30,20 @@ describe("clean screenshot style", () => {
   test("keeps the page and its document content visible", () => {
     expect(CLEAN_SCREENSHOT_CSS).toContain(".layout-page,");
     expect(CLEAN_SCREENSHOT_CSS).toContain(".layout-page *");
+  });
+});
+
+describe("screenshot viewport height", () => {
+  test("grows enough to paint the tallest page above playground chrome", () => {
+    expect(screenshotViewportHeight([1123, 794], 1000)).toBe(1323);
+  });
+
+  test("does not shrink an already tall viewport", () => {
+    expect(screenshotViewportHeight([1123], 1600)).toBe(1600);
+  });
+
+  test("ignores invalid page heights", () => {
+    expect(screenshotViewportHeight([Number.NaN, Number.POSITIVE_INFINITY], 1000)).toBe(1000);
   });
 });
 
@@ -198,6 +213,19 @@ describe("toPageGeom", () => {
 
     expect(page.lines).toHaveLength(1);
     expect(page.lines[0]?.text).toBe("Visible");
+  });
+
+  test("drops lines fully clipped by an overflow ancestor", () => {
+    const rawPage = makeRawPage({
+      lines: [
+        makeRawLine({ text: "Visible", rect: rect(0, 0, 100, 10) }),
+        makeRawLine({ text: "Clipped", rect: rect(0, 20, 100, 10), fullyClipped: true }),
+      ],
+    });
+
+    const page = toPageGeom(rawPage);
+
+    expect(page.lines.map((line) => line.text)).toEqual(["Visible"]);
   });
 
   test("drops lines whose normalized text is empty (whitespace-only / soft hyphen only)", () => {
