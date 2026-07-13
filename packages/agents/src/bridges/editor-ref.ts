@@ -7,6 +7,7 @@ import type {
   FolioDocumentOperationResult,
   FolioDocumentOperationUndoHandle,
   FolioDocumentOperationUndoResult,
+  FolioDocumentNavigationTarget,
 } from "@stll/folio-core/server";
 import {
   assertSupportedFolioDocumentOperationVersion,
@@ -35,11 +36,12 @@ export type FolioAgentEditorApplyDocumentOperationsOptions = {
  * ONLY the members actually called below.
  *
  * The read-surface members (`getTrackedChanges`, `getCommentAnchors`,
- * `getSelectionText`, `getPageText`) are OPTIONAL here even though the
- * current `DocxEditorRef` always implements them: a ref built against an
- * older `@stll/folio-react` (before these methods existed) still
- * structurally satisfies this type, and `createEditorRefBridge` below falls
- * back to the pre-existing degraded behavior for each one it does not find.
+ * `getSelectionText`, `getPageText`, `getTargetPage`, `showInDocument`) are
+ * OPTIONAL here even though the current `DocxEditorRef` always implements
+ * them: a ref built against an older `@stll/folio-react` (before these methods
+ * existed) still structurally satisfies this type, and `createEditorRefBridge`
+ * below falls back to the pre-existing degraded behavior for each one it does
+ * not find.
  */
 export type FolioAgentEditorRefLike = {
   /** `DocxEditorRef.createAIEditSnapshot`. `null` before the editor view mounts. */
@@ -88,6 +90,13 @@ export type FolioAgentEditorRefLike = {
    * `null` return (page in range, layout not yet computed) is handled.
    */
   getPageText?(page: number): string | null;
+  /** `DocxEditorRef.getTargetPage`, when available on newer refs. */
+  getTargetPage?(
+    target: FolioDocumentNavigationTarget,
+    snapshot?: FolioAIEditSnapshot,
+  ): number | null;
+  /** `DocxEditorRef.showInDocument`, when available on newer refs. */
+  showInDocument?(target: FolioDocumentNavigationTarget, snapshot?: FolioAIEditSnapshot): boolean;
 };
 
 /** Options for {@link createEditorRefBridge}. */
@@ -148,7 +157,7 @@ const paragraphPlainText = (paragraph: Comment["content"][number]): string => {
  * to `DocxEditor`.
  *
  * KNOWN LIMITATIONS (only apply to a `ref` that predates the read-surface
- * additions below; the current `DocxEditorRef` implements all four):
+ * additions below; the current `DocxEditorRef` implements all six):
  * - `getChanges()` returns `[]` when `ref.getTrackedChanges` is absent, since
  *   there is then no ref-level way to enumerate tracked changes from
  *   ProseMirror mark attributes.
@@ -161,6 +170,8 @@ const paragraphPlainText = (paragraph: Comment["content"][number]): string => {
  *   entirely rather than implementing it as a no-op, which is what tells
  *   `executeFolioToolCall` to report the tool as unsupported instead of
  *   throwing.
+ * - Page-scoped search and `show_in_document` report an unsupported-capability
+ *   error when `ref.getTargetPage` / `ref.showInDocument` are absent.
  */
 export const createEditorRefBridge = (options: CreateEditorRefBridgeOptions): FolioAgentBridge => {
   const { ref, author, getComments, setComments } = options;
@@ -338,6 +349,16 @@ export const createEditorRefBridge = (options: CreateEditorRefBridgeOptions): Fo
     // empty page string is a safe, retryable degrade for a model mid tool
     // call, instead of throwing out of a call it has no way to recover from.
     bridge.getPageText = (page) => getPageText(page) ?? "";
+  }
+
+  const getTargetPage = ref.getTargetPage;
+  if (getTargetPage) {
+    bridge.getTargetPage = (target) => getTargetPage(target);
+  }
+
+  const showInDocument = ref.showInDocument;
+  if (showInDocument) {
+    bridge.showInDocument = (target) => showInDocument(target);
   }
 
   return bridge;
