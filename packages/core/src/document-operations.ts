@@ -38,7 +38,13 @@ export const FOLIO_DOCUMENT_OPERATION_MODES = Object.freeze([
   "tracked-changes",
 ] as const satisfies readonly FolioAIEditApplyMode[]);
 
-export const FOLIO_DOCUMENT_OPERATION_STORIES = Object.freeze(["main"] as const);
+export const FOLIO_DOCUMENT_OPERATION_STORIES = Object.freeze([
+  "main",
+  "header",
+  "footer",
+  "footnote",
+  "endnote",
+] as const);
 export const FOLIO_DOCUMENT_OPERATION_PRECONDITIONS = Object.freeze(["blockTextHash"] as const);
 export const FOLIO_DOCUMENT_OPERATION_BATCH_MODES = Object.freeze([
   "best-effort",
@@ -609,7 +615,10 @@ export type FolioDocumentOperationIssue = {
 
 export type FolioDocumentOperationStory =
   | "main"
-  | { type: "header" | "footer"; relationshipId: string };
+  | { type: "header"; relationshipId: string }
+  | { type: "footer"; relationshipId: string }
+  | { type: "footnote"; noteId: number }
+  | { type: "endnote"; noteId: number };
 
 /** One typed target affected by a successfully applied document operation. */
 export type FolioDocumentOperationAffectedTarget =
