@@ -397,6 +397,15 @@ export type TableBorders = {
 };
 
 /**
+ * Table cell borders, including w:tl2br (top-left to bottom-right) and
+ * w:tr2bl (top-right to bottom-left).
+ */
+export type TableCellBorders = TableBorders & {
+  topLeftToBottomRight?: BorderSpec;
+  topRightToBottomLeft?: BorderSpec;
+};
+
+/**
  * Cell margins
  */
 export type CellMargins = {
@@ -536,7 +545,7 @@ export type TableCellFormatting = {
   /** Cell width */
   width?: TableMeasurement;
   /** Cell borders */
-  borders?: TableBorders;
+  borders?: TableCellBorders;
   /** Cell margins (override table default) */
   margins?: CellMargins;
   /** Cell shading/background */

@@ -19,6 +19,7 @@ import type {
   TableBlock,
   TableMeasure,
   TableCell,
+  CellBorderSpec,
   TableCellMeasure,
   ParagraphBlock,
   ParagraphMeasure,
@@ -52,6 +53,8 @@ export const TABLE_CLASS_NAMES = {
   tableEdgeHandleBottom: "layout-table-edge-handle-bottom",
   tableEdgeHandleRight: "layout-table-edge-handle-right",
 };
+
+const CELL_DIAGONAL_BORDER_CLASS = "layout-table-cell-diagonal-border";
 
 /**
  * Options for rendering a table fragment
@@ -428,6 +431,67 @@ function applyBorder(
   }
 }
 
+type CellDiagonalDirection = "top-left-to-bottom-right" | "top-right-to-bottom-left";
+
+type RenderCellDiagonalBorderOptions = {
+  border: CellBorderSpec | undefined;
+  direction: CellDiagonalDirection;
+  cellWidth: number;
+  cellHeight: number;
+  doc: Document;
+};
+
+function renderCellDiagonalBorder({
+  border,
+  direction,
+  cellWidth,
+  cellHeight,
+  doc,
+}: RenderCellDiagonalBorderOptions): HTMLElement | null {
+  if (!hasVisibleBorder(border)) {
+    return null;
+  }
+
+  const line = doc.createElement("div");
+  const strokeWidth = Math.max(1, border?.width ?? 1);
+  const color = border?.color ?? "#000000";
+  const length = Math.hypot(cellWidth, cellHeight);
+  const angle = Math.atan2(cellHeight, cellWidth);
+
+  line.className = CELL_DIAGONAL_BORDER_CLASS;
+  line.dataset["direction"] = direction;
+  line.style.position = "absolute";
+  line.style.left = "0";
+  line.style.top =
+    direction === "top-left-to-bottom-right"
+      ? `${-strokeWidth / 2}px`
+      : `${cellHeight - strokeWidth / 2}px`;
+  line.style.width = `${length}px`;
+  line.style.height = `${strokeWidth}px`;
+  line.style.transformOrigin = "0 50%";
+  line.style.transform = `rotate(${direction === "top-left-to-bottom-right" ? angle : -angle}rad)`;
+  line.style.pointerEvents = "none";
+  line.style.zIndex = "1";
+
+  switch (border?.style) {
+    case "dashed":
+      line.style.backgroundImage = `repeating-linear-gradient(to right, ${color} 0, ${color} ${strokeWidth * 3}px, transparent ${strokeWidth * 3}px, transparent ${strokeWidth * 5}px)`;
+      break;
+    case "dotted":
+      line.style.backgroundImage = `radial-gradient(circle at ${strokeWidth / 2}px 50%, ${color} ${strokeWidth / 2}px, transparent ${strokeWidth / 2}px)`;
+      line.style.backgroundSize = `${strokeWidth * 2}px ${strokeWidth}px`;
+      break;
+    case "double":
+      line.style.backgroundImage = `linear-gradient(to bottom, ${color} 0, ${color} 33%, transparent 33%, transparent 67%, ${color} 67%, ${color} 100%)`;
+      break;
+    default:
+      line.style.backgroundColor = color;
+      break;
+  }
+
+  return line;
+}
+
 /**
  * Render a single table cell
  */
@@ -546,6 +610,26 @@ function renderTableCell(
     cellEl.style.overflow = "visible";
   }
   cellEl.append(renderedContent.content);
+  const topLeftToBottomRight = renderCellDiagonalBorder({
+    border: cell.borders?.topLeftToBottomRight,
+    direction: "top-left-to-bottom-right",
+    cellWidth: cellMeasure.width,
+    cellHeight: rowHeight,
+    doc,
+  });
+  if (topLeftToBottomRight) {
+    cellEl.append(topLeftToBottomRight);
+  }
+  const topRightToBottomLeft = renderCellDiagonalBorder({
+    border: cell.borders?.topRightToBottomLeft,
+    direction: "top-right-to-bottom-left",
+    cellWidth: cellMeasure.width,
+    cellHeight: rowHeight,
+    doc,
+  });
+  if (topRightToBottomLeft) {
+    cellEl.append(topRightToBottomLeft);
+  }
   for (const floatingLayer of renderedContent.floatingLayers) {
     floatingLayer.style.left = `${padLeft}px`;
     floatingLayer.style.top = `${padTop}px`;
