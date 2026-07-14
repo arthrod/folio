@@ -62,6 +62,32 @@ describe("findWordBreaks", () => {
     expect(findWordBreaks("中文測", { noLineBreaksBefore: "測" })).toEqual([1, 3]);
   });
 
+  test("ignores custom kinsoku lists when kinsoku is disabled", () => {
+    expect(
+      findWordBreaks("中文測", {
+        kinsoku: false,
+        noLineBreaksBefore: "測",
+      }),
+    ).toEqual([1, 2, 3]);
+  });
+
+  test("replaces the default kinsoku lists with language-specific settings", () => {
+    expect(
+      findWordBreaks("中文。」測", {
+        locale: "ja-JP",
+        kinsoku: true,
+        noLineBreaksBefore: "。",
+      }),
+    ).toEqual([1, 3, 4, 5]);
+    expect(
+      findWordBreaks("中（文", {
+        locale: "ja-JP",
+        kinsoku: true,
+        noLineBreaksAfter: "測",
+      }),
+    ).toEqual([1, 2, 3]);
+  });
+
   test("applies legacy Ethiopic and Amharic break opportunities", () => {
     const text = "ሀ፡ለ";
     expect(findWordBreaks(text)).toEqual([]);
@@ -126,6 +152,22 @@ describe("isHangingPunctuation", () => {
 
   test("includes document-specific prohibited line-start characters", () => {
     expect(isHangingPunctuation("※", { noLineBreaksBefore: "※" })).toBe(true);
+    expect(
+      isHangingPunctuation("※", {
+        kinsoku: false,
+        noLineBreaksBefore: "※",
+      }),
+    ).toBe(false);
+  });
+
+  test("does not hang default punctuation omitted from a custom list", () => {
+    expect(
+      isHangingPunctuation("」", {
+        locale: "ja-JP",
+        kinsoku: true,
+        noLineBreaksBefore: "。",
+      }),
+    ).toBe(false);
   });
 });
 

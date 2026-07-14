@@ -22,9 +22,9 @@ export type LineBreakPolicy = {
   locale?: string;
   /** Apply East Asian first/last-character restrictions (`w:kinsoku`). */
   kinsoku?: boolean;
-  /** Document override: characters that may not begin a line. */
+  /** Document replacement list: characters that may not begin a line. */
   noLineBreaksBefore?: string;
-  /** Document override: characters that may not end a line. */
+  /** Document replacement list: characters that may not end a line. */
   noLineBreaksAfter?: string;
   /** Use the legacy Ethiopic/Amharic compatibility behavior. */
   useLegacyEthiopicAmharicRules?: boolean;
@@ -78,10 +78,9 @@ const BREAK_AFTER_CHARACTER = new Set([
 ]);
 const CZECH_ONE_LETTER_PREPOSITIONS = new Set(["k", "o", "s", "u", "v", "z"]);
 
-// ECMA-376 kinsoku defaults are language-specific and can be overridden by
+// ECMA-376 kinsoku defaults are language-specific and can be replaced by
 // settings.xml. This conservative common set covers punctuation excluded from
-// line edges across Japanese and Chinese documents; document overrides are
-// layered on top below.
+// line edges across Japanese and Chinese documents when no custom list applies.
 const DEFAULT_PROHIBITED_LINE_START = new Set([
   "!",
   "%",
@@ -178,13 +177,28 @@ const previousCodePoint = (text: string, index: number): string | undefined => {
 
 const isProhibitedLineStart = (character: string | undefined, policy?: LineBreakPolicy): boolean =>
   character !== undefined &&
-  (policy?.noLineBreaksBefore?.includes(character) === true ||
-    (policy?.kinsoku !== false && DEFAULT_PROHIBITED_LINE_START.has(character)));
+  policy?.kinsoku !== false &&
+  (policy?.noLineBreaksBefore !== undefined
+    ? policy.noLineBreaksBefore.includes(character)
+    : DEFAULT_PROHIBITED_LINE_START.has(character));
 
 const isProhibitedLineEnd = (character: string | undefined, policy?: LineBreakPolicy): boolean =>
   character !== undefined &&
-  (policy?.noLineBreaksAfter?.includes(character) === true ||
-    (policy?.kinsoku !== false && DEFAULT_PROHIBITED_LINE_END.has(character)));
+  policy?.kinsoku !== false &&
+  (policy?.noLineBreaksAfter !== undefined
+    ? policy.noLineBreaksAfter.includes(character)
+    : DEFAULT_PROHIBITED_LINE_END.has(character));
+
+const isCjkLineBreakParticipant = (
+  character: string | undefined,
+  policy?: LineBreakPolicy,
+): boolean =>
+  character !== undefined &&
+  (CJK_SCRIPT.test(character) ||
+    DEFAULT_PROHIBITED_LINE_START.has(character) ||
+    DEFAULT_PROHIBITED_LINE_END.has(character) ||
+    policy?.noLineBreaksBefore?.includes(character) === true ||
+    policy?.noLineBreaksAfter?.includes(character) === true);
 
 const isLegacyEthiopicBreakCharacter = (
   character: string | undefined,
@@ -301,11 +315,7 @@ const findUnicodeBreaks = (text: string, policy?: LineBreakPolicy): number[] => 
   if (CJK_SCRIPT.test(text)) {
     for (const index of graphemeBreaks) {
       const previous = previousCodePoint(text, index);
-      const next = firstCodePoint(text, index);
-      if (
-        (previous !== undefined && CJK_SCRIPT.test(previous)) ||
-        (isProhibitedLineStart(previous, policy) && next !== undefined && CJK_SCRIPT.test(next))
-      ) {
+      if (isCjkLineBreakParticipant(previous, policy)) {
         pushBreak(breaks, text, index, policy);
       }
     }
