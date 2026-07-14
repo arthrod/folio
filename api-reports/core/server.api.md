@@ -198,6 +198,9 @@ export const FOLIO_DOCUMENT_OPERATION_STORIES: readonly ["main", "header", "foot
 export const FOLIO_DOCUMENT_OPERATION_TYPES: readonly ["replaceInBlock", "replaceRange", "commentOnRange", "formatRange", "insertAfterBlock", "insertBeforeBlock", "replaceBlock", "deleteBlock", "commentOnBlock", "insertSignatureTable"];
 
 // @public (undocumented)
+export const FOLIO_REVIEWED_VIEWS: readonly ["original", "current-markup", "final"];
+
+// @public (undocumented)
 export type FolioAIBlock = {
     id: string;
     kind: FolioAIBlockKind;
@@ -607,6 +610,7 @@ export class FolioDocxReviewer {
     getContentAsText(options?: FolioGetContentAsTextOptions): string;
     getNotesAsText(): string;
     listStories(): FolioDocumentStory[];
+    readReviewedStory(options?: FolioReadReviewedStoryOptions): FolioReviewedStory | null;
     readStory(handle: FolioDocumentStoryHandle): FolioDocumentStory | null;
     rejectAll(): number;
     rejectChange(target: FolioReviewChange | number): boolean;
@@ -632,6 +636,12 @@ export type FolioEditableDocumentStoryHandle = FolioDocumentStoryHandle;
 
 // @public
 export type FolioFormatProperty = (typeof FORMAT_PROPERTIES)[number];
+
+// @public (undocumented)
+export type FolioReadReviewedStoryOptions = {
+    story?: FolioEditableDocumentStoryHandle;
+    view?: FolioReviewedView;
+};
 
 // @public
 export type FolioReviewChange = {
@@ -677,6 +687,18 @@ export type FolioReviewCommentReply = {
     date: string | null;
     text: string;
 };
+
+// @public (undocumented)
+export type FolioReviewedStory = {
+    story: FolioEditableDocumentStoryHandle;
+    view: FolioReviewedView;
+    snapshot: FolioAIEditSnapshot;
+    text: string;
+    changes: FolioReviewChange[];
+};
+
+// @public (undocumented)
+export type FolioReviewedView = (typeof FOLIO_REVIEWED_VIEWS)[number];
 
 // @public
 export type FolioReviewReplyInput = {
@@ -745,6 +767,9 @@ export const isFolioBlockId: (value: unknown) => value is FolioBlockId;
 export const isFolioDocumentOperationModeSupported: (operationType: FolioDocumentOperationType, mode: FolioDocumentOperationMode) => boolean;
 
 // @public (undocumented)
+export const isFolioReviewedView: (value: unknown) => value is FolioReviewedView;
+
+// @public (undocumented)
 export const isSequentialFolioBlockId: (id: string) => boolean;
 
 // @public (undocumented)
@@ -764,6 +789,9 @@ export const STELLA_STYLE_SET_NAME = "Stella Style";
 
 // @public (undocumented)
 export class UnsupportedFolioDocumentOperationVersionError extends UnsupportedFolioDocumentOperationVersionError_base {}
+
+// @public (undocumented)
+export class UnsupportedFolioReviewedViewError extends UnsupportedFolioReviewedViewError_base {}
 
 // (No @packageDocumentation comment for this package)
 
