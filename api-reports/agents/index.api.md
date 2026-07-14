@@ -13,6 +13,7 @@ import { FolioAIEditSnapshot } from '@stll/folio-core/server';
 import { FolioAITextRangeHandle } from '@stll/folio-core/server';
 import { FolioBlockDiff } from '@stll/folio-core/server';
 import { FolioCommentAnchor } from '@stll/folio-core/ai-edits';
+import { FolioCompareDocxVersionsOptions } from '@stll/folio-core/server';
 import { FolioDocumentNavigationTarget } from '@stll/folio-core/server';
 import { FolioDocumentOperationBatch } from '@stll/folio-core/server';
 import { FolioDocumentOperationIssue } from '@stll/folio-core/server';
@@ -37,7 +38,7 @@ export type AnthropicToolDefinition = {
 };
 
 // @public
-export const compareDocxVersions: (base: ArrayBuffer, revised: ArrayBuffer) => Promise<FolioAgentVersionDiff>;
+export const compareDocxVersions: (base: ArrayBuffer, revised: ArrayBuffer, options?: FolioAgentCompareDocxVersionsOptions) => Promise<FolioAgentVersionDiff>;
 
 // @public
 export const createEditorRefBridge: (options: CreateEditorRefBridgeOptions) => FolioAgentBridge;
@@ -1625,6 +1626,9 @@ export type FolioAgentCommentReply = {
     author: string;
     text: string;
 };
+
+// @public
+export type FolioAgentCompareDocxVersionsOptions = FolioCompareDocxVersionsOptions;
 
 // @public (undocumented)
 export type FolioAgentDocumentOutline = {
