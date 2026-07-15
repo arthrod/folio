@@ -38,6 +38,7 @@ import {
   type HiddenProseMirrorCollaboration,
   type HiddenProseMirrorRemoteSelection,
 } from "@stll/folio-core/controller/hiddenEditorManager";
+import { loadCollaborationModules } from "@stll/folio-core/controller/collaborationModules";
 import type { ExtensionManager } from "@stll/folio-core/prosemirror/extensions/ExtensionManager";
 import type { Document, Theme, StyleDefinitions } from "@stll/folio-core/types/document";
 // Import ProseMirror CSS
@@ -52,19 +53,6 @@ export type {
 export { createHiddenEditorState } from "@stll/folio-core/controller/hiddenEditorManager";
 
 const EMPTY_EXTERNAL_PLUGINS: Plugin[] = [];
-
-let collaborationModulesPromise: Promise<CollaborationModules> | null = null;
-
-const loadCollaborationModules = (): Promise<CollaborationModules> => {
-  collaborationModulesPromise ??= Promise.all([import("y-prosemirror"), import("yjs")])
-    .then(([yProseMirror, yjs]) => ({ yProseMirror, yjs }))
-    .catch((error: unknown) => {
-      collaborationModulesPromise = null;
-      throw error;
-    });
-
-  return collaborationModulesPromise;
-};
 
 // ============================================================================
 // TYPES

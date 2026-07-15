@@ -22,6 +22,8 @@ import { FlowBlock } from '@stll/folio-core/layout-engine/types';
 import { FolioEditor } from '@stll/folio-core/controller/folioEditor';
 import { FolioSelectiveSaveFlags } from '@stll/folio-core/docx/selectiveSaveFlags';
 import { getSelectionRuns } from '@stll/folio-core/managers/ClipboardManager';
+import { HiddenProseMirrorCollaboration } from '@stll/folio-core/controller/hiddenEditorManager';
+import { HiddenProseMirrorRemoteSelection } from '@stll/folio-core/controller/hiddenEditorManager';
 import { Layout } from '@stll/folio-core/layout-engine/types';
 import { LayoutSelectionGate } from '@stll/folio-core/paged-layout/LayoutSelectionGate';
 import { MaybeRefOrGetter } from 'vue';
@@ -84,6 +86,11 @@ export type UseClipboardReturn = {
 export function useDocxEditor(options: UseDocxEditorOptions): UseDocxEditorReturn;
 
 // @public (undocumented)
+export type UseDocxEditorCollaboration = HiddenProseMirrorCollaboration & {
+    plugins?: Plugin_2[] | undefined;
+};
+
+// @public (undocumented)
 export type UseDocxEditorOptions = {
     hiddenContainer: Ref<HTMLElement | null>;
     pagesContainer: Ref<HTMLElement | null>;
@@ -94,6 +101,7 @@ export type UseDocxEditorOptions = {
     editorMode?: MaybeRefOrGetter<"editing" | "suggesting" | "viewing">;
     author?: MaybeRefOrGetter<string>;
     externalPlugins?: Plugin_2[];
+    collaboration?: MaybeRefOrGetter<UseDocxEditorCollaboration | undefined>;
     onAnonymizationMatchesChange?: (matches: readonly AnonymizationMatch[]) => void;
     showTemplateDirectives?: MaybeRefOrGetter<boolean | undefined>;
     onSlashMenuChange?: (state: TemplateSlashMenuState) => void;
@@ -112,6 +120,7 @@ export type UseDocxEditorReturn = {
     editor: FolioEditor;
     editorView: Ref<EditorView | null>;
     editorState: Ref<EditorState | null>;
+    remoteSelections: Ref<HiddenProseMirrorRemoteSelection[]>;
     isReady: Ref<boolean>;
     isDirty: Ref<boolean>;
     parseError: Ref<string | null>;
