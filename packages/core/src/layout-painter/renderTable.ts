@@ -288,7 +288,7 @@ function renderCellContent({
         textBoxBlock,
         textBoxMeasure,
         { ...context, insideTableCell: true },
-        { document: doc },
+        { document: doc, renderTable: renderNestedTable },
       );
 
       if (isFloatingTextBoxBlock(textBoxBlock)) {
@@ -383,7 +383,7 @@ function tableHasFloatingCellContent(block: TableBlock): boolean {
 /**
  * Render a nested table (within a cell)
  */
-function renderNestedTable(
+export function renderNestedTable(
   block: TableBlock,
   measure: TableMeasure,
   context: RenderContext,
