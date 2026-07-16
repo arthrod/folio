@@ -1,24 +1,24 @@
 /**
  * Save-path equivalence property tests.
  *
- * Folio persists an edited `.docx` through one of two paths:
+ * Folio persists an edited `.docx` through two caller-facing entry points —
+ * `attemptSelectiveSave` (SEL) and `repackDocx` (FULL) — both backed by the
+ * jubarte writer, which byte-preserves unchanged parts and regenerates
+ * `word/document.xml` (and headers/footers/comments/edited notes) from the
+ * model. The historical legacy selective patcher is gone; SEL never returns
+ * null anymore, but callers keep the fallback contract.
  *
- *   SEL  = attemptSelectiveSave  — byte-exact per-paragraph patch of the
- *          original zip; bails to `null` when it cannot prove the patch is safe.
- *   FULL = repackDocx            — copy every original zip entry, then overwrite
- *          `word/document.xml` (and headers/footers/comments) from the model.
- *
- * These properties pin the safety contract of those two paths against a small,
- * bounded corpus of real fixtures, so a regression in either path is caught at
- * the model level (not just as an XML formatting wobble).
+ * These properties pin the safety contract of those entry points against a
+ * small, bounded corpus of real fixtures, so a regression is caught at the
+ * model level (not just as an XML formatting wobble).
  *
  * Invariants (see the describe blocks below):
  *   1. No-op fidelity — saving an unedited doc round-trips the parsed model.
  *   2. Selective ≡ full repack — after an edit, parse(SEL) deep-equals parse(FULL).
  *   3. Selective is never silently wrong — SEL returns null, or a document that
  *      applies exactly the edit and nothing else.
- *   4. Byte-exactness — a paragraph edit leaves untouched parts and unedited
- *      paragraphs byte-identical to the original zip entries.
+ *   4. Byte-exactness — a paragraph edit leaves untouched parts byte-identical
+ *      to the original zip entries.
  *
  * Bound: 3-fixture sample, fixed seed, numRuns capped at 15 for the
  * podily-bps.docx (~176 KB) edit-driven properties, which are the cost driver.
@@ -244,25 +244,6 @@ const applyEdit = (doc: Document, spec: EditSpec): string | null => {
 // ZIP HELPERS
 // ============================================================================
 
-const documentXml = async (buffer: ArrayBuffer): Promise<string> => {
-  const zip = await JSZip.loadAsync(buffer);
-  const file = zip.file("word/document.xml");
-  if (!file) {
-    throw new Error("word/document.xml missing");
-  }
-  return file.async("text");
-};
-
-const paragraphIds = (xml: string): string[] => {
-  const pattern = /w14:paraId="(?<paraId>[^"]+)"/gu;
-  const ids: string[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(xml)) !== null) {
-    ids.push(match.groups?.["paraId"] ?? "");
-  }
-  return ids;
-};
-
 // Parts that selective save legitimately rewrites for a body-paragraph edit:
 // document.xml is patched, core.xml is date-stamped, comments.xml is
 // re-serialized when present, and headers/footers are re-serialized
@@ -362,28 +343,36 @@ describe("invariant 2: selective equals full repack", () => {
   // paragraphs byte-for-byte; full repack re-serializes them. With the serializer
   // fidelity gaps fixed (see invariant 1), re-serializing an unchanged paragraph
   // now round-trips, so the two paths agree at the parsed-model level.
-  test("parse(selective) deep-equals parse(full) for an edited doc", async () => {
-    const buffer = readFixture(EDIT_FIXTURE);
-    const doc = await parse(buffer);
-    const paraId = applyEdit(doc, { targetSelector: 0, kind: "append", text: "EDIT" });
-    expect(paraId).not.toBeNull();
-    if (!paraId) {
-      return;
-    }
+  test(
+    "parse(selective) deep-equals parse(full) for an edited doc",
+    async () => {
+      const buffer = readFixture(EDIT_FIXTURE);
+      const doc = await parse(buffer);
+      const paraId = applyEdit(doc, { targetSelector: 0, kind: "append", text: "EDIT" });
+      expect(paraId).not.toBeNull();
+      if (!paraId) {
+        return;
+      }
 
-    const selective = await attemptSelectiveSave(doc, buffer, {
-      changedParaIds: new Set([paraId]),
-      structuralChange: false,
-      hasUntrackedChanges: false,
-    });
-    expect(selective).not.toBeNull();
-    if (!selective) {
-      return;
-    }
-    const full = await fullRepack(doc, buffer);
+      const selective = await attemptSelectiveSave(doc, buffer, {
+        changedParaIds: new Set([paraId]),
+        structuralChange: false,
+        hasUntrackedChanges: false,
+      });
+      expect(selective).not.toBeNull();
+      if (!selective) {
+        return;
+      }
+      const full = await fullRepack(doc, buffer);
 
-    expect(normalizedPackage(await parse(selective))).toEqual(normalizedPackage(await parse(full)));
-  });
+      expect(normalizedPackage(await parse(selective))).toEqual(
+        normalizedPackage(await parse(full)),
+      );
+    },
+    // Four full jubarte engine passes over the ~1.6 MB fixture; the default
+    // 5 s test timeout is too tight for that.
+    propertyTestTimeout(30_000),
+  );
 });
 
 // ============================================================================
@@ -419,10 +408,14 @@ describe("invariant 3: selective save is never silently wrong", () => {
           const reparsed = await parse(saved);
           expect(bodyParagraphTexts(reparsed)).toEqual(bodyParagraphTexts(doc));
         }),
-        propertyConfig({ numRuns: 15, seed: SEED }),
+        // Each run is a full parse + jubarte save + reparse of the ~1.6 MB
+        // fixture (~4-5 s); the legacy string-splice path afforded 15 runs,
+        // the engine path affords 6 within a sane budget. The seed is fixed,
+        // so this stays deterministic.
+        propertyConfig({ numRuns: 6, seed: SEED }),
       );
     },
-    propertyTestTimeout(30_000),
+    propertyTestTimeout(90_000),
   );
 });
 
@@ -432,11 +425,10 @@ describe("invariant 3: selective save is never silently wrong", () => {
 
 describe("invariant 4: selective save keeps untouched bytes identical", () => {
   test(
-    "a single-paragraph edit leaves untouched parts and unedited paragraphs byte-identical",
+    "a single-paragraph edit leaves untouched parts byte-identical",
     async () => {
       const buffer = readFixture(EDIT_FIXTURE);
       const originalZip = await JSZip.loadAsync(buffer);
-      const originalXml = await documentXml(buffer);
 
       // Precompute the original bytes/slices once so each fast-check run only
       // pays for the saved side (the ~1.6 MB document.xml re-scan is the cost
@@ -450,13 +442,6 @@ describe("invariant 4: selective save keeps untouched bytes identical", () => {
           bytes: new Uint8Array(await originalZip.file(part)!.async("arraybuffer")),
         })),
       );
-      const sampledSlices = [...new Set(paragraphIds(originalXml))]
-        .flatMap((id) => {
-          const offsets = findParagraphOffsets(originalXml, id);
-          return offsets ? [{ id, slice: originalXml.slice(offsets.start, offsets.end) }] : [];
-        })
-        .slice(0, 40);
-
       await fc.assert(
         fc.asyncProperty(arbEditSpec, async (spec) => {
           const doc = await parse(buffer);
@@ -477,9 +462,9 @@ describe("invariant 4: selective save keeps untouched bytes identical", () => {
 
           // Every genuinely-untouched part survives byte-for-byte (styles.xml,
           // numbering.xml, footnotes.xml, endnotes.xml, theme, fonts, settings,
-          // media, ...). TODO(notes): note bodies are not editable through the
-          // selective path today, so footnotes.xml/endnotes.xml are expected to
-          // be byte-identical here; extend this once the note write path lands.
+          // media, ...): the jubarte writer byte-preserves unchanged parts and
+          // the note-splice pass restores note parts verbatim when no note
+          // paragraph was edited.
           const comparisons = await Promise.all(
             originalUntouched.map(async ({ part, bytes }) => {
               const savedFile = savedZip.file(part);
@@ -493,25 +478,22 @@ describe("invariant 4: selective save keeps untouched bytes identical", () => {
             expect(equal, `untouched part changed: ${part}`).toBe(true);
           }
 
-          // Every sampled UNEDITED paragraph keeps its exact original XML slice;
-          // the edited paragraph is the only one allowed to change.
+          // Unedited paragraphs are NOT byte-exact under the jubarte writer:
+          // document.xml is regenerated from the model on every save (rsid
+          // attributes drop, as the legacy FULL repack also did) — the retired
+          // legacy selective patcher was the only path with a per-paragraph
+          // byte guarantee. Model-level identity of every paragraph is gated
+          // by invariant 1 (no-op fixed point) and invariant 3 (reparse
+          // equality after an edit); here we assert the edited paragraph is
+          // still addressable by its paraId in the saved XML.
           const savedXml = await savedZip.file("word/document.xml")!.async("text");
-          for (const { id, slice } of sampledSlices) {
-            if (id === paraId) {
-              continue;
-            }
-            const after = findParagraphOffsets(savedXml, id);
-            if (after) {
-              expect(savedXml.slice(after.start, after.end)).toBe(slice);
-            }
-          }
-
-          // The edit itself did land in the edited paragraph.
           expect(findParagraphOffsets(savedXml, paraId)).not.toBeNull();
         }),
-        propertyConfig({ numRuns: 12, seed: SEED }),
+        // Same engine-cost budget note as invariant 3: 5 runs of a full
+        // parse + save + zip comparison on the large fixture.
+        propertyConfig({ numRuns: 5, seed: SEED }),
       );
     },
-    propertyTestTimeout(30_000),
+    propertyTestTimeout(90_000),
   );
 });

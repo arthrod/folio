@@ -743,35 +743,45 @@ export const DocxEditor = forwardRef<DocxEditorRef, DocxEditorProps>(function Do
   // PagedEditor reports the exact create/destroy lifecycle; the
   // history-state pass catches document replacements that swap the
   // view under the same host component.
+  //
+  // CRITICAL: keep the host callback in a ref. Hosts often pass an
+  // inline `onEditorViewReady={(v) => { … setState … }}`. If we
+  // depend on that identity for cleanup, React re-runs the cleanup
+  // on every parent render → report(null) → report(view) → parent
+  // setState → infinite "Maximum update depth exceeded" (React #185).
+  // PagedEditor already uses the same ref pattern for this reason.
   const lastReportedViewRef = useRef<EditorView | null>(null);
-  const reportEditorViewReady = useCallback(
-    (view: EditorView | null) => {
-      if (!onEditorViewReady) {
-        return;
-      }
-      if (lastReportedViewRef.current === view) {
-        return;
-      }
-      lastReportedViewRef.current = view;
-      onEditorViewReady(view);
-    },
-    [onEditorViewReady],
-  );
+  const onEditorViewReadyRef = useRef(onEditorViewReady);
+  onEditorViewReadyRef.current = onEditorViewReady;
+  const reportEditorViewReady = useCallback((view: EditorView | null) => {
+    const handler = onEditorViewReadyRef.current;
+    if (!handler) {
+      return;
+    }
+    if (lastReportedViewRef.current === view) {
+      return;
+    }
+    lastReportedViewRef.current = view;
+    handler(view);
+  }, []);
   useLayoutEffect(() => {
-    if (!onEditorViewReady) {
+    if (!onEditorViewReadyRef.current) {
       return;
     }
     const view = pagedEditorRef.current?.getView() ?? null;
     reportEditorViewReady(view);
-  }, [onEditorViewReady, reportEditorViewReady, history.state]);
-  useEffect(() => {
-    if (!onEditorViewReady) {
-      return;
-    }
-    return () => {
-      reportEditorViewReady(null);
-    };
-  }, [onEditorViewReady, reportEditorViewReady]);
+  }, [reportEditorViewReady, history.state]);
+  // Null the host only on true unmount — never when the callback
+  // identity changes (see comment above).
+  useEffect(
+    () => () => {
+      if (lastReportedViewRef.current !== null) {
+        lastReportedViewRef.current = null;
+        onEditorViewReadyRef.current?.(null);
+      }
+    },
+    [],
+  );
 
   // Refresh outline headings when the document loads or the outline is enabled.
   // handleDocumentChange keeps it in sync after subsequent edits. Page-number

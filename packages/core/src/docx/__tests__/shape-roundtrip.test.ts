@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { serializeRun } from "../serializer/runSerializer";
+import { serializeRun } from "../jubarte/emit/runSerializer";
 import { parseShapeFromDrawing } from "../shapeParser";
 import { parseXmlDocument } from "../xmlParser";
 

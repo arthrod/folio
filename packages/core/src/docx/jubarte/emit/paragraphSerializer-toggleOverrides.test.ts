@@ -11,10 +11,10 @@
  */
 import { describe, expect, test } from "bun:test";
 
-import type { Paragraph, ParagraphFormatting } from "../../types/document";
-import { parseParagraph } from "../paragraphParser";
-import type { XmlElement } from "../xmlParser";
-import { parseXmlDocument } from "../xmlParser";
+import type { Paragraph, ParagraphFormatting } from "../../../types/document";
+import { parseParagraph } from "../../paragraphParser";
+import type { XmlElement } from "../../xmlParser";
+import { parseXmlDocument } from "../../xmlParser";
 import { serializeParagraph } from "./paragraphSerializer";
 
 const BOOLEAN_TOGGLES = [

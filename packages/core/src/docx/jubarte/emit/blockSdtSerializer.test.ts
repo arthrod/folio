@@ -8,9 +8,9 @@
 
 import { describe, expect, test } from "bun:test";
 
-import type { BlockContent, BlockSdt } from "../../types/document";
-import { parseBlockContent } from "../blockContentParser";
-import { parseXml } from "../xmlParser";
+import type { BlockContent, BlockSdt } from "../../../types/document";
+import { parseBlockContent } from "../../blockContentParser";
+import { parseXml } from "../../xmlParser";
 import { serializeBlockSdt } from "./blockSdtSerializer";
 
 const NS =

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import type { Run } from "../../types/document";
+import type { Run } from "../../../types/document";
 import { serializeRun } from "./runSerializer";
 
 // Issue #417 (eigenpal): image and shape dimension/offset attributes leaked

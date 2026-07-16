@@ -378,6 +378,33 @@ async function loadDocxZip(buffer: ArrayBuffer, maxFiles: number): Promise<Loade
   }
 }
 
+/**
+ * Repair a DOCX archive whose end-of-central-directory record was truncated
+ * mid-field, or return the buffer unchanged when JSZip can already read it.
+ * Returns null when the archive is unreadable and unrepairable. Exported for
+ * the jubarte save orchestrator: its writer byte-preserves the source
+ * container, so a damaged source EOCD must be repaired BEFORE the save or it
+ * survives into the output (the legacy parser repaired at parse time and
+ * saved from the repaired bytes).
+ */
+export async function repairDocxArchive(buffer: ArrayBuffer): Promise<ArrayBuffer | null> {
+  try {
+    await JSZip.loadAsync(buffer);
+    return buffer;
+  } catch {
+    const repaired = repairTruncatedEndOfCentralDirectory(buffer, DEFAULT_UNZIP_LIMITS.maxFiles);
+    if (!repaired) {
+      return null;
+    }
+    try {
+      await JSZip.loadAsync(repaired);
+      return repaired;
+    } catch {
+      return null;
+    }
+  }
+}
+
 function repairTruncatedEndOfCentralDirectory(
   buffer: ArrayBuffer,
   maxFiles: number,

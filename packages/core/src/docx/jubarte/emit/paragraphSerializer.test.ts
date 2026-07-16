@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
-import { parseParagraph } from "../paragraphParser";
-import type { ComplexField, Paragraph } from "../../types/document";
-import { parseXmlDocument, type XmlElement } from "../xmlParser";
+import { parseParagraph } from "../../paragraphParser";
+import type { ComplexField, Paragraph } from "../../../types/document";
+import { parseXmlDocument, type XmlElement } from "../../xmlParser";
 import { serializeParagraph } from "./paragraphSerializer";
 
 // The structural runs of a complex field (begin/separate/end) reuse
