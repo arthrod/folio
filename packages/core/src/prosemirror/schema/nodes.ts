@@ -667,6 +667,15 @@ export type TableCellAttrs = {
   _originalFormatting?: TableCellFormatting;
   /** Tracked cell property changes (w:tcPrChange) for round-trip + accept/reject */
   tcPrChange?: TableCellPropertyChange[];
+  /** Tracked cell insertion/deletion for round-trip + accept/reject. */
+  cellMarker?: {
+    kind: "ins" | "del";
+    info: {
+      revisionId: number;
+      author: string;
+      date?: string | null;
+    };
+  };
   /** Preserve a DOCX vMerge restart even when PM cannot model it as a rowspan. */
   _preserveVMergeRestart?: boolean;
   /** Original DOCX vMerge continuation cells skipped into this PM rowspan. */
