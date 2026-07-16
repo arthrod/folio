@@ -12,7 +12,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { parseSectionProperties } from "../sectionParser";
-import { serializeSectionProperties } from "../serializer/sectionPropertiesSerializer";
+import { serializeSectionProperties } from "../jubarte/emit/sectionPropertiesSerializer";
 import type { XmlElement } from "../xmlParser";
 import { parseXmlDocument } from "../xmlParser";
 

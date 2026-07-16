@@ -36,10 +36,11 @@ import {
   type FloatingLineSegmentZone,
 } from "./floatingZones";
 import { getListMarkerInlineWidth } from "./listMarkerWidth";
-import { buildRunFontStyle, ptToPx } from "./measureHelpers";
+import { buildFontString, buildRunFontStyle, ptToPx } from "./measureHelpers";
 import { getFontMetrics, measureRun, measureTextWidth } from "./measureProvider";
 import type { FontMetrics, FontStyle } from "./measureTypes";
 import { findWordBreaks, isBreakChar } from "./lineBreaks";
+import { isSegmentFitActive, runSegmentFitWalk, styleSupportsSegmentFit } from "./segmentFit";
 
 export { clampFloatingWrapMargins } from "./clampFloatingWrapMargins";
 export type { FloatingImageZone } from "./floatingZones";
@@ -1368,11 +1369,57 @@ export function measureParagraph(
         continue;
       }
 
+      // Segment-fit strategy (premirror port): an installed engine fits
+      // plain text runs from prepared segment widths instead of measuring
+      // word slices per call. Gated to runs where the legacy walk's extra
+      // semantics don't apply: justified shrink tolerance, cross-run glue
+      // (#991), and styles outside the engine's font-string model all stay
+      // legacy. Pieces the engine refuses (e.g. an overlong token on an
+      // empty line) fall through to the legacy walk at `segmentConsumedUpTo`.
+      let segmentConsumedUpTo = 0;
+      if (
+        isSegmentFitActive() &&
+        styleSupportsSegmentFit(style) &&
+        !isJustifiedParagraph &&
+        (trailingGlueWidths[runIndex] ?? 0) === 0
+      ) {
+        let lastConsumed = 0;
+        /* eslint-disable no-loop-func -- SAFETY: the host callbacks are
+           consumed synchronously inside runSegmentFitWalk before this loop
+           iteration advances; they never escape the call. */
+        segmentConsumedUpTo = runSegmentFitWalk(text, buildFontString(style), {
+          spaceLeft: () => currentLine.availableWidth - currentLine.width + WIDTH_TOLERANCE,
+          lineHasContent: () => currentLine.width > 0,
+          commit: (width, endChar) => {
+            const piece = text.slice(lastConsumed, endChar);
+            const trimmedPiece = trimTrailingSpacesAndTabs(piece);
+            currentLine.width += width;
+            currentLine.trailingWhitespaceWidth =
+              piece === trimmedPiece
+                ? 0
+                : Math.max(0, width - measureTextWidth(trimmedPiece, style));
+            currentLine.regularSpaceCount += piece.split(" ").length - 1;
+            currentLine.nonBreakingSpaceCount += piece.split("\u00a0").length - 1;
+            currentLine.toRun = runIndex;
+            currentLine.toChar = endChar;
+            lastConsumed = endChar;
+          },
+          wrap: (fromChar) => {
+            startNewLine(runIndex, fromChar);
+            updateMaxFont(lineHeightStyle);
+          },
+        });
+        /* eslint-enable no-loop-func */
+        if (segmentConsumedUpTo >= text.length) {
+          continue;
+        }
+      }
+
       // Find word break points for wrapping
       const wordBreaks = findWordBreaks(text);
 
       // Process text word by word
-      let charIndex = 0;
+      let charIndex = segmentConsumedUpTo;
 
       while (charIndex < text.length) {
         // Find next word boundary

@@ -13,7 +13,7 @@ import JSZip from "jszip";
 
 import type { BlockContent, Comment, Document, Paragraph } from "../types/document";
 import { applyReplyThreadMarkers } from "./commentReplyMarkers";
-import { parseComments } from "./commentParser";
+import { parseComments, parseCommentsExtended } from "./commentParser";
 import { parseDocx } from "./parser";
 import { RELATIONSHIP_TYPES } from "./relsParser";
 import { replyToComment } from "./replyToComment";
@@ -23,7 +23,7 @@ import {
   ensureThreadedCommentParaIds,
   serializeComments,
   serializeCommentsExtended,
-} from "./serializer/commentSerializer";
+} from "./jubarte/emit/commentSerializer";
 
 const XML_DECLARATION = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
 
@@ -271,7 +271,7 @@ describe("comment reply threads — round-trip", () => {
     expect(commentById(reparsed, PARENT_ID)?.done).toBe(true);
   });
 
-  test("selective save keeps replies threaded (commentsExtended byte-exact)", async () => {
+  test("selective save keeps replies threaded (commentsExtended threading-equal)", async () => {
     const buffer = await buildThreadedDocx({ includeReplyMarkers: true, parentDone: false });
     const doc = await parse(buffer);
 
@@ -285,17 +285,25 @@ describe("comment reply threads — round-trip", () => {
       return;
     }
 
+    // The jubarte save rewrites commentsExtended.xml with the legacy FULL
+    // repack's serialization (explicit w15:done="0", mc namespace) — the
+    // byte-exactness of the retired selective patcher is gone, but the
+    // threading it encodes must be identical.
     const originalExtended = await readPart(buffer, "word/commentsExtended.xml");
     const savedExtended = await readPart(saved, "word/commentsExtended.xml");
-    expect(savedExtended).toBe(originalExtended);
+    expect(savedExtended).not.toBeNull();
+    expect(parseCommentsExtended(savedExtended ?? "")).toEqual(
+      parseCommentsExtended(originalExtended ?? ""),
+    );
 
     assertRepliesThreaded(await parse(saved));
   });
 
-  test("a done-less commentsExtended.xml stays byte-exact after an unrelated edit", async () => {
-    // The source omits the optional `w15:done` (defaults to "0"); an unrelated
-    // body edit must not rewrite commentsExtended.xml just because the serializer
-    // would write `w15:done="0"` explicitly.
+  test("a done-less commentsExtended.xml keeps its threading after an unrelated edit", async () => {
+    // The source omits the optional `w15:done` (defaults to "0"). The jubarte
+    // save rewrites the part with the legacy full-repack serialization
+    // (explicit w15:done="0"), so byte-exactness is gone; the parsed
+    // threading and done-state must survive an unrelated body edit intact.
     const buffer = await buildThreadedDocx({
       includeReplyMarkers: true,
       parentDone: false,
@@ -314,11 +322,16 @@ describe("comment reply threads — round-trip", () => {
       return;
     }
 
-    // The edit landed, but commentsExtended.xml is untouched (byte-exact).
     expect(await readPart(saved, "word/document.xml")).toContain("anchored text (edited)");
-    expect(await readPart(saved, "word/commentsExtended.xml")).toBe(
-      await readPart(buffer, "word/commentsExtended.xml"),
+    const savedInfo = parseCommentsExtended((await readPart(saved, "word/commentsExtended.xml")) ?? "");
+    const originalInfo = parseCommentsExtended(
+      (await readPart(buffer, "word/commentsExtended.xml")) ?? "",
     );
+    expect(savedInfo.size).toBe(originalInfo.size);
+    for (const [paraId, info] of originalInfo) {
+      expect(savedInfo.get(paraId)?.parentParaId).toBe(info.parentParaId);
+      expect(savedInfo.get(paraId)?.done ?? false).toBe(info.done ?? false);
+    }
     assertRepliesThreaded(await parse(saved));
   });
 
@@ -335,7 +348,7 @@ describe("comment reply threads — round-trip", () => {
     assertRepliesThreaded(await parse(saved));
   });
 
-  test("selective save bails when a reply lacks its own anchor", async () => {
+  test("selective save synthesizes reply markers when a reply lacks its own anchor", async () => {
     const buffer = await buildThreadedDocx({ includeReplyMarkers: false, parentDone: false });
     const doc = await parse(buffer);
     const saved = await attemptSelectiveSave(doc, buffer, {
@@ -343,9 +356,11 @@ describe("comment reply threads — round-trip", () => {
       structuralChange: false,
       hasUntrackedChanges: false,
     });
-    // The reply's anchor must be synthesized on the parent's paragraph, which
-    // the selective path cannot do — it hands off to the full repack.
-    expect(saved).toBeNull();
+    // Legacy: bail to full repack (which owned the marker synthesis). The
+    // jubarte save runs the same synthesis itself, so the save succeeds and
+    // the replies round-trip anchored.
+    expect(saved).not.toBeNull();
+    assertRepliesThreaded(await parse(saved!));
   });
 });
 
@@ -429,7 +444,7 @@ describe("comment reply threads — package lifecycle + deterministic ids", () =
     expect(validation.valid).toBe(true);
   });
 
-  test("selective save bails to full repack when a thread must be removed", async () => {
+  test("selective save removes the thread's sidecar cleanly (legacy bail retired)", async () => {
     const buffer = await buildThreadedDocx({ includeReplyMarkers: false, parentDone: true });
     const doc = await parse(buffer);
     const parent = commentById(doc, PARENT_ID);
@@ -439,12 +454,24 @@ describe("comment reply threads — package lifecycle + deterministic ids", () =
     delete parent.done;
     doc.package.document.comments = [parent];
 
+    // Legacy: bail to full repack, which owned removing the part + its
+    // content-type override + its relationship as a unit. The jubarte save
+    // performs the same removal itself.
     const saved = await attemptSelectiveSave(doc, buffer, {
       changedParaIds: new Set(),
       structuralChange: false,
       hasUntrackedChanges: false,
     });
-    expect(saved).toBeNull();
+    expect(saved).not.toBeNull();
+    const zip = await JSZip.loadAsync(saved!);
+    expect(zip.file("word/commentsExtended.xml")).toBeNull();
+    expect((await readPart(saved!, "[Content_Types].xml")).toLowerCase()).not.toContain(
+      "commentsextended.xml",
+    );
+    expect((await readPart(saved!, "word/_rels/document.xml.rels")).toLowerCase()).not.toContain(
+      "commentsextended.xml",
+    );
+    expect((await validateDocx(saved!)).valid).toBe(true);
   });
 
   test("synthesis does not crash on a malformed paragraph with no content", () => {

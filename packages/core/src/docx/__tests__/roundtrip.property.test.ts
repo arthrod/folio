@@ -24,7 +24,7 @@ import { fromProseDoc } from "../../prosemirror/conversion/fromProseDoc";
 import { toProseDoc } from "../../prosemirror/conversion/toProseDoc";
 import { schema } from "../../prosemirror/schema";
 import { parseDocumentBody } from "../documentParser";
-import { serializeDocument } from "../serializer/documentSerializer";
+import { serializeDocument } from "./emitTestHelpers";
 
 // ============================================================================
 // ARBITRARIES — generators for random ProseMirror content

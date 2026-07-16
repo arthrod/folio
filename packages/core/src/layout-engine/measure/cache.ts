@@ -5,6 +5,8 @@
  * Improves performance by avoiding repeated measurements of identical content.
  */
 
+import { clearSegmentFitEngineCaches } from "./segmentFit";
+
 import type { ParagraphBlock, ParagraphMeasure } from "../types";
 
 // =============================================================================
@@ -419,6 +421,7 @@ export function getParagraphCacheSize(): number {
  * Call when fonts change, page width changes, or for testing
  */
 export function clearAllCaches(): void {
+  clearSegmentFitEngineCaches();
   clearTextWidthCache();
   clearFontMetricsCache();
   clearParagraphMeasureCache();
