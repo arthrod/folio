@@ -485,25 +485,41 @@ const MIME_TO_EXT: Record<string, string> = {
 /**
  * Decode a data URL to binary ArrayBuffer and file extension.
  */
-function decodeDataUrl(dataUrl: string): {
+export function decodeDataUrl(dataUrl: string): {
   data: ArrayBuffer;
   extension: string;
 } {
-  const match = /^data:(?<mime>[^;]+);base64,(?<data>.+)$/u.exec(dataUrl);
+  // `data:<mediatype>,<data>` where mediatype may carry parameters
+  // (`image/svg+xml;charset=utf-8`) and an optional `;base64` marker. SVG icons
+  // in modern Word docs round-trip as *percent-encoded* (not base64) data URLs,
+  // so a base64-only decoder panicked and crashed the whole save.
+  const match = /^data:(?<mediatype>[^,]*),(?<data>[\s\S]*)$/u.exec(dataUrl);
   if (!match) {
     panic("Invalid data URL");
   }
 
-  // SAFETY: named groups `mime` and `data` always present when regex matches
-  const binary = atob(match.groups!["data"]!);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.codePointAt(i) ?? 0;
+  // SAFETY: named groups always present when the regex matches
+  const mediatype = match.groups!["mediatype"]!;
+  const rawData = match.groups!["data"]!;
+  const params = mediatype.split(";");
+  const mime = (params[0] || "").trim();
+  const isBase64 = params.slice(1).some((p) => p.trim().toLowerCase() === "base64");
+
+  let bytes: Uint8Array;
+  if (isBase64) {
+    const binary = atob(rawData);
+    bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.codePointAt(i) ?? 0;
+    }
+  } else {
+    // Percent-encoded text payload (e.g. inline SVG markup).
+    bytes = new TextEncoder().encode(decodeURIComponent(rawData));
   }
 
   return {
     data: bytes.buffer,
-    extension: MIME_TO_EXT[match.groups!["mime"]!] ?? "png",
+    extension: MIME_TO_EXT[mime] ?? "png",
   };
 }
 
