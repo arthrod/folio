@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.premirror-base.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": ["bun"],
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@chenglou/pretext": ["./src/shims/pretext-stub.ts"]
+    }
+  },
+  "include": ["src"]
+}

@@ -206,5 +206,16 @@ export default library({
         "folio-layer-boundaries/model-is-pure-data": "error",
       },
     },
+    {
+      // Vendored premirror packages (see per-package UPSTREAM.md). Upstream
+      // style predates folio's unicorn posture; keep the vendored diff small
+      // and PR real fixes upstream instead of fork-drifting for lint style.
+      files: ["packages/premirror-*/**/*.{ts,tsx}"],
+      rules: {
+        "unicorn/prefer-at": "off",
+        "unicorn/no-new-array": "off",
+        "no-loop-func": "off",
+      },
+    },
   ],
 });
