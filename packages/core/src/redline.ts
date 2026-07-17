@@ -38,6 +38,21 @@ import {
   type RedlineRevision,
 } from "./redline-engine";
 import { storyRedlineEngine } from "./redline-engine-story";
+import {
+  compareLossless,
+  extractComparableDocxContent,
+  type ComparableDocxContent,
+} from "./redline-lossless-verify";
+
+/**
+ * Which self-check the orchestrator runs. `folio-reviewer` (default) reads text
+ * through `FolioDocxReviewer` — an editorial projection that drops OOXML it does
+ * not model, so it can fail a byte-faithful engine as a false negative.
+ * `engine-lossless` reads it through folio's XML-direct extractor
+ * (`extractDocxText`) and the engine's own byte-faithful accept/reject; byte
+ * engines (jubarte) should select it.
+ */
+export type RedlineSelfCheckMode = "folio-reviewer" | "engine-lossless";
 
 export type { GenerateRedlineUnprocessedStory } from "./redline-engine";
 
@@ -56,6 +71,14 @@ export type GenerateRedlineDocxOptions = {
    * self-check wins. (default: the story-based engine)
    */
   engines?: RedlineEngine[];
+  /**
+   * Which self-check to run. (default: `"folio-reviewer"`) Byte engines should
+   * pass `"engine-lossless"`, which judges the engine's own accept-all /
+   * reject-all output through folio's XML-direct extractor rather than the
+   * editorial reviewer, whose omitted OOXML (e.g. a deleted hyperlink in a
+   * table cell) fails a faithful engine as a false negative.
+   */
+  selfCheck?: RedlineSelfCheckMode;
 };
 
 export class InvalidGenerateRedlineDocxOptionsError extends TaggedError(
@@ -247,6 +270,57 @@ const verifyRedlineBuffer = async ({
 };
 
 /**
+ * The self-check strategy, chosen once per call. `folio` reads text through
+ * `FolioDocxReviewer` (default; lossy for OOXML the model omits). `lossless`
+ * reads it through an injected `wmlToJson` projection and the engine's own
+ * byte-faithful accept/reject — losslessly, so a faithful engine is not failed
+ * as a false negative.
+ */
+type VerifyStrategy =
+  | { kind: "folio"; baseTexts: StoryTexts; revisedTexts: StoryTexts }
+  | { kind: "lossless"; base: ComparableDocxContent; revised: ComparableDocxContent };
+
+const resolveLosslessRefs = async (
+  base: ArrayBuffer,
+  revised: ArrayBuffer,
+): Promise<{ base: ComparableDocxContent; revised: ComparableDocxContent }> => {
+  const [baseContent, revisedContent] = await Promise.all([
+    extractComparableDocxContent(base),
+    extractComparableDocxContent(revised),
+  ]);
+  return { base: baseContent, revised: revisedContent };
+};
+
+/**
+ * Lossless self-check: apply the engine's own accept-all / reject-all to the
+ * output, read both through folio's XML-direct extractor, and compare to the
+ * revised / base documents. Returns a mismatch description, or `null`.
+ */
+const verifyRedlineBufferLossless = async (
+  engine: RedlineEngine,
+  buffer: ArrayBuffer,
+  strategy: Extract<VerifyStrategy, { kind: "lossless" }>,
+): Promise<string | null> => {
+  let accepted: ArrayBuffer;
+  let rejected: ArrayBuffer;
+  try {
+    [accepted, rejected] = await Promise.all([engine.acceptAll(buffer), engine.rejectAll(buffer)]);
+  } catch (error) {
+    return `engine accept/reject failed: ${String(error)}`;
+  }
+  const [acceptedContent, rejectedContent] = await Promise.all([
+    extractComparableDocxContent(accepted),
+    extractComparableDocxContent(rejected),
+  ]);
+  return compareLossless({
+    accepted: acceptedContent,
+    rejected: rejectedContent,
+    base: strategy.base,
+    revised: strategy.revised,
+  });
+};
+
+/**
  * Compare two buffers and return tracked changes for every matched editable
  * story, produced by the first engine in the ladder whose output verifies.
  */
@@ -267,8 +341,16 @@ export const generateRedlineDocx = async (
     resolveRedlineInput(base, baseView),
     resolveRedlineInput(revised, revisedView),
   ]);
-  const baseTexts = collectStoryTexts(baseInput.reviewer, "final");
-  const revisedTexts = collectStoryTexts(revisedInput.reviewer, "final");
+  // Folio references are only read by the default self-check; the lossless
+  // strategy needs neither them nor the (lossy) folio reviewer as a reference.
+  const strategy: VerifyStrategy =
+    options.selfCheck === "engine-lossless"
+      ? { kind: "lossless", ...(await resolveLosslessRefs(baseInput.buffer, revisedInput.buffer)) }
+      : {
+          kind: "folio",
+          baseTexts: collectStoryTexts(baseInput.reviewer, "final"),
+          revisedTexts: collectStoryTexts(revisedInput.reviewer, "final"),
+        };
 
   const attempts: RedlineEngineAttempt[] = [];
   for (const engine of engines) {
@@ -280,25 +362,30 @@ export const generateRedlineDocx = async (
       continue;
     }
 
-    // Stories the engine reported as present on only one side are not required
-    // to round-trip; exempt them by their resolved text.
-    const exemptBaseTexts = new Set<string>();
-    const exemptRevisedTexts = new Set<string>();
-    for (const entry of compared.unprocessedStories ?? []) {
-      if (entry.baseStory) {
-        exemptBaseTexts.add(resolveHandleText(baseInput.reviewer, entry.baseStory));
+    let mismatch: string | null;
+    if (strategy.kind === "lossless") {
+      mismatch = await verifyRedlineBufferLossless(engine, compared.buffer, strategy);
+    } else {
+      // Stories the engine reported as present on only one side are not required
+      // to round-trip; exempt them by their resolved text.
+      const exemptBaseTexts = new Set<string>();
+      const exemptRevisedTexts = new Set<string>();
+      for (const entry of compared.unprocessedStories ?? []) {
+        if (entry.baseStory) {
+          exemptBaseTexts.add(resolveHandleText(baseInput.reviewer, entry.baseStory));
+        }
+        if (entry.revisedStory) {
+          exemptRevisedTexts.add(resolveHandleText(revisedInput.reviewer, entry.revisedStory));
+        }
       }
-      if (entry.revisedStory) {
-        exemptRevisedTexts.add(resolveHandleText(revisedInput.reviewer, entry.revisedStory));
-      }
+      mismatch = await verifyRedlineBuffer({
+        buffer: compared.buffer,
+        baseTexts: strategy.baseTexts,
+        revisedTexts: strategy.revisedTexts,
+        exemptBaseTexts,
+        exemptRevisedTexts,
+      });
     }
-    const mismatch = await verifyRedlineBuffer({
-      buffer: compared.buffer,
-      baseTexts,
-      revisedTexts,
-      exemptBaseTexts,
-      exemptRevisedTexts,
-    });
     if (mismatch !== null) {
       attempts.push({ engine: engine.name, phase: "self-check", message: mismatch });
       continue;
