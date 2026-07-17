@@ -1328,13 +1328,6 @@ function extractParagraphContent(
       const otherMarks = node.marks.filter(
         (m) => m.type.name !== "insertion" && m.type.name !== "deletion",
       );
-      const run = createTrackedChangeRun(node, otherMarks);
-      if (!run) {
-        return;
-      }
-      const trackedContent: Run | Hyperlink = linkMark
-        ? { ...createHyperlink(linkMark), children: [run] }
-        : run;
 
       const info: TrackedChangeInfo = {
         id: changeAttrs.revisionId,
@@ -1343,6 +1336,34 @@ function extractParagraphContent(
       if (changeAttrs.date) {
         info.date = changeAttrs.date;
       }
+
+      // A field atom cannot live inside the wrapper's (Run | Hyperlink)[]
+      // content; its revision rides on the field itself. Without this branch
+      // a tracked field node was dropped from the saved document entirely.
+      if (node.type.name === "field") {
+        const field = createFieldFromNode(node, otherMarks);
+        if (insertionMark) {
+          field.trackedChange = {
+            kind: changeAttrs.moveKind === "moveTo" ? "moveTo" : "insertion",
+            info,
+          };
+        } else {
+          field.trackedChange = {
+            kind: changeAttrs.moveKind === "moveFrom" ? "moveFrom" : "deletion",
+            info,
+          };
+        }
+        content.push(field);
+        return;
+      }
+
+      const run = createTrackedChangeRun(node, otherMarks);
+      if (!run) {
+        return;
+      }
+      const trackedContent: Run | Hyperlink = linkMark
+        ? { ...createHyperlink(linkMark), children: [run] }
+        : run;
       // The mark itself records whether it originated as a
       // `w:moveTo` / `w:moveFrom`. The previous "is there both an
       // insertion AND a deletion with the same revisionId somewhere

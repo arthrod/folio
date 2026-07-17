@@ -1102,15 +1102,33 @@ function pushTrackedChangeSegments({
   info,
   parsedContent,
 }: PushTrackedChangeSegmentsParams): void {
+  // A field is assembled from its fldChar runs into one atom, so it cannot be
+  // a wrapper child. The revision rides on the field itself; pushing it bare
+  // would resurrect a tracked-deleted field as accepted content on save.
+  const attachFieldTrackedChange = (content: ParagraphContent): ParagraphContent => {
+    if (content.type !== "simpleField" && content.type !== "complexField") {
+      return content;
+    }
+    return { ...content, trackedChange: { kind: type, info } };
+  };
+
   if (!parsedContent.some(isTrackedChangeWrapperChild)) {
-    pushTrackedChangeWrapper({
-      contents,
-      type,
-      info,
-      content: [],
-      preserveEmpty: true,
-    });
-    contents.push(...parsedContent);
+    const hasField = parsedContent.some(
+      (content) => content.type === "simpleField" || content.type === "complexField",
+    );
+    // Only keep the empty wrapper when nothing else carries the revision:
+    // once a field absorbs it, an extra empty wrapper would accrete a new
+    // empty w:ins/w:del on every round-trip.
+    if (!hasField) {
+      pushTrackedChangeWrapper({
+        contents,
+        type,
+        info,
+        content: [],
+        preserveEmpty: true,
+      });
+    }
+    contents.push(...parsedContent.map(attachFieldTrackedChange));
     return;
   }
 
@@ -1124,7 +1142,7 @@ function pushTrackedChangeSegments({
 
     pushTrackedChangeWrapper({ contents, type, info, content: segment });
     segment.length = 0;
-    contents.push(content);
+    contents.push(attachFieldTrackedChange(content));
   }
 
   pushTrackedChangeWrapper({ contents, type, info, content: segment });
@@ -2028,8 +2046,15 @@ function styleChainInd(
 // UTILITY FUNCTIONS
 // ============================================================================
 
+function isDeletedField(field: SimpleField | ComplexField): boolean {
+  return field.trackedChange?.kind === "deletion" || field.trackedChange?.kind === "moveFrom";
+}
+
 /**
  * Get plain text from a paragraph
+ *
+ * Tracked-deleted fields are excluded, matching runs inside a
+ * Deletion/MoveFrom wrapper (which this function never traverses).
  *
  * @param paragraph - Parsed Paragraph object
  * @returns Concatenated text content
@@ -2063,6 +2088,9 @@ export function getParagraphText(paragraph: Paragraph): string {
         }
       }
     } else if (content.type === "simpleField") {
+      if (isDeletedField(content)) {
+        continue;
+      }
       for (const child of content.content) {
         if (child.type === "run") {
           for (const runContent of child.content) {
@@ -2073,6 +2101,9 @@ export function getParagraphText(paragraph: Paragraph): string {
         }
       }
     } else if (content.type === "complexField") {
+      if (isDeletedField(content)) {
+        continue;
+      }
       for (const run of content.fieldResult) {
         for (const runContent of run.content) {
           if (runContent.type === "text") {

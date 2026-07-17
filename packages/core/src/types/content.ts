@@ -18,6 +18,7 @@ export type {
   EndnoteProperties,
   Field,
   FieldCharContent,
+  FieldTrackedChange,
   FieldType,
   FooterReference,
   Footnote,

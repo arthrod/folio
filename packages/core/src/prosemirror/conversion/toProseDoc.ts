@@ -2012,7 +2012,7 @@ function convertField(
   const inheritedFormatting = getInheritedRunFormatting(fieldFormatting, field.fieldType);
   const { marks } = buildRunMarks(fieldFormatting, inheritedFormatting, styleResolver);
 
-  return schema.node(
+  const fieldNode = schema.node(
     "field",
     {
       fieldType: field.fieldType,
@@ -2025,6 +2025,26 @@ function convertField(
     undefined,
     marks,
   );
+
+  // A field parsed out of a w:ins/w:del wrapper carries its revision on the
+  // field itself (the wrapper's content cannot hold the assembled atom).
+  // Surface it as the same insertion/deletion mark runs use, so the editor
+  // renders it as tracked and fromProseDoc can restore the wrapper on save.
+  const change = field.trackedChange;
+  if (!change) {
+    return fieldNode;
+  }
+  const markType =
+    change.kind === "deletion" || change.kind === "moveFrom" ? "deletion" : "insertion";
+  const moveKind = change.kind === "moveFrom" || change.kind === "moveTo" ? change.kind : null;
+  // SAFETY: markType is "insertion" | "deletion", both registered in schema
+  const mark = schema.marks[markType]!.create({
+    revisionId: change.info.id,
+    author: change.info.author,
+    date: change.info.date ?? null,
+    moveKind,
+  });
+  return fieldNode.mark(mark.addToSet(fieldNode.marks));
 }
 
 /**

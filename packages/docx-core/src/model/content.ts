@@ -285,6 +285,19 @@ export type FieldType =
   | "UNKNOWN";
 
 /**
+ * Tracked-change wrapper a field was parsed out of (`w:ins`/`w:del`/
+ * `w:moveFrom`/`w:moveTo` around the field's runs). A field is assembled from
+ * its `fldChar` runs into one atom, so the wrapper's `(Run | Hyperlink)[]`
+ * content cannot hold it as a child; the marker keeps the revision on the
+ * field itself so a tracked-deleted field does not resurrect as accepted
+ * content on save.
+ */
+export type FieldTrackedChange = {
+  kind: "insertion" | "deletion" | "moveFrom" | "moveTo";
+  info: TrackedChangeInfo;
+};
+
+/**
  * Simple field (w:fldSimple)
  */
 export type SimpleField = {
@@ -299,6 +312,8 @@ export type SimpleField = {
   fldLock?: boolean;
   /** Field is dirty */
   dirty?: boolean;
+  /** Tracked change (w:ins/w:del/…) that wrapped this field's runs */
+  trackedChange?: FieldTrackedChange;
 };
 
 /**
@@ -325,6 +340,8 @@ export type ComplexField = {
   fldLock?: boolean;
   /** Field is dirty */
   dirty?: boolean;
+  /** Tracked change (w:ins/w:del/…) that wrapped this field's runs */
+  trackedChange?: FieldTrackedChange;
 };
 
 export type Field = SimpleField | ComplexField;
