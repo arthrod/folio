@@ -611,7 +611,11 @@ function serializeHyperlink(hyperlink: Hyperlink): string {
       if (child.type === "bookmarkStart") {
         return serializeBookmarkStart(child);
       }
-      return serializeBookmarkEnd(child);
+      if (child.type === "bookmarkEnd") {
+        return serializeBookmarkEnd(child);
+      }
+      // Tracked-changed linked text: `<w:hyperlink>` > `<w:ins>`/`<w:del>`.
+      return serializeTrackedChange(child.type === "insertion" ? "ins" : "del", child);
     })
     .join("");
 

@@ -2572,6 +2572,13 @@ function convertHyperlink(
     _docxHyperlinkIndex: hyperlinkIndex,
   });
 
+  // Apply the hyperlink mark to a tracked-change node's text/inline content so
+  // deleted/inserted linked text keeps both its revision mark and its link.
+  const withLinkMark = (node: PMNode): PMNode =>
+    node.isText || (node.isInline && node.type.allowsMarkType(linkMark.type))
+      ? node.mark(linkMark.addToSet(node.marks))
+      : node;
+
   for (const child of hyperlink.children) {
     if (child.type === "run") {
       // Merge style formatting with run's inline formatting
@@ -2590,6 +2597,26 @@ function convertHyperlink(
       // collapsing the right-aligned page number flush against the title.
       for (const content of child.content) {
         nodes.push(...convertRunContent(content, allMarks, mergedFormatting, textBoxAnchors));
+      }
+    } else if (child.type === "insertion") {
+      // A tracked insertion/deletion of the linked text itself. Convert it the
+      // same way body content does, then layer the hyperlink mark on top.
+      for (const node of convertTrackedChange(
+        child,
+        "insertion",
+        getInheritedRunFormatting,
+        styleResolver,
+      )) {
+        nodes.push(withLinkMark(node));
+      }
+    } else if (child.type === "deletion") {
+      for (const node of convertTrackedChange(
+        child,
+        "deletion",
+        getInheritedRunFormatting,
+        styleResolver,
+      )) {
+        nodes.push(withLinkMark(node));
       }
     }
   }

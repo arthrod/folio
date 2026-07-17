@@ -20,6 +20,7 @@ import type {
   Run,
   BookmarkStart,
   BookmarkEnd,
+  TrackedChangeInfo,
   Theme,
   RelationshipMap,
   MediaFile,
@@ -48,6 +49,86 @@ function getLocalName(name: string | undefined): string {
   }
   const colonIndex = name.indexOf(":");
   return colonIndex !== -1 ? name.slice(colonIndex + 1) : name;
+}
+
+/** Swap an element's local name, preserving its namespace prefix. */
+function replaceLocalName(name: string | undefined, newLocal: string): string {
+  if (!name) {
+    return newLocal;
+  }
+  const colonIndex = name.indexOf(":");
+  return colonIndex !== -1 ? `${name.slice(0, colonIndex + 1)}${newLocal}` : newLocal;
+}
+
+/**
+ * Inside `<w:del>`, runs use `<w:delText>`/`<w:delInstrText>`. Rename them to
+ * `<w:t>`/`<w:instrText>` (recursively) so the shared run parser reads the
+ * deleted text — mirrors the paragraph parser's deletion normalization.
+ */
+function normalizeDeletionContentElement(node: XmlElement): XmlElement {
+  if (node.type !== "element") {
+    return node;
+  }
+  const localName = getLocalName(node.name);
+  let mappedName = node.name;
+  if (localName === "delText") {
+    mappedName = replaceLocalName(node.name, "t");
+  } else if (localName === "delInstrText") {
+    mappedName = replaceLocalName(node.name, "instrText");
+  }
+  const result: XmlElement = { ...node };
+  if (mappedName !== undefined) {
+    result.name = mappedName;
+  }
+  if (node.elements) {
+    result.elements = node.elements.map(normalizeDeletionContentElement);
+  }
+  return result;
+}
+
+/** Parse `w:id`/`w:author`/`w:date` off a tracked-change wrapper. */
+function parseTrackedChangeInfo(node: XmlElement): TrackedChangeInfo {
+  const rawId = getAttribute(node, "w", "id");
+  const parsedId = rawId ? Number.parseInt(rawId, 10) : 0;
+  const author = (getAttribute(node, "w", "author") ?? "").trim();
+  const date = (getAttribute(node, "w", "date") ?? "").trim();
+  const info: TrackedChangeInfo = {
+    id: Number.isInteger(parsedId) && parsedId >= 0 ? parsedId : 0,
+    author: author.length > 0 ? author : "Unknown",
+  };
+  if (date.length > 0) {
+    info.date = date;
+  }
+  return info;
+}
+
+type HyperlinkChildParseContext = {
+  styles: StyleMap | null;
+  theme: Theme | null;
+  rels: RelationshipMap | null;
+  media: Map<string, MediaFile> | null;
+  inScopeXmlns: Record<string, string>;
+};
+
+/** Parse the runs/hyperlinks inside a `<w:del>`/`<w:ins>` nested in a hyperlink. */
+function parseTrackedChangeContent(
+  node: XmlElement,
+  isDeletion: boolean,
+  ctx: HyperlinkChildParseContext,
+): (Run | Hyperlink)[] {
+  const source = isDeletion ? normalizeDeletionContentElement(node) : node;
+  const content: (Run | Hyperlink)[] = [];
+  for (const child of getChildElements(source)) {
+    const localName = getLocalName(child.name);
+    if (localName === "r") {
+      content.push(parseRun(child, ctx.styles, ctx.theme, ctx.rels, ctx.media, ctx.inScopeXmlns));
+    } else if (localName === "hyperlink") {
+      content.push(
+        parseHyperlink(child, ctx.rels, ctx.styles, ctx.theme, ctx.media, ctx.inScopeXmlns),
+      );
+    }
+  }
+  return content;
 }
 
 /**
@@ -197,6 +278,28 @@ export function parseHyperlink(
       case "bookmarkEnd":
         hyperlink.children.push(parseBookmarkEnd(child));
         break;
+
+      // A hyperlink's display text can be tracked-changed (`<w:hyperlink>` >
+      // `<w:del>`/`<w:ins>` > `<w:r>`). Without these cases the runs fall to
+      // `default` and the linked text is silently dropped from the document.
+      case "ins": {
+        const ctx = { styles, theme, rels, media, inScopeXmlns };
+        hyperlink.children.push({
+          type: "insertion",
+          info: parseTrackedChangeInfo(child),
+          content: parseTrackedChangeContent(child, false, ctx),
+        });
+        break;
+      }
+      case "del": {
+        const ctx = { styles, theme, rels, media, inScopeXmlns };
+        hyperlink.children.push({
+          type: "deletion",
+          info: parseTrackedChangeInfo(child),
+          content: parseTrackedChangeContent(child, true, ctx),
+        });
+        break;
+      }
 
       // Note: hyperlinks can technically contain other elements like
       // fldSimple, but these are rare. Add support as needed.

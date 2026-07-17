@@ -192,8 +192,13 @@ export type Hyperlink = {
   history?: boolean;
   /** Document location */
   docLocation?: string;
-  /** Child runs */
-  children: (Run | BookmarkStart | BookmarkEnd)[];
+  /**
+   * Child content. Usually runs and bookmarks, but a hyperlink's display text
+   * can itself be tracked-changed (`<w:hyperlink><w:del>…`), so deletions and
+   * insertions are valid children too — dropping them silently loses the linked
+   * text from the document.
+   */
+  children: (Run | BookmarkStart | BookmarkEnd | Deletion | Insertion)[];
 };
 
 /**
