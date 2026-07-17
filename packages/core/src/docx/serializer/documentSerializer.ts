@@ -55,6 +55,7 @@ const NAMESPACES = {
   w16: "http://schemas.microsoft.com/office/word/2018/wordml",
   w16sdtdh: "http://schemas.microsoft.com/office/word/2020/wordml/sdtdatahash",
   w16se: "http://schemas.microsoft.com/office/word/2015/wordml/symex",
+  w16du: "http://schemas.microsoft.com/office/word/2023/wordml/word16du",
   wpg: "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup",
   wpi: "http://schemas.microsoft.com/office/word/2010/wordprocessingInk",
   wne: "http://schemas.microsoft.com/office/word/2006/wordml",
@@ -90,6 +91,7 @@ function buildNamespaceDeclarations(): string {
     w16cid: NAMESPACES.w16cid,
     w16sdtdh: NAMESPACES.w16sdtdh,
     w16se: NAMESPACES.w16se,
+    w16du: NAMESPACES.w16du,
     wpg: NAMESPACES.wpg,
     wps: NAMESPACES.wps,
   };

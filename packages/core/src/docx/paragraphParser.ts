@@ -946,8 +946,10 @@ function parseTrackedChangeInfo(node: XmlElement): TrackedChangeInfo {
   const parsedId = rawId ? Number.parseInt(rawId, 10) : 0;
   const rawAuthor = getAttribute(node, "w", "author");
   const rawDate = getAttribute(node, "w", "date");
+  const rawDateUtc = getAttribute(node, "w16du", "dateUtc");
   const author = rawAuthor?.trim() ?? "";
   const date = rawDate?.trim() ?? "";
+  const dateUtc = rawDateUtc?.trim() ?? "";
 
   const info: TrackedChangeInfo = {
     id: Number.isInteger(parsedId) && parsedId >= 0 ? parsedId : 0,
@@ -955,6 +957,9 @@ function parseTrackedChangeInfo(node: XmlElement): TrackedChangeInfo {
   };
   if (date.length > 0) {
     info.date = date;
+  }
+  if (dateUtc.length > 0) {
+    info.dateUtc = dateUtc;
   }
   return info;
 }

@@ -375,6 +375,9 @@ function serializeTrackedChangeAttrs(info: TrackedChangeInfo): string {
   if (info.date !== undefined) {
     parts.push(`w:date="${escapeXml(info.date)}"`);
   }
+  if (info.dateUtc !== undefined) {
+    parts.push(`w16du:dateUtc="${escapeXml(info.dateUtc)}"`);
+  }
   return parts.join(" ");
 }
 
@@ -547,10 +550,15 @@ function serializeParagraphPropertyChange(change: ParagraphPropertyChange): stri
   const authorCandidate = typeof change.info.author === "string" ? change.info.author.trim() : "";
   const normalizedAuthor = authorCandidate.length > 0 ? authorCandidate : "Unknown";
   const normalizedDate = typeof change.info.date === "string" ? change.info.date.trim() : undefined;
+  const normalizedDateUtc =
+    typeof change.info.dateUtc === "string" ? change.info.dateUtc.trim() : undefined;
   const normalizedRsid = typeof change.info.rsid === "string" ? change.info.rsid.trim() : undefined;
   const attrs = [`w:id="${normalizedId}"`, `w:author="${escapeXml(normalizedAuthor)}"`];
   if (normalizedDate) {
     attrs.push(`w:date="${escapeXml(normalizedDate)}"`);
+  }
+  if (normalizedDateUtc) {
+    attrs.push(`w16du:dateUtc="${escapeXml(normalizedDateUtc)}"`);
   }
   if (normalizedRsid) {
     attrs.push(`w:rsid="${escapeXml(normalizedRsid)}"`);
@@ -943,9 +951,13 @@ function serializeTrackedChange(
   const authorCandidate = typeof info.author === "string" ? info.author.trim() : "";
   const normalizedAuthor = authorCandidate.length > 0 ? authorCandidate : "Unknown";
   const normalizedDate = typeof info.date === "string" ? info.date.trim() : undefined;
+  const normalizedDateUtc = typeof info.dateUtc === "string" ? info.dateUtc.trim() : undefined;
   const attrs = [`w:id="${normalizedId}"`, `w:author="${escapeXml(normalizedAuthor)}"`];
   if (normalizedDate) {
     attrs.push(`w:date="${escapeXml(normalizedDate)}"`);
+  }
+  if (normalizedDateUtc) {
+    attrs.push(`w16du:dateUtc="${escapeXml(normalizedDateUtc)}"`);
   }
 
   const serializeDeletedRun = (run: Run): string => {
