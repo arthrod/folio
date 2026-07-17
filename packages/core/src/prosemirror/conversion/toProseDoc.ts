@@ -623,6 +623,7 @@ function paragraphFormattingToAttrs(
     set("spaceAfter", formatting?.spaceAfter ?? stylePpr?.spaceAfter);
     set("lineSpacing", formatting?.lineSpacing ?? stylePpr?.lineSpacing);
     set("lineSpacingRule", formatting?.lineSpacingRule ?? stylePpr?.lineSpacingRule);
+    set("snapToGrid", formatting?.snapToGrid ?? stylePpr?.snapToGrid);
     set("spacingExplicit", formatting?.spacingExplicit);
     const paragraphStyle = styleId
       ? (styleResolver.getStyle(styleId) ?? styleResolver.getDefaultParagraphStyle())
@@ -727,6 +728,7 @@ function paragraphFormattingToAttrs(
     set("spaceAfter", formatting?.spaceAfter);
     set("lineSpacing", formatting?.lineSpacing);
     set("lineSpacingRule", formatting?.lineSpacingRule);
+    set("snapToGrid", formatting?.snapToGrid);
     set("spacingExplicit", formatting?.spacingExplicit);
     set("indentLeft", formatting?.indentLeft);
     set("indentRight", formatting?.indentRight);
@@ -1850,6 +1852,10 @@ function convertTableCell({
   }
   if (formatting?.noWrap !== undefined) {
     attrs.noWrap = formatting.noWrap;
+  }
+  const hideMark = formatting?.hideMark ?? conditionalStyle?.tcPr?.hideMark;
+  if (hideMark !== undefined) {
+    attrs.hideMark = hideMark;
   }
   if (effectiveFormatting.borders) {
     attrs.borders = effectiveFormatting.borders;

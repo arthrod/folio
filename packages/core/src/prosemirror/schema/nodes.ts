@@ -70,6 +70,7 @@ export type ParagraphAttrs = {
   spaceAfter?: number;
   lineSpacing?: number;
   lineSpacingRule?: LineSpacingRule;
+  snapToGrid?: boolean;
   spacingExplicit?: SpacingExplicit;
   /** Layout provenance: document defaults survive on empty paragraphs. */
   spacingFromDocDefaults?: SpacingExplicit;
@@ -666,6 +667,8 @@ export type TableCellAttrs = {
   textDirection?: NonNullable<TableCellFormatting["textDirection"]>;
   /** No text wrapping in cell */
   noWrap?: boolean;
+  /** Effective end-of-cell marker suppression (`w:hideMark`). */
+  hideMark?: boolean;
   /** Cell borders — full BorderSpec per side (style, color, size) */
   borders?: TableCellBorders;
   /** Cell margins/padding in twips per side */

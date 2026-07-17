@@ -6,6 +6,44 @@ import { AUTO_PARAGRAPH_SPACING_PX } from "../../utils/units";
 import { toFlowBlocks } from "./toFlowBlocks";
 
 describe("toFlowBlocks paragraph formatting", () => {
+  test("stamps each top-level paragraph with its section line pitch", () => {
+    const doc = schema.node("doc", null, [
+      schema.node("paragraph", { _sectionProperties: { docGrid: { linePitch: 360 } } }, [
+        schema.text("First section"),
+      ]),
+      schema.node("paragraph", null, [schema.text("Final section")]),
+    ]);
+
+    const blocks = toFlowBlocks(doc, { finalSectionDocumentGridLinePitchTwips: 480 });
+    const paragraphs = blocks.filter((block) => block.kind === "paragraph");
+
+    expect(paragraphs.at(0)?.attrs?.documentGridLinePitch).toBe(24);
+    expect(paragraphs.at(1)?.attrs?.documentGridLinePitch).toBe(32);
+  });
+
+  test("does not apply the body line grid to table-cell paragraphs", () => {
+    const table = schema.node("table", null, [
+      schema.node("tableRow", null, [
+        schema.node("tableCell", null, [schema.node("paragraph", null, [schema.text("Cell")])]),
+      ]),
+    ]);
+    const blocks = toFlowBlocks(schema.node("doc", null, [table]), {
+      finalSectionDocumentGridLinePitchTwips: 360,
+    });
+    const tableBlock = blocks.at(0);
+
+    expect(tableBlock?.kind).toBe("table");
+    if (tableBlock?.kind !== "table") {
+      return;
+    }
+    const cellParagraph = tableBlock.rows.at(0)?.cells.at(0)?.blocks.at(0);
+    expect(cellParagraph?.kind).toBe("paragraph");
+    if (cellParagraph?.kind !== "paragraph") {
+      return;
+    }
+    expect(cellParagraph.attrs?.documentGridLinePitch).toBeUndefined();
+  });
+
   test("keeps text-box anchors out of paragraph layout", () => {
     const paragraph = toFlowBlocks(
       schema.node("doc", null, [
@@ -1068,6 +1106,23 @@ describe("toFlowBlocks TOC hyperlink style strip", () => {
 });
 
 describe("toFlowBlocks table cell formatting", () => {
+  test("keeps explicit zero cell margins instead of restoring table defaults", () => {
+    const doc = schema.node("doc", null, [
+      schema.node("table", { cellMargins: { left: 180, right: 180 } }, [
+        schema.node("tableRow", null, [
+          schema.node("tableCell", { margins: { left: 0, right: 0 } }, [schema.node("paragraph")]),
+        ]),
+      ]),
+    ]);
+
+    const table = toFlowBlocks(doc).at(0);
+    if (table?.kind !== "table") {
+      throw new Error("Expected table block");
+    }
+
+    expect(table.rows.at(0)?.cells.at(0)?.padding).toMatchObject({ left: 0, right: 0 });
+  });
+
   test("preserves a zero-size styled cell border as a layout-free hairline", () => {
     const hairline = { style: "single", size: 0, color: { rgb: "000000" } };
     const doc = schema.node("doc", null, [
@@ -1137,6 +1192,32 @@ describe("toFlowBlocks table cell formatting", () => {
 
     expect(row.cells.at(0)?.noWrap).toBe(true);
     expect(row.cells.at(1)?.noWrap).toBeUndefined();
+  });
+
+  test("suppresses an empty terminal paragraph when the cell marker is hidden", () => {
+    const doc = schema.node("doc", null, [
+      schema.node("table", null, [
+        schema.node("tableRow", null, [
+          schema.node("tableCell", { hideMark: true }, [schema.node("paragraph")]),
+          schema.node("tableCell", null, [schema.node("paragraph")]),
+        ]),
+      ]),
+    ]);
+
+    const table = toFlowBlocks(doc).at(0);
+    if (table?.kind !== "table") {
+      throw new Error("Expected table block");
+    }
+    const hiddenMarkerParagraph = table.rows.at(0)?.cells.at(0)?.blocks.at(0);
+    const ordinaryParagraph = table.rows.at(0)?.cells.at(1)?.blocks.at(0);
+
+    expect(hiddenMarkerParagraph?.kind).toBe("paragraph");
+    expect(ordinaryParagraph?.kind).toBe("paragraph");
+    if (hiddenMarkerParagraph?.kind !== "paragraph" || ordinaryParagraph?.kind !== "paragraph") {
+      return;
+    }
+    expect(hiddenMarkerParagraph.attrs?.suppressEmptyParagraphHeight).toBe(true);
+    expect(ordinaryParagraph.attrs?.suppressEmptyParagraphHeight).toBeUndefined();
   });
 
   test("threads the cell text direction into the engine TableCell", () => {
