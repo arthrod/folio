@@ -122,15 +122,12 @@ export {
 export {
   generateRedlineDocx,
   InvalidGenerateRedlineDocxOptionsError,
-  storyRedlineEngine,
   type GenerateRedlineDocxOptions,
   type GenerateRedlineDocxResult,
   type GenerateRedlineUnprocessedStory,
 } from "./redline";
 export {
-  createJubarteWasmRedlineEngine,
   RedlineEngineExhaustedError,
-  type JubarteWasmModule,
   type RedlineCompareOptions,
   type RedlineCompareResult,
   type RedlineEngine,
@@ -138,6 +135,11 @@ export {
   type RedlineRevision,
   type RedlineRevisionType,
 } from "./redline-engine";
+export { storyRedlineEngine } from "./redline-engine-story";
+export {
+  createJubarteWasmRedlineEngine,
+  type JubarteWasmModule,
+} from "./redline-engine-jubarte";
 export type {
   FolioAIComment,
   FolioAIEditApplyMode,

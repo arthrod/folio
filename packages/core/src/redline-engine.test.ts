@@ -23,12 +23,14 @@ import { FolioDocxReviewer } from "./ai-edits/headless";
 import { createDocx } from "./docx/rezip";
 import { generateRedlineDocx } from "./redline";
 import {
-  createJubarteWasmRedlineEngine,
   RedlineEngineExhaustedError,
-  type JubarteWasmModule,
   type RedlineEngine,
   type RedlineRevision,
 } from "./redline-engine";
+import {
+  createJubarteWasmRedlineEngine,
+  type JubarteWasmModule,
+} from "./redline-engine-jubarte";
 import { createEmptyDocument } from "./utils/createDocument";
 
 type ParagraphSpec = { text: string; paraId?: string };

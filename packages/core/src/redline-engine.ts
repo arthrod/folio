@@ -1,15 +1,20 @@
 /**
- * The redline engine port: folio-core's compare seam as one narrow internal
- * interface with swappable adapters (plugin-style). Engines are byte
- * transformers — DOCX in, DOCX out — so no engine type ever reaches folio's
- * public API surface, and no engine package becomes a dependency: adapters
- * wrap modules the caller injects (`createJubarteWasmRedlineEngine`).
+ * The redline engine port: folio-core's compare seam as one narrow interface
+ * with swappable adapters (plugin-style). This module is the **contract only**
+ * — the port shape, the revision/result types, and the exhausted-ladder error.
+ * Concrete adapters live in their own modules
+ * (`./redline-engine-story`, `./redline-engine-jubarte`) and the orchestrator
+ * in `./redline`, so the contract never depends on any engine implementation.
  *
- * The orchestrator (`generateRedlineDocx` in `./redline`) walks an ordered
- * engine ladder: compare → engine-independent self-check → revision
- * enumeration; an engine that throws or produces an unverifiable buffer is
- * skipped, and a fully failed ladder raises `RedlineEngineExhaustedError` —
- * never an unverified buffer.
+ * Engines are byte transformers — DOCX in, DOCX out — so no engine type ever
+ * reaches folio's public API surface, and no engine package becomes a
+ * dependency of folio-core: adapters wrap modules the caller injects.
+ *
+ * The orchestrator (`generateRedlineDocx`) walks an ordered engine ladder:
+ * compare → engine-independent self-check → revision enumeration; an engine
+ * that throws or produces an unverifiable buffer is skipped, and a fully
+ * failed ladder raises `RedlineEngineExhaustedError` — never an unverified
+ * buffer.
  */
 
 import { TaggedError } from "better-result";
@@ -81,77 +86,3 @@ export class RedlineEngineExhaustedError extends TaggedError("RedlineEngineExhau
   message: string;
   attempts: RedlineEngineAttempt[];
 }>() {}
-
-/**
- * Structural surface of the jubarte wasm package (wasm-pack `nodejs` target).
- * Structural on purpose: folio-core never imports the package — the caller
- * loads it (owning that dependency and its license) and injects it here.
- */
-export type JubarteWasmModule = {
-  compareDocuments(original: Uint8Array, modified: Uint8Array, author: string): Uint8Array;
-  acceptRevisions(docx: Uint8Array): Uint8Array;
-  rejectRevisions(docx: Uint8Array): Uint8Array;
-  /** JSON array string of {@link RedlineRevision} objects. */
-  getRevisions(docx: Uint8Array): string;
-};
-
-/** Copy wasm-returned bytes into a standalone `ArrayBuffer`. */
-const toArrayBuffer = (bytes: Uint8Array): ArrayBuffer => {
-  const copy = new Uint8Array(bytes.byteLength);
-  copy.set(bytes);
-  return copy.buffer;
-};
-
-const REVISION_TYPES: ReadonlySet<string> = new Set([
-  "Inserted",
-  "Deleted",
-  "Moved",
-  "FormatChanged",
-]);
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null;
-
-const isRedlineRevision = (value: unknown): value is RedlineRevision => {
-  if (!isRecord(value)) {
-    return false;
-  }
-  if (typeof value["type"] !== "string" || !REVISION_TYPES.has(value["type"])) {
-    return false;
-  }
-  return (
-    typeof value["author"] === "string" &&
-    typeof value["date"] === "string" &&
-    typeof value["part"] === "string" &&
-    typeof value["text"] === "string"
-  );
-};
-
-/** Parse and validate the wasm `getRevisions` JSON at the injection boundary. */
-const parseRevisionsJson = (json: string): RedlineRevision[] => {
-  const parsed: unknown = JSON.parse(json);
-  if (!Array.isArray(parsed)) {
-    throw new Error("jubarte getRevisions returned non-array JSON");
-  }
-  const revisions: RedlineRevision[] = [];
-  for (const entry of parsed) {
-    if (!isRedlineRevision(entry)) {
-      throw new Error("jubarte getRevisions returned a malformed revision entry");
-    }
-    revisions.push(entry);
-  }
-  return revisions;
-};
-
-/** Wrap an injected jubarte wasm module as a `RedlineEngine`. */
-export const createJubarteWasmRedlineEngine = (module: JubarteWasmModule): RedlineEngine => ({
-  name: "jubarte-wasm",
-  compare: async (base, revised, { author }) => ({
-    buffer: toArrayBuffer(
-      module.compareDocuments(new Uint8Array(base), new Uint8Array(revised), author),
-    ),
-  }),
-  acceptAll: async (docx) => toArrayBuffer(module.acceptRevisions(new Uint8Array(docx))),
-  rejectAll: async (docx) => toArrayBuffer(module.rejectRevisions(new Uint8Array(docx))),
-  getRevisions: async (docx) => parseRevisionsJson(module.getRevisions(new Uint8Array(docx))),
-});
