@@ -1,0 +1,17 @@
+{
+  "file_114_file_115_redline.docx": "inline-sdt-unwrap + textbox/AlternateContent fallback drop + net-empties (Workstream B, task #12)",
+  "file_184_file_185_redline.docx": "inline-sdt-unwrap + textbox/AlternateContent fallback drop + net-empties (Workstream B, task #12)",
+  "file_195_file_196_redline.docx": "inline-sdt-unwrap + textbox/AlternateContent fallback drop + net-empties (Workstream B, task #12)",
+  "file_99_file_100_redline.docx": "inline-sdt-unwrap + textbox/AlternateContent fallback drop + net-empties (Workstream B, task #12)",
+  "file_131_file_132_redline.docx": "tracked-deletion-resurrected: delText in field-based hyperlink round-trips to plain w:t (task #20)",
+  "file_27_file_28_redline.docx": "tracked-deletion-resurrected: delText in field-based hyperlink round-trips to plain w:t (task #20)",
+  "file_53_file_54_redline.docx": "tracked-deletion-resurrected: delText in field-based hyperlink round-trips to plain w:t (task #20)",
+  "file_6_file_7_redline.docx": "tracked-deletion-resurrected: delText in field-based hyperlink round-trips to plain w:t (task #20)",
+  "file_74_file_75_redline.docx": "tracked-deletion-resurrected: delText in field-based hyperlink round-trips to plain w:t (task #20)",
+  "file_100_file_101_redline.docx": "header/footer + date/page-number field text leaks into body (task #21)",
+  "file_115_file_116_redline.docx": "header/footer + date/page-number field text leaks into body (task #21)",
+  "file_185_file_186_redline.docx": "header/footer + date/page-number field text leaks into body (task #21)",
+  "file_196_file_197_redline.docx": "header/footer + date/page-number field text leaks into body (task #21)",
+  "file_175_file_176_redline.docx": "fixed-layout tab/space realignment + lost inter-run space (task #22)",
+  "file_170_file_171_redline.docx": "duplicated 'reference page' paragraph (task #22)"
+}

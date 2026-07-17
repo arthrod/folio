@@ -44,11 +44,18 @@ export type RoundtripDiff = {
 const ab = (bytes: Uint8Array): ArrayBuffer =>
   bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 
-/** Multiset of body lines → count. Header/footer stories are id-local; the body is the invariant. */
+/**
+ * Multiset of body lines → count. Header/footer stories are id-local; the body
+ * is the invariant. Whitespace-only paragraphs (empty, `" "`, `"\t"`) are
+ * excluded: serialization legitimately normalizes blank-paragraph whitespace,
+ * so counting it as content churn would bury real drops under formatting noise.
+ * A line with any non-whitespace character (a page number `"\t\t1"`, a footer
+ * `"EricWhite.com"`) is content and is counted.
+ */
 const bodyMultiset = (content: ComparableDocxContent): Map<string, number> => {
   const counts = new Map<string, number>();
   for (const line of content.mainText.split("\n")) {
-    if (line.length === 0) {
+    if (line.trim().length === 0) {
       continue;
     }
     counts.set(line, (counts.get(line) ?? 0) + 1);
