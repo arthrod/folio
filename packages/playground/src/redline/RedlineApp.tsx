@@ -36,6 +36,15 @@ declare global {
         loadDemo: () => Promise<void>;
         getState: () => Omit<RedlineState, "redline" | "shown"> | null;
         setView: (view: View) => void;
+        /**
+         * Headless measurement path: run the real in-browser compare
+         * (wasm engine + folio self-check ladder) over two buffers and return
+         * metrics only — no editor state is touched. Used by the benchmark.
+         */
+        compareBuffers: (
+          base: ArrayBuffer,
+          revised: ArrayBuffer,
+        ) => Promise<{ engine: string; elapsedMs: number; revisions: number }>;
       }
     | undefined;
 }
@@ -175,6 +184,14 @@ export function RedlineApp() {
             }
           : null,
       setView,
+      compareBuffers: async (baseBuffer, revisedBuffer) => {
+        const { result, engine, elapsedMs } = await runRedline(
+          baseBuffer,
+          revisedBuffer,
+          DEFAULT_AUTHOR,
+        );
+        return { engine, elapsedMs, revisions: result.revisions.length };
+      },
     };
     return () => {
       globalThis.__redline = undefined;
