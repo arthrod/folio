@@ -5,10 +5,36 @@ import type { Document } from "../types/document";
 import { DocxModelValidationError } from "./modelValidation";
 import { parseDocx } from "./parser";
 import { RELATIONSHIP_TYPES } from "./relsParser";
-import { DocxPackageFidelityError, repackDocx } from "./rezip";
+import { DocxPackageFidelityError, decodeDataUrl, repackDocx } from "./rezip";
 import { attemptSelectiveSave } from "./selectiveSave";
 
 const XML_DECLARATION = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+
+describe("decodeDataUrl", () => {
+  test("decodes a base64 image data URL", () => {
+    const { extension } = decodeDataUrl(
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+    );
+    expect(extension).toBe("png");
+  });
+
+  test("decodes a percent-encoded SVG data URL with a charset parameter (no panic)", () => {
+    // Regression: modern Word docs carry SVG icons as
+    // `data:image/svg+xml;charset=utf-8,<percent-encoded>`. The base64-only
+    // decoder panicked on the `;charset=utf-8,` (not `;base64,`) marker and
+    // crashed the whole save (repackDocx → processNewImages → decodeDataUrl).
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>';
+    const { data, extension } = decodeDataUrl(
+      `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`,
+    );
+    expect(extension).toBe("svg");
+    expect(new TextDecoder().decode(data)).toBe(svg);
+  });
+
+  test("panics only on a genuinely malformed data URL", () => {
+    expect(() => decodeDataUrl("not-a-data-url")).toThrow();
+  });
+});
 
 const ONE_PIXEL_PNG_DATA_URL =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
