@@ -66,6 +66,9 @@ export const runRedline = async (
   const result = await generateRedlineDocx(base, revised, {
     engines: [wasmEngine, storyRedlineEngine],
     author,
+    // Byte engine: verify through folio's XML-direct extractor, not the
+    // editorial reviewer (which drops OOXML it cannot model, a false negative).
+    selfCheck: "engine-lossless",
   });
   return { result, engine: result.engine, elapsedMs: performance.now() - started };
 };
