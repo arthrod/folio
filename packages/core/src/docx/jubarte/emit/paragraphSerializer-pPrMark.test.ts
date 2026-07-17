@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import type { Paragraph } from "../../types/document";
+import type { Paragraph } from "../../../types/document";
 import { serializeParagraph } from "./paragraphSerializer";
 
 describe("serializeParagraph — paragraph-mark tracked change", () => {

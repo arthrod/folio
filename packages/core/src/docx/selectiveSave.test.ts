@@ -18,7 +18,7 @@ import {
   validatePatchSafety,
   countParagraphElements,
 } from "./selectiveXmlPatch";
-import { serializeDocument } from "./serializer/documentSerializer";
+import { serializeDocument } from "./__tests__/emitTestHelpers";
 
 // ============================================================================
 // Helpers
@@ -296,9 +296,13 @@ describe("attemptSelectiveSave", () => {
     expect(result).toBeNull();
   });
 
-  test("returns null when structural change occurred", async () => {
+  // The legacy patcher bailed to null on structural / untracked changes; the
+  // jubarte writer handles them directly, so these flags no longer gate the
+  // save — the output must simply be a valid document with the same content.
+  test("saves despite a structural-change flag (legacy bail retired)", async () => {
     const buffer = await loadFixture("example-with-image.docx");
     const doc = await parseDocx(buffer, { preloadFonts: false });
+    const blockCount = doc.package.document.content.length;
 
     const result = await attemptSelectiveSave(doc, buffer, {
       changedParaIds: new Set(["someId"]),
@@ -306,12 +310,15 @@ describe("attemptSelectiveSave", () => {
       hasUntrackedChanges: false,
     });
 
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    const reparsed = await parseDocx(result!, { preloadFonts: false });
+    expect(reparsed.package.document.content).toHaveLength(blockCount);
   });
 
-  test("returns null when untracked changes exist", async () => {
+  test("saves despite an untracked-changes flag (legacy bail retired)", async () => {
     const buffer = await loadFixture("example-with-image.docx");
     const doc = await parseDocx(buffer, { preloadFonts: false });
+    const blockCount = doc.package.document.content.length;
 
     const result = await attemptSelectiveSave(doc, buffer, {
       changedParaIds: new Set(["someId"]),
@@ -319,7 +326,9 @@ describe("attemptSelectiveSave", () => {
       hasUntrackedChanges: true,
     });
 
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    const reparsed = await parseDocx(result!, { preloadFonts: false });
+    expect(reparsed.package.document.content).toHaveLength(blockCount);
   });
 
   test("returns valid buffer when no content changes (still updates metadata)", async () => {
@@ -339,10 +348,15 @@ describe("attemptSelectiveSave", () => {
     }
     expect(result.byteLength).toBeGreaterThan(0);
 
-    // Verify document.xml is unchanged
-    const originalXml = await getDocumentXml(buffer);
-    const resultXml = await getDocumentXml(result);
-    expect(resultXml).toBe(originalXml);
+    // Document content is unchanged at the model level. (The jubarte writer
+    // byte-preserves unchanged paragraphs but regenerates the drawing run
+    // from the model — like the legacy full repack — so the XML string is
+    // not byte-identical for this image fixture.)
+    const original = await parseDocx(buffer.slice(0), { preloadFonts: false });
+    const reparsed = await parseDocx(result.slice(0), { preloadFonts: false });
+    expect(reparsed.package.document.content).toHaveLength(
+      original.package.document.content.length,
+    );
 
     // Verify core properties were updated with new modification date
     const zip = await JSZip.loadAsync(result);
@@ -446,10 +460,16 @@ describe("attemptSelectiveSave", () => {
     const resultXml = await getDocumentXml(result);
     expect(resultXml).toContain("[MODIFIED]");
 
-    // Verify unchanged paragraphs are preserved
+    // Verify unchanged TEXT paragraphs are preserved byte-for-byte (the
+    // jubarte writer byte-preserves blocks whose mapped AST matches the
+    // source; the drawing paragraph is regenerated from the model, so it is
+    // exempt like under the legacy full repack).
     const originalXml = await getDocumentXml(buffer);
     for (const para of paragraphs) {
-      if (para.paraId && para.paraId !== paraId) {
+      const paraHasDrawing = para.content.some(
+        (item) => item.type === "run" && item.content.some((c) => c.type === "drawing"),
+      );
+      if (para.paraId && para.paraId !== paraId && !paraHasDrawing) {
         const origOffsets = findParagraphOffsets(originalXml, para.paraId);
         const resultOffsets = findParagraphOffsets(resultXml, para.paraId);
         if (origOffsets && resultOffsets) {
@@ -461,7 +481,7 @@ describe("attemptSelectiveSave", () => {
     }
   });
 
-  test("returns null for changed paraId not found in original", async () => {
+  test("saves when a changed paraId is not found in the original (legacy bail retired)", async () => {
     const buffer = await loadFixture("example-with-image.docx");
     const doc = await parseDocx(buffer, { preloadFonts: false });
 
@@ -471,8 +491,10 @@ describe("attemptSelectiveSave", () => {
       hasUntrackedChanges: false,
     });
 
-    // Should return null (fallback to full repack)
-    expect(result).toBeNull();
+    // The legacy patcher fell back to full repack here; the jubarte writer
+    // ignores the hint set and saves from the model.
+    expect(result).not.toBeNull();
+    expect(result!.byteLength).toBeGreaterThan(0);
   });
 });
 
@@ -1044,8 +1066,9 @@ describe("Selective save edge cases", () => {
   });
 
   test("handles document with missing paraIds gracefully", async () => {
-    // Create a minimal DOCX-like XML without paraIds
-    // The attempt should fall back (return null) if we ask to patch a nonexistent ID
+    // A patch hint pointing at a nonexistent paraId made the legacy patcher
+    // fall back to null; the jubarte writer ignores the hint set and saves
+    // from the model.
     const buffer = await loadFixture("example-with-image.docx");
     const doc = await parseDocx(buffer, { preloadFonts: false });
 
@@ -1055,7 +1078,9 @@ describe("Selective save edge cases", () => {
       hasUntrackedChanges: false,
     });
 
-    expect(result).toBeNull(); // Should fall back
+    expect(result).not.toBeNull();
+    const reparsed = await parseDocx(result!, { preloadFonts: false });
+    expect(reparsed.package.document.content.length).toBeGreaterThan(0);
   });
 
   test("handles large document with many paraIds", async () => {
@@ -1138,17 +1163,18 @@ describe("Selective save edge cases", () => {
     }
   });
 
-  test("selective save disabled falls back to full repack", async () => {
+  test("structural-change flag no longer forces the full-repack fallback", async () => {
     const buffer = await loadFixture("example-with-image.docx");
     const doc = await parseDocx(buffer, { preloadFonts: false });
 
-    // When structuralChange=true (simulating selective=false at higher level), we get null
+    // Legacy: structuralChange=true meant "bail to full repack" (null). The
+    // jubarte writer is the full save, so the flag is accepted and ignored.
     const result = await attemptSelectiveSave(doc, buffer, {
       changedParaIds: new Set(),
       structuralChange: true,
       hasUntrackedChanges: false,
     });
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
   });
 
   test("multiple paragraphs edited selectively", async () => {

@@ -11,13 +11,13 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { fromProseDoc } from "../../prosemirror/conversion/fromProseDoc";
-import { toProseDoc } from "../../prosemirror/conversion/toProseDoc";
-import { schema } from "../../prosemirror/schema";
-import type { Document, InlineSdt, Paragraph } from "../../types/document";
-import { parseParagraph } from "../paragraphParser";
-import type { XmlElement } from "../xmlParser";
-import { parseXmlDocument } from "../xmlParser";
+import { fromProseDoc } from "../../../prosemirror/conversion/fromProseDoc";
+import { toProseDoc } from "../../../prosemirror/conversion/toProseDoc";
+import { schema } from "../../../prosemirror/schema";
+import type { Document, InlineSdt, Paragraph } from "../../../types/document";
+import { parseParagraph } from "../../paragraphParser";
+import type { XmlElement } from "../../xmlParser";
+import { parseXmlDocument } from "../../xmlParser";
 import { serializeParagraph } from "./paragraphSerializer";
 
 const W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';

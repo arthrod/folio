@@ -113,6 +113,19 @@ async function readPart(buffer: ArrayBuffer, path: string): Promise<string> {
   return file.async("text");
 }
 
+// Body substring of a document.xml: byte-exact inside <w:body>…</w:body>.
+// The jubarte engine canonicalizes the document root's namespace
+// declarations on re-emission, so whole-part byte equality no longer holds;
+// the body bytes still must.
+function bodyXml(xml: string): string {
+  const start = xml.indexOf("<w:body");
+  const end = xml.lastIndexOf("</w:body>");
+  if (start === -1 || end === -1) {
+    throw new Error("document.xml has no w:body");
+  }
+  return xml.slice(start, end + "</w:body>".length);
+}
+
 function setFirstNoteText(note: Footnote | Endnote, newText: string): void {
   const block = note.content[0];
   if (!block || block.type !== "paragraph") {
@@ -172,9 +185,12 @@ describe("footnote / endnote body write path (selective save)", () => {
     const reparsed = await parseDocx(result, { preloadFonts: false });
     expect(noteBodyText(reparsed.package.footnotes?.[0])).toBe(editedText);
 
-    // The unedited endnote part and other parts are untouched.
+    // The unedited endnote part and other parts are untouched. The jubarte
+    // engine canonicalizes the document root's namespace declarations on
+    // re-emission, so document.xml is compared body-exact instead of
+    // whole-part-exact — the body bytes must still be untouched.
     expect(await readPart(result, "word/endnotes.xml")).toBe(originalEndnotesXml);
-    expect(await readPart(result, "word/document.xml")).toBe(originalDocumentXml);
+    expect(bodyXml(await readPart(result, "word/document.xml"))).toBe(bodyXml(originalDocumentXml));
     expect(await readPart(result, "word/styles.xml")).toBe(originalStylesXml);
 
     // Within footnotes.xml, the required separator notes stay byte-exact and
