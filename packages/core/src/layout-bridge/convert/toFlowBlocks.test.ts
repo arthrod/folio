@@ -33,6 +33,7 @@ describe("toFlowBlocks paragraph formatting", () => {
         schema.node("paragraph", { suppressAutoHyphens: true }, [schema.text("Hyphenation")]),
       ]),
       {
+        justificationCompatibility: { type: "legacy" },
         automaticHyphenation: {
           enabled: true,
           doNotHyphenateCaps: true,
@@ -45,6 +46,7 @@ describe("toFlowBlocks paragraph formatting", () => {
       kind: "paragraph",
       attrs: {
         suppressAutoHyphens: true,
+        justificationCompatibility: { type: "legacy" },
         automaticHyphenation: {
           enabled: true,
           doNotHyphenateCaps: true,
@@ -277,6 +279,27 @@ describe("toFlowBlocks paragraph formatting", () => {
     expect(paragraph?.attrs?.defaultFontFamily).toBe("Arial");
     expect(paragraph?.attrs?.outlineLevel).toBe(0);
     expect(paragraph?.attrs?.reserveEmptyOutlineHeight).toBe(true);
+  });
+
+  test("whitespace-only paragraph measurement uses direct paragraph-mark font metrics", () => {
+    const doc = schema.node("doc", null, [
+      schema.node(
+        "paragraph",
+        {
+          defaultTextFormatting: { fontSize: 22, fontFamily: { ascii: "Calibri" } },
+          _originalFormatting: {
+            runProperties: { fontSize: 16, fontFamily: { ascii: "Arial Narrow" } },
+          },
+        },
+        [schema.text(" ")],
+      ),
+    ]);
+
+    const paragraph = toFlowBlocks(doc).at(0);
+
+    expect(paragraph?.kind).toBe("paragraph");
+    expect(paragraph?.attrs?.defaultFontSize).toBe(8);
+    expect(paragraph?.attrs?.defaultFontFamily).toBe("Arial Narrow");
   });
 
   test("does not reserve extra outline height away from the start of the story", () => {

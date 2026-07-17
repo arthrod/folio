@@ -591,6 +591,7 @@ function uppercaseLetterRatio(text: string): number {
 }
 
 type JustifyFitStrategy =
+  | { type: "strict" }
   | { type: "rounding" }
   | { type: "space"; ratio: number; maxWidthRatio?: number }
   | { type: "width"; ratio: number };
@@ -605,6 +606,9 @@ function resolveJustifyFitStrategy(
   isFirstLine: boolean,
   profile: JustificationProfile,
 ): JustifyFitStrategy {
+  if (block.attrs?.justificationCompatibility?.type === "legacy") {
+    return { type: "strict" };
+  }
   if (isShallowFullHangingListContinuation(block, isFirstLine)) {
     return { type: "rounding" };
   }
@@ -662,6 +666,9 @@ function justifyFitTolerance(
   strategy: JustifyFitStrategy,
   candidateSpaceWidth: number,
 ): number {
+  if (strategy.type === "strict") {
+    return 0;
+  }
   if (strategy.type === "rounding") {
     return WIDTH_TOLERANCE;
   }
@@ -1187,16 +1194,11 @@ export function measureParagraph(
     };
   }
 
-  // Check for empty text run only
-  if (
-    runs.length === 1 &&
-    // SAFETY: length === 1 guarantees index 0 exists
-    isTextRun(runs[0]!) &&
-    isEmptyTextRun(runs[0] as TextRun)
-  ) {
-    const run = runs[0] as TextRun;
-    const fontSize = run.fontSize ?? attrs?.defaultFontSize ?? DEFAULT_FONT_SIZE;
-    const fontFamily = run.fontFamily ?? attrs?.defaultFontFamily ?? DEFAULT_FONT_FAMILY;
+  // Whitespace-only text is layout-empty: use the paragraph-mark formatting
+  // carried by attrs rather than formatting from an otherwise invisible run.
+  if (runs.length > 0 && runs.every((run) => isTextRun(run) && isEmptyTextRun(run))) {
+    const fontSize = attrs?.defaultFontSize ?? DEFAULT_FONT_SIZE;
+    const fontFamily = attrs?.defaultFontFamily ?? DEFAULT_FONT_FAMILY;
     const emptyMetrics = calculateEmptyParagraphMetrics(fontSize, spacing, fontFamily);
 
     lines.push({

@@ -163,6 +163,25 @@ describe("font metrics cache", () => {
       }),
     );
   });
+
+  test("keeps justification compatibility in the paragraph measurement cache key", () => {
+    const paragraph = {
+      kind: "paragraph",
+      id: "compatibility-cache-key",
+      runs: [{ kind: "text", text: "Text" }],
+      attrs: { alignment: "justify" },
+    } as const satisfies ParagraphBlock;
+
+    expect(hashParagraphBlock(paragraph)).not.toBe(
+      hashParagraphBlock({
+        ...paragraph,
+        attrs: {
+          ...paragraph.attrs,
+          justificationCompatibility: { type: "legacy" },
+        },
+      }),
+    );
+  });
 });
 
 describe("empty paragraph line-height floor", () => {
@@ -308,6 +327,44 @@ describe("empty paragraph line-height floor", () => {
       expect(measure.totalHeight).toBeCloseTo((measure.lines[0]?.lineHeight ?? 0) + 12, 1);
     });
   }
+
+  test("visually empty text uses paragraph-mark metrics", () => {
+    const measure = measureParagraph(
+      {
+        kind: "paragraph",
+        id: "empty-run-paragraph-mark-metrics",
+        pmStart: 0,
+        pmEnd: 1,
+        runs: [{ kind: "text", text: " ", fontSize: 18, fontFamily: "Arial" }],
+        attrs: {
+          defaultFontSize: 8,
+          defaultFontFamily: "Arial Narrow",
+        },
+      },
+      600,
+    );
+
+    expect(measure.lines[0]?.lineHeight).toBeCloseTo(8 * PT_TO_PX * 1.15, 1);
+  });
+
+  test("format-split visually empty text uses paragraph-mark metrics", () => {
+    const measure = measureParagraph(
+      {
+        kind: "paragraph",
+        id: "split-empty-run-paragraph-mark-metrics",
+        pmStart: 0,
+        pmEnd: 2,
+        runs: [
+          { kind: "text", text: " ", fontSize: 18 },
+          { kind: "text", text: "\u00a0", fontSize: 20 },
+        ],
+        attrs: { defaultFontSize: 8, defaultFontFamily: "Arial Narrow" },
+      },
+      600,
+    );
+
+    expect(measure.lines[0]?.lineHeight).toBeCloseTo(8 * PT_TO_PX * 1.15, 1);
+  });
 
   test("suppressed empty paragraph keeps a zero-height anchor", () => {
     const measure = measureParagraph(
@@ -823,6 +880,30 @@ describe("measureParagraph justified shrink tolerance", () => {
 
         expect(spaceRichMeasure.lines).toHaveLength(1);
         expect(spacePoorMeasure.lines).toHaveLength(2);
+      },
+      {
+        charWidth: ordinarySpaceRichWidth,
+      },
+    );
+  });
+
+  test("does not contract justified lines in legacy compatibility mode", () => {
+    withFakeTextMeasure(
+      () => {
+        const measure = measureParagraph(
+          {
+            kind: "paragraph",
+            id: "legacy-justified-line-fit",
+            runs: [{ kind: "text", text: spaceRichText }],
+            attrs: {
+              alignment: "justify",
+              justificationCompatibility: { type: "legacy" },
+            },
+          },
+          100,
+        );
+
+        expect(measure.lines).toHaveLength(2);
       },
       {
         charWidth: ordinarySpaceRichWidth,
