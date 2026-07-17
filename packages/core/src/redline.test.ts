@@ -80,6 +80,30 @@ type StoryDocumentOptions = {
   endnoteText?: string;
 };
 
+/**
+ * A one-paragraph body with a `default` header whose relationship id is
+ * caller-controlled. Real Word documents mint fresh header relationship ids
+ * per file, so a base and its revision usually carry the SAME header text
+ * under DIFFERENT relationship ids — the case the self-check must match on
+ * content, not on the unstable id.
+ */
+const buildDocumentWithHeaderRid = async (
+  bodyText: string,
+  headerText: string,
+  headerRid: string,
+): Promise<ArrayBuffer> => {
+  const source = await buildDocxBuffer([{ text: bodyText, paraId: "A1000001" }]);
+  const document = await parseDocx(source, { detectVariables: false, preloadFonts: false });
+  document.package.headers = new Map([
+    [headerRid, headerFooterStory("header", headerText, "B1000001")],
+  ]);
+  document.package.document.finalSectionProperties = {
+    ...document.package.document.finalSectionProperties,
+    headerReferences: [{ type: "default", rId: headerRid }],
+  };
+  return repackDocx(document, { updateModifiedDate: false });
+};
+
 const buildStoryDocument = async ({
   bodyText,
   headerText,
@@ -505,6 +529,27 @@ describe("generateRedlineDocx", () => {
     expect(coreProperties).not.toContain("dcterms:modified");
     expect(coreProperties).toContain("Private title");
     expect(coreProperties).toContain("<cp:revision>7</cp:revision>");
+  });
+
+  test("a redline over documents with headers passes the self-check and round-trips", async () => {
+    // Documents carrying a `default` header under distinct relationship ids.
+    // (Note: folio normalises relationship ids when it round-trips
+    // freshly-built documents, so this cannot reproduce the real-world
+    // preserved-distinct-id case that the content-keyed self-check fixes —
+    // that is red-proofed against real corpus files in the
+    // `redline-engine.test.ts` integration suite. This case guards that
+    // header documents pass the self-check and round-trip at all.)
+    const base = await buildDocumentWithHeaderRid("Body one.", "Shared header.", "rIdHeaderA");
+    const revised = await buildDocumentWithHeaderRid("Body two.", "Shared header.", "rIdHeaderB");
+
+    const result = await generateRedlineDocx(base, revised);
+
+    expect(result.engine).toBe("folio-story");
+    const acceptView = await FolioDocxReviewer.fromBuffer(result.buffer);
+    expect(blockTexts(acceptView)).toEqual(["Body two."]);
+    const rejectView = await FolioDocxReviewer.fromBuffer(result.buffer);
+    rejectView.rejectAll();
+    expect(blockTexts(rejectView)).toEqual(["Body one."]);
   });
 
   test("rejects unresolved markup as an input view", async () => {

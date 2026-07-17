@@ -20,9 +20,10 @@ import { TaggedError } from "better-result";
 import {
   FolioDocxReviewer,
   isFolioResolvedReviewedView,
+  type FolioDocumentStoryHandle,
   type FolioResolvedReviewedView,
 } from "./ai-edits/headless";
-import type { FolioAIEditSkippedOperation } from "./ai-edits/types";
+import type { FolioAIEditSkippedOperation, FolioAIEditSnapshot } from "./ai-edits/types";
 import {
   resolveFolioDocumentPrivacyTransforms,
   rewriteDocxMetadataPrivacy,
@@ -104,22 +105,58 @@ const resolveInputView = (
   return value;
 };
 
-/** Deterministic per-story key (handles are small flat objects). */
-const storyKey = (handle: object): string => JSON.stringify(handle, Object.keys(handle).sort());
+/**
+ * A reviewer's story texts at one view, partitioned for the self-check.
+ *
+ * The main story is singular and stably identified, so it is compared
+ * exactly. Header/footer/footnote/endnote stories are identified only by a
+ * document-local relationship id / note id (see `FolioDocumentStoryHandle`),
+ * which is NOT stable across the base, revised, and output packages — so they
+ * are compared as non-empty text sets per type (containment), never keyed by
+ * that unstable id. Empty secondary stories (blank headers, doc-id-stamp-only
+ * footers folio does not surface as text) carry no signal and are dropped.
+ */
+type StoryTexts = {
+  mainText: string;
+  secondaryByType: Map<FolioDocumentStoryHandle["type"], string[]>;
+};
 
-/** Per-story joined block texts of a reviewer at a view. */
-const storyViewTexts = (
+const joinBlocks = (story: { snapshot: FolioAIEditSnapshot }): string =>
+  story.snapshot.blocks.map(({ text }) => text).join("\n");
+
+const collectStoryTexts = (
   reviewer: FolioDocxReviewer,
   view: FolioResolvedReviewedView,
-): Map<string, string> => {
-  const texts = new Map<string, string>();
+): StoryTexts => {
+  let mainText = "";
+  const secondaryByType = new Map<FolioDocumentStoryHandle["type"], string[]>();
   for (const { handle } of reviewer.listStories()) {
     const story = reviewer.readReviewedStory({ story: handle, view });
-    if (story) {
-      texts.set(storyKey(handle), story.snapshot.blocks.map(({ text }) => text).join("\n"));
+    if (!story) {
+      continue;
     }
+    const text = joinBlocks(story);
+    if (handle.type === "main") {
+      mainText = text;
+      continue;
+    }
+    if (text.trim().length === 0) {
+      continue;
+    }
+    const list = secondaryByType.get(handle.type) ?? [];
+    list.push(text);
+    secondaryByType.set(handle.type, list);
   }
-  return texts;
+  return { mainText, secondaryByType };
+};
+
+/** Final-view text of a single story handle (for unprocessed-story exemption). */
+const resolveHandleText = (
+  reviewer: FolioDocxReviewer,
+  handle: FolioDocumentStoryHandle,
+): string => {
+  const story = reviewer.readReviewedStory({ story: handle, view: "final" });
+  return story ? joinBlocks(story) : "";
 };
 
 type ResolvedRedlineInput = {
@@ -153,43 +190,60 @@ const resolveRedlineInput = async (
 
 type VerifyRedlineBufferOptions = {
   buffer: ArrayBuffer;
-  baseTexts: Map<string, string>;
-  revisedTexts: Map<string, string>;
-  exemptKeys: ReadonlySet<string>;
+  baseTexts: StoryTexts;
+  revisedTexts: StoryTexts;
+  /** Final-view texts of stories the engine reported as processed on one side only. */
+  exemptBaseTexts: ReadonlySet<string>;
+  exemptRevisedTexts: ReadonlySet<string>;
+};
+
+/** Every non-empty expected secondary text must appear in the actual set. */
+const secondaryTextsReproduced = (
+  expected: StoryTexts,
+  actual: StoryTexts,
+  exempt: ReadonlySet<string>,
+  label: string,
+): string | null => {
+  for (const [type, texts] of expected.secondaryByType) {
+    const actualSet = new Set(actual.secondaryByType.get(type) ?? []);
+    for (const text of texts) {
+      if (exempt.has(text) || actualSet.has(text)) {
+        continue;
+      }
+      return `${label} view drops a ${type} story`;
+    }
+  }
+  return null;
 };
 
 /**
  * The engine-independent self-check: the output's reject-all ("original")
- * view must reproduce the base story texts and its accept-all ("final") view
- * the revised story texts. Judged through `FolioDocxReviewer`, never through
- * the engine's own accept/reject. Returns a mismatch description, or `null`.
+ * view must reproduce the base document and its accept-all ("final") view the
+ * revised document, judged through `FolioDocxReviewer` (never the engine's own
+ * accept/reject). The main story is matched exactly; secondary stories by
+ * non-empty-text containment (relationship ids are not stable across
+ * packages). Returns a mismatch description, or `null`.
  */
 const verifyRedlineBuffer = async ({
   buffer,
   baseTexts,
   revisedTexts,
-  exemptKeys,
+  exemptBaseTexts,
+  exemptRevisedTexts,
 }: VerifyRedlineBufferOptions): Promise<string | null> => {
   const output = await FolioDocxReviewer.fromBuffer(buffer);
-  const originalTexts = storyViewTexts(output, "original");
-  const finalTexts = storyViewTexts(output, "final");
-  for (const [key, text] of baseTexts) {
-    if (exemptKeys.has(key)) {
-      continue;
-    }
-    if (originalTexts.get(key) !== text) {
-      return `reject-all view diverges from the base document for story ${key}`;
-    }
+  const rejected = collectStoryTexts(output, "original");
+  const accepted = collectStoryTexts(output, "final");
+  if (accepted.mainText !== revisedTexts.mainText) {
+    return "accept-all main story diverges from the revised document";
   }
-  for (const [key, text] of revisedTexts) {
-    if (exemptKeys.has(key)) {
-      continue;
-    }
-    if (finalTexts.get(key) !== text) {
-      return `accept-all view diverges from the revised document for story ${key}`;
-    }
+  if (rejected.mainText !== baseTexts.mainText) {
+    return "reject-all main story diverges from the base document";
   }
-  return null;
+  return (
+    secondaryTextsReproduced(revisedTexts, accepted, exemptRevisedTexts, "accept-all") ??
+    secondaryTextsReproduced(baseTexts, rejected, exemptBaseTexts, "reject-all")
+  );
 };
 
 /**
@@ -213,8 +267,8 @@ export const generateRedlineDocx = async (
     resolveRedlineInput(base, baseView),
     resolveRedlineInput(revised, revisedView),
   ]);
-  const baseTexts = storyViewTexts(baseInput.reviewer, "final");
-  const revisedTexts = storyViewTexts(revisedInput.reviewer, "final");
+  const baseTexts = collectStoryTexts(baseInput.reviewer, "final");
+  const revisedTexts = collectStoryTexts(revisedInput.reviewer, "final");
 
   const attempts: RedlineEngineAttempt[] = [];
   for (const engine of engines) {
@@ -226,20 +280,24 @@ export const generateRedlineDocx = async (
       continue;
     }
 
-    const exemptKeys = new Set<string>();
+    // Stories the engine reported as present on only one side are not required
+    // to round-trip; exempt them by their resolved text.
+    const exemptBaseTexts = new Set<string>();
+    const exemptRevisedTexts = new Set<string>();
     for (const entry of compared.unprocessedStories ?? []) {
       if (entry.baseStory) {
-        exemptKeys.add(storyKey(entry.baseStory));
+        exemptBaseTexts.add(resolveHandleText(baseInput.reviewer, entry.baseStory));
       }
       if (entry.revisedStory) {
-        exemptKeys.add(storyKey(entry.revisedStory));
+        exemptRevisedTexts.add(resolveHandleText(revisedInput.reviewer, entry.revisedStory));
       }
     }
     const mismatch = await verifyRedlineBuffer({
       buffer: compared.buffer,
       baseTexts,
       revisedTexts,
-      exemptKeys,
+      exemptBaseTexts,
+      exemptRevisedTexts,
     });
     if (mismatch !== null) {
       attempts.push({ engine: engine.name, phase: "self-check", message: mismatch });

@@ -16,8 +16,9 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { join } from "node:path";
 
 import { FolioDocxReviewer } from "./ai-edits/headless";
 import { createDocx } from "./docx/rezip";
@@ -293,5 +294,41 @@ describe.if(haveWasmPkg)("jubarte-wasm integration (JUBARTE_WASM_PKG)", () => {
       BASE_TEXT,
       "Omega paragraph closes the document.",
     ]);
+  });
+});
+
+// Real-world regression: on genuine Word files, headers/footers carry distinct
+// relationship ids that folio preserves across the base, revised, and output
+// packages. The self-check must match those stories by content, not by the
+// unstable id — otherwise every such redline fails verification and falls back
+// off the wasm engine (observed: ~38% fallback across the corpus). Point
+// REDLINE_CORPUS_DIR at neurotic_docx_bench/corpus/word_based/docx_source.
+// RED against the rId-keyed self-check (engine falls back to "folio-story");
+// GREEN once secondary stories match on content.
+const corpusDir = process.env["REDLINE_CORPUS_DIR"];
+const haveCorpusPair =
+  haveWasmPkg &&
+  corpusDir !== undefined &&
+  existsSync(join(corpusDir, "comments.docx")) &&
+  existsSync(join(corpusDir, "complex_style_attr.docx"));
+
+describe.if(haveCorpusPair)("jubarte-wasm real-world header/footer self-check (REDLINE_CORPUS_DIR)", () => {
+  test("a real header/footer pair verifies via the wasm engine, not a fallback", async () => {
+    const require = createRequire(import.meta.url);
+    const module = require(wasmPkgPath as string) as JubarteWasmModule & {
+      initPanicHook?: () => void;
+    };
+    module.initPanicHook?.();
+
+    const read = (name: string): ArrayBuffer => {
+      const bytes = readFileSync(join(corpusDir as string, name));
+      return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    };
+    const result = await generateRedlineDocx(read("comments.docx"), read("complex_style_attr.docx"), {
+      engines: [createJubarteWasmRedlineEngine(module)],
+    });
+
+    expect(result.engine).toBe("jubarte-wasm");
+    expect(result.revisions.length).toBeGreaterThan(0);
   });
 });
