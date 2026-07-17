@@ -1,0 +1,169 @@
+.rl-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+
+.rl-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+}
+
+.rl-title {
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.rl-sub {
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.rl-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.rl-side {
+  width: 320px;
+  flex-shrink: 0;
+  border-right: 1px solid rgba(128, 128, 128, 0.25);
+  padding: 14px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.rl-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rl-file {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.rl-file span {
+  font-weight: 600;
+}
+
+.rl-file em {
+  opacity: 0.6;
+  font-style: normal;
+}
+
+.rl-btn {
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.rl-btn:hover:not(:disabled) {
+  background: rgba(128, 128, 128, 0.12);
+}
+
+.rl-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.rl-btn--primary {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+
+.rl-btn--chip {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.rl-btn--chip[aria-pressed="true"] {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+
+.rl-stat {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+}
+
+.rl-stat span {
+  opacity: 0.6;
+}
+
+.rl-views {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.rl-revisions {
+  gap: 4px;
+}
+
+.rl-rev {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  padding: 4px 6px;
+  border-radius: 5px;
+  background: rgba(128, 128, 128, 0.08);
+}
+
+.rl-rev-type {
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.rl-rev--inserted .rl-rev-type {
+  color: #16a34a;
+}
+
+.rl-rev--deleted .rl-rev-type {
+  color: #dc2626;
+}
+
+.rl-rev-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.75;
+}
+
+.rl-editor {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+}
+
+.rl-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  opacity: 0.5;
+  font-size: 14px;
+}
+
+.rl-status {
+  padding: 8px 16px;
+  border-top: 1px solid rgba(128, 128, 128, 0.25);
+  font-size: 12px;
+  opacity: 0.8;
+}

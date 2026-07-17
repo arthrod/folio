@@ -1,0 +1,6 @@
+dist/
+node_modules/
+# Vendored jubarte comparer wasm (regenerate: bun scripts/vendor-jubarte-wasm.sh).
+# Binary/external artifacts owned by neurotic_docx_bench per GET_JUBARTE_RUST.md.
+src/redline/jubarte-wasm/*.wasm
+public/redline/*.docx
