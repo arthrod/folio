@@ -29,6 +29,15 @@ describe("loadDocxArchive", () => {
     expect(await archive.readEntryString("word/document.xml")).toBe("content");
     expect(await archive.readEntryUint8("media.bin")).toEqual(new Uint8Array([97, 98, 99]));
     expect(await archive.readEntryString("missing.xml")).toBeNull();
+    expect(archive.entryMetadata).toEqual([
+      { path: "word/", directory: true, declaredUncompressedBytes: null },
+      {
+        path: "word/document.xml",
+        directory: false,
+        declaredUncompressedBytes: 7,
+      },
+      { path: "media.bin", directory: false, declaredUncompressedBytes: 3 },
+    ]);
   });
 
   test("rejects invalid archives with a tagged error", async () => {
@@ -57,6 +66,28 @@ describe("loadDocxArchive", () => {
     expect(error).toMatchObject({ reason: "input-too-large" });
   });
 
+  test("rejects invalid archive and per-read limits", async () => {
+    const bytes = await makeZip({ entry: "content" });
+    const archiveErrors = await Promise.all(
+      [Number.NaN, -1, 1.5].map((maxEntryBytes) =>
+        rejection(loadDocxArchive(bytes, { maxEntryBytes })),
+      ),
+    );
+    const archive = await loadDocxArchive(bytes);
+    const readErrors = await Promise.all(
+      [Number.NaN, -1, 1.5].map((maxBytes) =>
+        rejection(archive.readEntryUint8("entry", { maxBytes })),
+      ),
+    );
+
+    expect(archiveErrors).toEqual(
+      archiveErrors.map(() => expect.objectContaining({ reason: "invalid-options" })),
+    );
+    expect(readErrors).toEqual(
+      readErrors.map(() => expect.objectContaining({ reason: "invalid-options" })),
+    );
+  });
+
   test("rejects declared entry and cumulative sizes", async () => {
     const bytes = await makeZip({ a: "12345", b: "67890" });
     const entryError = await rejection(loadDocxArchive(bytes, { maxEntryBytes: 4 }));
@@ -64,6 +95,25 @@ describe("loadDocxArchive", () => {
 
     expect(entryError).toMatchObject({ reason: "entry-too-large" });
     expect(totalError).toMatchObject({ reason: "total-too-large" });
+  });
+
+  test("counts files after directory entries during declared-size preflight", async () => {
+    const bytes = await makeZip({ "word/a": "12345", "word/b": "67890" });
+
+    const error = await rejection(loadDocxArchive(bytes, { maxTotalBytes: 8 }));
+
+    expect(error).toMatchObject({ reason: "total-too-large" });
+  });
+
+  test("applies a stricter byte limit to an individual read", async () => {
+    const archive = await loadDocxArchive(await makeZip({ large: "12345", small: "123" }));
+
+    await expect(archive.readEntryUint8("large", { maxBytes: 4 })).rejects.toMatchObject({
+      reason: "entry-too-large",
+    });
+    await expect(archive.readEntryUint8("small", { maxBytes: 4 })).resolves.toEqual(
+      new Uint8Array([49, 50, 51]),
+    );
   });
 
   test("serializes concurrent reads against the cumulative budget", async () => {

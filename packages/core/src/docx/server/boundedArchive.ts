@@ -14,7 +14,8 @@ export class DocxArchiveError extends TaggedError("DocxArchiveError")<{
     | "input-too-large"
     | "too-many-entries"
     | "entry-too-large"
-    | "total-too-large";
+    | "total-too-large"
+    | "invalid-options";
   cause?: unknown;
 }>() {}
 
@@ -25,10 +26,21 @@ export type DocxArchiveOptions = {
   maxEntries?: number;
 };
 
+export type DocxArchiveEntry = {
+  readonly path: string;
+  readonly directory: boolean;
+  readonly declaredUncompressedBytes: number | null;
+};
+
+export type DocxArchiveReadOptions = {
+  maxBytes?: number;
+};
+
 export type DocxArchive = {
   entries: readonly string[];
+  entryMetadata: readonly DocxArchiveEntry[];
   readEntryString: (path: string) => Promise<string | null>;
-  readEntryUint8: (path: string) => Promise<Uint8Array | null>;
+  readEntryUint8: (path: string, options?: DocxArchiveReadOptions) => Promise<Uint8Array | null>;
 };
 
 type CollectStreamOptions = {
@@ -79,14 +91,56 @@ const collectStream = async ({
     stream.on("error", reject);
   });
 
+const getDeclaredUncompressedBytes = (entry: JSZip.JSZipObject): number | null => {
+  const data = "_data" in entry ? entry._data : undefined;
+  const declaredBytes =
+    typeof data === "object" && data !== null && "uncompressedSize" in data
+      ? data.uncompressedSize
+      : undefined;
+  return typeof declaredBytes === "number" && Number.isFinite(declaredBytes) ? declaredBytes : null;
+};
+
+type ResolveByteLimitOptions = {
+  value: number | undefined;
+  fallback: number;
+  name: string;
+};
+
+const resolveByteLimit = ({ value, fallback, name }: ResolveByteLimitOptions): number => {
+  const limit = value ?? fallback;
+  if (!Number.isSafeInteger(limit) || limit < 0) {
+    throw new DocxArchiveError({
+      message: `${name} must be a non-negative safe integer`,
+      reason: "invalid-options",
+    });
+  }
+  return limit;
+};
+
 export const loadDocxArchive = async (
   bytes: ArrayBuffer | Uint8Array,
   options: DocxArchiveOptions = {},
 ): Promise<DocxArchive> => {
-  const maxInputBytes = options.maxInputBytes ?? DOCX_MAX_INPUT_BYTES;
-  const maxEntryBytes = options.maxEntryBytes ?? DOCX_MAX_ENTRY_BYTES;
-  const maxTotalBytes = options.maxTotalBytes ?? DOCX_MAX_TOTAL_BYTES;
-  const maxEntries = options.maxEntries ?? DOCX_MAX_ENTRIES;
+  const maxInputBytes = resolveByteLimit({
+    value: options.maxInputBytes,
+    fallback: DOCX_MAX_INPUT_BYTES,
+    name: "DOCX input byte limit",
+  });
+  const maxEntryBytes = resolveByteLimit({
+    value: options.maxEntryBytes,
+    fallback: DOCX_MAX_ENTRY_BYTES,
+    name: "DOCX entry byte limit",
+  });
+  const maxTotalBytes = resolveByteLimit({
+    value: options.maxTotalBytes,
+    fallback: DOCX_MAX_TOTAL_BYTES,
+    name: "DOCX cumulative byte limit",
+  });
+  const maxEntries = resolveByteLimit({
+    value: options.maxEntries,
+    fallback: DOCX_MAX_ENTRIES,
+    name: "DOCX entry limit",
+  });
 
   if (bytes.byteLength > maxInputBytes) {
     throw new DocxArchiveError({
@@ -116,12 +170,11 @@ export const loadDocxArchive = async (
 
   let declaredTotalBytes = 0;
   for (const entry of archiveEntries) {
-    const data = "_data" in entry ? entry._data : undefined;
-    const declaredBytes =
-      typeof data === "object" && data !== null && "uncompressedSize" in data
-        ? data.uncompressedSize
-        : undefined;
-    if (typeof declaredBytes !== "number" || !Number.isFinite(declaredBytes)) {
+    if (entry.dir) {
+      continue;
+    }
+    const declaredBytes = getDeclaredUncompressedBytes(entry);
+    if (declaredBytes === null) {
       declaredTotalBytes = Number.NaN;
       break;
     }
@@ -144,7 +197,15 @@ export const loadDocxArchive = async (
   let totalBytesRead = 0;
   let readChain: Promise<unknown> = Promise.resolve();
 
-  const readEntry = async (path: string): Promise<Buffer | null> => {
+  const readEntry = async (
+    path: string,
+    readOptions: DocxArchiveReadOptions = {},
+  ): Promise<Buffer | null> => {
+    const requestedMaxBytes = resolveByteLimit({
+      value: readOptions.maxBytes,
+      fallback: maxEntryBytes,
+      name: "DOCX entry read byte limit",
+    });
     const work = async (): Promise<Buffer | null> => {
       const entry = zip.file(path);
       if (!entry) {
@@ -152,7 +213,7 @@ export const loadDocxArchive = async (
       }
       const buffer = await collectStream({
         stream: entry.nodeStream("nodebuffer"),
-        maxEntryBytes,
+        maxEntryBytes: Math.min(requestedMaxBytes, maxEntryBytes),
         remainingBytes: maxTotalBytes - totalBytesRead,
         maxTotalBytes,
         path,
@@ -171,12 +232,19 @@ export const loadDocxArchive = async (
 
   return {
     entries: Object.freeze(archiveEntries.map(({ name }) => name)),
+    entryMetadata: Object.freeze(
+      archiveEntries.map((entry) => ({
+        path: entry.name,
+        directory: entry.dir,
+        declaredUncompressedBytes: getDeclaredUncompressedBytes(entry),
+      })),
+    ),
     async readEntryString(path) {
       const buffer = await readEntry(path);
       return buffer === null ? null : buffer.toString("utf-8");
     },
-    async readEntryUint8(path) {
-      const buffer = await readEntry(path);
+    async readEntryUint8(path, readOptions) {
+      const buffer = await readEntry(path, readOptions);
       return buffer === null ? null : new Uint8Array(buffer);
     },
   };
