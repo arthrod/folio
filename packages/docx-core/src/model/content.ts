@@ -943,8 +943,15 @@ export type TrackedChangeInfo = {
   id: number;
   /** Author who made the change */
   author: string;
-  /** Date of the change */
+  /** Date of the change (local time, `w:date`) */
   date?: string;
+  /**
+   * UTC companion timestamp Word 2021+ stamps alongside `w:date`
+   * (`w16du:dateUtc`, namespace `.../2023/wordml/word16du`). Same instant as
+   * `date`, expressed in UTC; preserved verbatim so a round-trip does not
+   * degrade revision provenance.
+   */
+  dateUtc?: string;
 };
 
 /**
