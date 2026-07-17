@@ -953,7 +953,7 @@ describe("toProseDoc", () => {
     );
   });
 
-  test("table style run properties do not import docDefault fonts over Normal", () => {
+  test("table style run properties do not override inherited paragraph style fonts", () => {
     const document: Document = {
       package: {
         styles: {
@@ -972,9 +972,22 @@ describe("toProseDoc", () => {
               },
             },
             {
+              styleId: "Body",
+              type: "paragraph",
+              basedOn: "Normal",
+            },
+            {
               styleId: "ShadedTable",
               type: "table",
-              rPr: { color: { rgb: "365F91" } },
+              rPr: {
+                color: { rgb: "365F91" },
+                fontFamily: {
+                  asciiTheme: "majorHAnsi",
+                  ascii: "Calibri",
+                  hAnsiTheme: "majorHAnsi",
+                  hAnsi: "Calibri",
+                },
+              },
               tblStylePr: [{ type: "firstRow", rPr: { bold: true } }],
             },
           ],
@@ -991,6 +1004,7 @@ describe("toProseDoc", () => {
                       content: [
                         {
                           type: "paragraph",
+                          formatting: { styleId: "Body" },
                           content: [
                             {
                               type: "run",
