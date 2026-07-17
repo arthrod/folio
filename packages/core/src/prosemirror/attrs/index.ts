@@ -729,6 +729,7 @@ export const readTextBoxAttrs = (node: PMNode): ReadProseMirrorAttrsResult<TextB
     TEXT_BOX_DOCX_PLACEMENTS,
   );
   optionalString(attrs, "_docxGroupId", "textBox.attrs._docxGroupId", issues);
+  optionalString(attrs, "_docxAnchorId", "textBox.attrs._docxAnchorId", issues);
   optionalTextBoxTrackedChange(attrs, issues);
   optionalTextBoxInlineSdts(attrs, issues);
 

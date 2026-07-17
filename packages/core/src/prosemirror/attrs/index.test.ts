@@ -23,6 +23,7 @@ import {
   readTableRowAttrs,
 } from ".";
 import { schema } from "../schema";
+import { readTextBoxAnchorAttrs } from "../textBoxAnchorAttrs";
 
 const issueMessages = (result: ReturnType<typeof readParagraphAttrs>) => {
   if (result.ok) {
@@ -407,6 +408,16 @@ describe("ProseMirror attr readers", () => {
       expect(textBoxResult.issues.map((issue) => issue.path)).toContain(
         "textBox.attrs._docxInlineSdts[0].id",
       );
+    }
+  });
+
+  test("rejects malformed text-box anchor attrs", () => {
+    const anchor = schema.nodes.textBoxAnchor.create({ anchorId: 7 });
+    const result = readTextBoxAnchorAttrs(anchor);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.map((issue) => issue.path)).toContain("textBoxAnchor.attrs.anchorId");
     }
   });
 

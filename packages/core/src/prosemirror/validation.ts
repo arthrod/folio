@@ -33,6 +33,7 @@ import {
   readTrackedChangeMarkAttrs,
   readUnderlineMarkAttrs,
 } from "./attrs";
+import { readTextBoxAnchorAttrs } from "./textBoxAnchorAttrs";
 
 export type ProseMirrorDocumentValidationIssue = {
   path: string;
@@ -184,6 +185,10 @@ const validateNodeAttrs = (
 
     case "textBox":
       appendAttrIssues(path, readTextBoxAttrs(node), issues);
+      return;
+
+    case "textBoxAnchor":
+      appendAttrIssues(path, readTextBoxAnchorAttrs(node), issues);
       return;
 
     default:

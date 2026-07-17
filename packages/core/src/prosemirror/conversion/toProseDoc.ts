@@ -21,7 +21,6 @@ import type {
   BlockSdt,
   Document,
   Paragraph,
-  ParagraphContent,
   ParagraphFormatting,
   Run,
   TextFormatting,
@@ -231,6 +230,7 @@ function convertParagraph(
   activeCommentIds?: Set<number>,
   extraRunFormatting?: TextFormatting,
   tableParagraphOverlay?: TableCellParagraphSpacingOverlay,
+  textBoxAnchors?: ReadonlyMap<Shape, string>,
 ): PMNode {
   const attrs = paragraphFormattingToAttrs(paragraph, styleResolver, tableParagraphOverlay);
   const isTocParagraph = TOC_STYLE_ID.test(paragraph.formatting?.styleId ?? "");
@@ -312,7 +312,14 @@ function convertParagraph(
     moveKind: "moveFrom" | "moveTo" | null,
   ): void => {
     emitInlineNodes(
-      convertTrackedChange(change, markType, getInheritedRunFormatting, styleResolver, moveKind),
+      convertTrackedChange(
+        change,
+        markType,
+        getInheritedRunFormatting,
+        styleResolver,
+        moveKind,
+        textBoxAnchors,
+      ),
     );
   };
 
@@ -325,17 +332,22 @@ function convertParagraph(
       anchorPointComment(inlineNodes, content.id);
     } else if (content.type === "run") {
       emitInlineNodes(
-        convertRun(content, getInheritedRunFormatting(content.formatting), styleResolver),
+        convertRun(
+          content,
+          getInheritedRunFormatting(content.formatting),
+          styleResolver,
+          textBoxAnchors,
+        ),
       );
     } else if (content.type === "hyperlink") {
       const currentHyperlinkIndex = hyperlinkIndex;
       hyperlinkIndex += 1;
-      const linkNodes = convertHyperlink(
-        content,
+      const linkNodes = convertHyperlink(content, {
         getInheritedRunFormatting,
         styleResolver,
-        currentHyperlinkIndex,
-      );
+        hyperlinkIndex: currentHyperlinkIndex,
+        textBoxAnchors,
+      });
       if (linkNodes.length === 0) {
         emptyHyperlinks ??= [];
         emptyHyperlinks.push({
@@ -351,7 +363,9 @@ function convertParagraph(
     } else if (content.type === "simpleField" || content.type === "complexField") {
       emitInlineNode(convertField(content, getInheritedRunFormatting, styleResolver));
     } else if (content.type === "inlineSdt") {
-      emitInlineNode(convertInlineSdt(content, getInheritedRunFormatting, styleResolver));
+      emitInlineNode(
+        convertInlineSdt(content, getInheritedRunFormatting, styleResolver, textBoxAnchors),
+      );
     } else if (content.type === "insertion" || content.type === "moveTo") {
       emitTrackedChange(content, "insertion", content.type === "moveTo" ? "moveTo" : null);
     } else if (content.type === "deletion" || content.type === "moveFrom") {
@@ -423,17 +437,30 @@ function convertTrackedChange(
   getInheritedRunFormatting: RunFormattingResolver,
   styleResolver?: StyleEngine | null,
   moveKind: "moveFrom" | "moveTo" | null = null,
+  textBoxAnchors?: ReadonlyMap<Shape, string>,
 ): PMNode[] {
   const nodes: PMNode[] = [];
   let hyperlinkIndex = 0;
   for (const item of change.content) {
     if (item.type === "run") {
-      nodes.push(...convertRun(item, getInheritedRunFormatting(item.formatting), styleResolver));
+      nodes.push(
+        ...convertRun(
+          item,
+          getInheritedRunFormatting(item.formatting),
+          styleResolver,
+          textBoxAnchors,
+        ),
+      );
     } else {
       const currentHyperlinkIndex = hyperlinkIndex;
       hyperlinkIndex += 1;
       nodes.push(
-        ...convertHyperlink(item, getInheritedRunFormatting, styleResolver, currentHyperlinkIndex),
+        ...convertHyperlink(item, {
+          getInheritedRunFormatting,
+          styleResolver,
+          hyperlinkIndex: currentHyperlinkIndex,
+          textBoxAnchors,
+        }),
       );
     }
   }
@@ -462,7 +489,8 @@ function canCarryTrackedRunMark(node: PMNode, markType: MarkType): boolean {
       (node.type.name === "image" ||
         node.type.name === "shape" ||
         node.type.name === "hardBreak" ||
-        node.type.name === "tab"))
+        node.type.name === "tab" ||
+        node.type.name === "textBoxAnchor"))
   );
 }
 
@@ -2004,6 +2032,7 @@ function convertInlineSdt(
   sdt: InlineSdt,
   getInheritedRunFormatting: RunFormattingResolver,
   styleResolver?: StyleEngine | null,
+  textBoxAnchors?: ReadonlyMap<Shape, string>,
 ): PMNode | null {
   const props = sdt.properties;
   const inlineNodes: PMNode[] = [];
@@ -2015,17 +2044,18 @@ function convertInlineSdt(
         content,
         getInheritedRunFormatting(content.formatting),
         styleResolver,
+        textBoxAnchors,
       );
       inlineNodes.push(...runNodes);
     } else if (content.type === "hyperlink") {
       const currentHyperlinkIndex = hyperlinkIndex;
       hyperlinkIndex += 1;
-      const linkNodes = convertHyperlink(
-        content,
+      const linkNodes = convertHyperlink(content, {
         getInheritedRunFormatting,
         styleResolver,
-        currentHyperlinkIndex,
-      );
+        hyperlinkIndex: currentHyperlinkIndex,
+        textBoxAnchors,
+      });
       inlineNodes.push(...linkNodes);
     } else if (content.type === "simpleField" || content.type === "complexField") {
       const fieldNode = convertField(content, getInheritedRunFormatting, styleResolver);
@@ -2033,17 +2063,36 @@ function convertInlineSdt(
         inlineNodes.push(fieldNode);
       }
     } else if (content.type === "inlineSdt") {
-      const nestedSdt = convertInlineSdt(content, getInheritedRunFormatting, styleResolver);
+      const nestedSdt = convertInlineSdt(
+        content,
+        getInheritedRunFormatting,
+        styleResolver,
+        textBoxAnchors,
+      );
       if (nestedSdt) {
         inlineNodes.push(nestedSdt);
       }
     } else if (content.type === "insertion") {
       inlineNodes.push(
-        ...convertTrackedChange(content, "insertion", getInheritedRunFormatting, styleResolver),
+        ...convertTrackedChange(
+          content,
+          "insertion",
+          getInheritedRunFormatting,
+          styleResolver,
+          null,
+          textBoxAnchors,
+        ),
       );
     } else if (content.type === "deletion") {
       inlineNodes.push(
-        ...convertTrackedChange(content, "deletion", getInheritedRunFormatting, styleResolver),
+        ...convertTrackedChange(
+          content,
+          "deletion",
+          getInheritedRunFormatting,
+          styleResolver,
+          null,
+          textBoxAnchors,
+        ),
       );
     } else if (content.type === "moveTo") {
       inlineNodes.push(
@@ -2053,6 +2102,7 @@ function convertInlineSdt(
           getInheritedRunFormatting,
           styleResolver,
           "moveTo",
+          textBoxAnchors,
         ),
       );
     } else if (content.type === "moveFrom") {
@@ -2063,6 +2113,7 @@ function convertInlineSdt(
           getInheritedRunFormatting,
           styleResolver,
           "moveFrom",
+          textBoxAnchors,
         ),
       );
     } else {
@@ -2092,6 +2143,7 @@ function convertRun(
   run: Run,
   styleFormatting?: TextFormatting,
   styleResolver?: StyleEngine | null,
+  textBoxAnchors?: ReadonlyMap<Shape, string>,
 ): PMNode[] {
   const nodes: PMNode[] = [];
   const { marks, mergedFormatting } = buildRunMarks(run.formatting, styleFormatting, styleResolver);
@@ -2100,7 +2152,7 @@ function convertRun(
   }
 
   for (const content of run.content) {
-    const contentNodes = convertRunContent(content, marks, mergedFormatting);
+    const contentNodes = convertRunContent(content, marks, mergedFormatting, textBoxAnchors);
     nodes.push(...contentNodes);
   }
 
@@ -2167,6 +2219,7 @@ function convertRunContent(
   content: RunContent,
   marks: ReturnType<typeof schema.mark>[],
   formatting?: TextFormatting,
+  textBoxAnchors?: ReadonlyMap<Shape, string>,
 ): PMNode[] {
   switch (content.type) {
     case "text":
@@ -2200,8 +2253,8 @@ function convertRunContent(
       // Other shapes render as inline SVG
       const shp = content.shape;
       if (shp.textBody) {
-        // Skip - handled by extractTextBoxesFromParagraph
-        return [];
+        const anchorId = textBoxAnchors?.get(shp);
+        return anchorId ? [schema.node("textBoxAnchor", { anchorId }).mark(marks)] : [];
       }
       return [withHyperlinkBoundaryMarks(convertShape(shp), marks)];
     }
@@ -2477,13 +2530,23 @@ function convertImage(image: Image, rawXml?: string): PMNode {
  * Convert a Hyperlink to ProseMirror nodes with link mark
  *
  * @param hyperlink - The hyperlink to convert
- * @param getInheritedRunFormatting - Formatting inherited by each child run
+ * @param options - Formatting, source identity, and extracted text-box anchors
  */
+type ConvertHyperlinkOptions = {
+  getInheritedRunFormatting: RunFormattingResolver;
+  styleResolver: StyleEngine | null | undefined;
+  hyperlinkIndex: number;
+  textBoxAnchors: ReadonlyMap<Shape, string> | undefined;
+};
+
 function convertHyperlink(
   hyperlink: Hyperlink,
-  getInheritedRunFormatting: RunFormattingResolver,
-  styleResolver?: StyleEngine | null,
-  hyperlinkIndex?: number,
+  {
+    getInheritedRunFormatting,
+    styleResolver,
+    hyperlinkIndex,
+    textBoxAnchors,
+  }: ConvertHyperlinkOptions,
 ): PMNode[] {
   const nodes: PMNode[] = [];
 
@@ -2513,7 +2576,7 @@ function convertHyperlink(
       // silently dropped TOC entries' tab between title and page number,
       // collapsing the right-aligned page number flush against the title.
       for (const content of child.content) {
-        nodes.push(...convertRunContent(content, allMarks, mergedFormatting));
+        nodes.push(...convertRunContent(content, allMarks, mergedFormatting, textBoxAnchors));
       }
     }
   }
@@ -2864,27 +2927,30 @@ function convertParagraphWithTextBoxes(
     tableParagraphOverlay,
   }: ConvertParagraphWithTextBoxesOptions,
 ): PMNode[] {
-  const { paragraph, textBoxes } = extractTextBoxesFromParagraph(block);
+  const { textBoxes, textBoxAnchors } = extractTextBoxesFromParagraph(block, textBoxGroupId);
   const pmParagraph = convertParagraph(
-    paragraph,
+    block,
     styleResolver,
     undefined,
     extraRunFormatting,
     tableParagraphOverlay,
+    textBoxAnchors,
   );
   const nodes: PMNode[] = [];
-  const isEmptyAfterExtraction = textBoxes.length > 0 && pmParagraph.content.size === 0;
+  const isEmptyAfterExtraction =
+    textBoxes.length > 0 && !hasContentBesidesTextBoxAnchors(pmParagraph);
   const keepWrapperParagraph =
     isEmptyAfterExtraction && hasParagraphBoundaryPayload(block, pmParagraph);
   if (!isEmptyAfterExtraction || keepWrapperParagraph) {
     nodes.push(pmParagraph);
   }
-  for (const { textBox, trackedChange, inlineSdts } of textBoxes) {
+  for (const { textBox, anchorId, trackedChange, inlineSdts } of textBoxes) {
     nodes.push(
       convertTextBox(textBox, styleResolver, {
         placement:
           isEmptyAfterExtraction && !keepWrapperParagraph ? "standalone" : "inlineWithPrevious",
         groupId: textBoxGroupId,
+        anchorId,
         context,
         trackedChange,
         inlineSdts,
@@ -2892,6 +2958,24 @@ function convertParagraphWithTextBoxes(
     );
   }
   return nodes;
+}
+
+function hasContentBesidesTextBoxAnchors(paragraph: PMNode): boolean {
+  let hasContent = false;
+  paragraph.descendants((node) => {
+    if (node.type.name === "textBoxAnchor") {
+      return false;
+    }
+    if (node.type.name === "sdt") {
+      if (node.childCount === 0) {
+        hasContent = true;
+      }
+      return !hasContent;
+    }
+    hasContent = true;
+    return false;
+  });
+  return hasContent;
 }
 
 function hasParagraphBoundaryPayload(block: Paragraph, pmParagraph: PMNode): boolean {
@@ -2911,6 +2995,7 @@ function hasParagraphBoundaryPayload(block: Paragraph, pmParagraph: PMNode): boo
  */
 type ExtractedTextBox = {
   textBox: TextBox;
+  anchorId: string;
   trackedChange: NonNullable<TextBoxAttrs["_docxTrackedChange"]> | undefined;
   inlineSdts: NonNullable<TextBoxAttrs["_docxInlineSdts"]>;
 };
@@ -2921,90 +3006,71 @@ type TextBoxExtractionContext = {
 };
 
 type ExtractTextBoxesResult = {
-  paragraph: Paragraph;
   textBoxes: ExtractedTextBox[];
+  textBoxAnchors: ReadonlyMap<Shape, string>;
 };
 
-function extractTextBoxesFromParagraph(paragraph: Paragraph): ExtractTextBoxesResult {
+function extractTextBoxesFromParagraph(
+  paragraph: Paragraph,
+  textBoxGroupId: string,
+): ExtractTextBoxesResult {
   const textBoxes: ExtractedTextBox[] = [];
-  const stripRun = (run: Run, context: TextBoxExtractionContext): Run | undefined => {
-    const content: Run["content"] = [];
-    let removedTextBox = false;
+  const textBoxAnchors = new Map<Shape, string>();
+  const visitRun = (run: Run, context: TextBoxExtractionContext): void => {
     for (const runContent of run.content) {
       if (runContent.type !== "shape" || !runContent.shape.textBody) {
-        content.push(runContent);
         continue;
       }
-      removedTextBox = true;
+      const anchorId = `${textBoxGroupId}:${textBoxes.length}`;
+      textBoxAnchors.set(runContent.shape, anchorId);
       textBoxes.push({
         textBox: textBoxFromShape(runContent.shape, runContent.shape.textBody),
+        anchorId,
         trackedChange: context.trackedChange,
         inlineSdts: context.inlineSdts,
       });
     }
-    if (!removedTextBox) {
-      return run;
-    }
-    if (content.length === 0) {
-      return undefined;
-    }
-    return { ...run, content };
   };
 
-  const stripTrackedChange = (
+  const visitHyperlink = (hyperlink: Hyperlink, context: TextBoxExtractionContext): void => {
+    for (const child of hyperlink.children) {
+      if (child.type === "run") {
+        visitRun(child, context);
+      }
+    }
+  };
+
+  const visitTrackedChange = (
     change: Insertion | Deletion | MoveFrom | MoveTo,
     context: TextBoxExtractionContext,
-  ): Insertion | Deletion | MoveFrom | MoveTo | undefined => {
+  ): void => {
     const trackedChange = { type: change.type, info: change.info } as const satisfies NonNullable<
       TextBoxAttrs["_docxTrackedChange"]
     >;
-    const content: (Run | Hyperlink)[] = [];
     for (const item of change.content) {
-      if (item.type !== "run") {
-        content.push(item);
+      if (item.type === "run") {
+        visitRun(item, { ...context, trackedChange });
         continue;
       }
-      const run = stripRun(item, { ...context, trackedChange });
-      if (run) {
-        content.push(run);
-      }
+      visitHyperlink(item, { ...context, trackedChange });
     }
-    if (content.length === 0) {
-      return undefined;
-    }
-    if (change.type === "insertion") {
-      return { ...change, content };
-    }
-    if (change.type === "deletion") {
-      return { ...change, content };
-    }
-    if (change.type === "moveFrom") {
-      return { ...change, content };
-    }
-    return { ...change, content };
   };
 
-  const stripInlineSdt = (
-    sdt: InlineSdt,
-    context: TextBoxExtractionContext,
-  ): InlineSdt | undefined => {
+  const visitInlineSdt = (sdt: InlineSdt, context: TextBoxExtractionContext): void => {
     const inlineSdts = [...context.inlineSdts, sdtAttrsFromProperties(sdt.properties)];
     const nestedContext = { ...context, inlineSdts };
-    const content: InlineSdt["content"] = [];
 
     for (const item of sdt.content) {
       if (item.type === "run") {
-        const run = stripRun(item, nestedContext);
-        if (run) {
-          content.push(run);
-        }
+        visitRun(item, nestedContext);
         continue;
       }
       if (item.type === "inlineSdt") {
-        const nestedSdt = stripInlineSdt(item, nestedContext);
-        if (nestedSdt) {
-          content.push(nestedSdt);
-        }
+        visitInlineSdt(item, nestedContext);
+        continue;
+      }
+      if (item.type === "hyperlink") {
+        visitHyperlink(item, nestedContext);
         continue;
       }
       if (
@@ -3013,33 +3079,23 @@ function extractTextBoxesFromParagraph(paragraph: Paragraph): ExtractTextBoxesRe
         item.type === "moveFrom" ||
         item.type === "moveTo"
       ) {
-        const change = stripTrackedChange(item, nestedContext);
-        if (change) {
-          content.push(change);
-        }
-        continue;
+        visitTrackedChange(item, nestedContext);
       }
-      content.push(item);
     }
-
-    return content.length > 0 || sdt.content.length === 0 ? { ...sdt, content } : undefined;
   };
 
-  const content: ParagraphContent[] = [];
   const rootContext: TextBoxExtractionContext = { inlineSdts: [] };
   for (const item of paragraph.content) {
     if (item.type === "run") {
-      const run = stripRun(item, rootContext);
-      if (run) {
-        content.push(run);
-      }
+      visitRun(item, rootContext);
       continue;
     }
     if (item.type === "inlineSdt") {
-      const sdt = stripInlineSdt(item, rootContext);
-      if (sdt) {
-        content.push(sdt);
-      }
+      visitInlineSdt(item, rootContext);
+      continue;
+    }
+    if (item.type === "hyperlink") {
+      visitHyperlink(item, rootContext);
       continue;
     }
     if (
@@ -3048,18 +3104,13 @@ function extractTextBoxesFromParagraph(paragraph: Paragraph): ExtractTextBoxesRe
       item.type === "moveFrom" ||
       item.type === "moveTo"
     ) {
-      const change = stripTrackedChange(item, rootContext);
-      if (change) {
-        content.push(change);
-      }
-      continue;
+      visitTrackedChange(item, rootContext);
     }
-    content.push(item);
   }
 
   return {
-    paragraph: { ...paragraph, content },
     textBoxes,
+    textBoxAnchors,
   };
 }
 
@@ -3102,6 +3153,7 @@ function convertTextBox(
   options: {
     placement?: "standalone" | "inlineWithPrevious";
     groupId?: string;
+    anchorId: string;
     context: TableConversionContext;
     trackedChange: NonNullable<TextBoxAttrs["_docxTrackedChange"]> | undefined;
     inlineSdts: NonNullable<TextBoxAttrs["_docxInlineSdts"]>;
@@ -3252,6 +3304,7 @@ function convertTextBox(
       position,
       _docxPlacement: options.placement,
       _docxGroupId: options.groupId,
+      _docxAnchorId: options.anchorId,
       _docxTrackedChange: options.trackedChange,
       _docxInlineSdts: options.inlineSdts.length > 0 ? options.inlineSdts : undefined,
     },
