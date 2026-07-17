@@ -488,6 +488,30 @@ describe("calculateHeaderFooterMarginPushBounds", () => {
 });
 
 describe("header/footer layout conversion", () => {
+  test("applies document line-breaking policy to header paragraphs", () => {
+    const pmDoc = schema.node("doc", null, [
+      schema.node("paragraph", null, [schema.text("Header hyphenation")]),
+    ]);
+
+    const result = convertHeaderFooterPmDocToContent(pmDoc, 600, metrics, {
+      measureBlocks,
+      automaticHyphenation: { enabled: true, consecutiveLineLimit: 2 },
+      lineBreakRules: {
+        noLineBreaksBefore: { language: "ja-JP", characters: "※" },
+      },
+    });
+
+    expect(result?.blocks.at(0)).toMatchObject({
+      kind: "paragraph",
+      attrs: {
+        automaticHyphenation: { enabled: true, consecutiveLineLimit: 2 },
+        lineBreakRules: {
+          noLineBreaksBefore: { language: "ja-JP", characters: "※" },
+        },
+      },
+    });
+  });
+
   test("derives flow height before margin push so floating text boxes do not seed the body push", () => {
     const pmDoc = schema.node("doc", null, [
       schema.node("paragraph", null, [schema.text("Header")]),
@@ -608,6 +632,29 @@ describe("header/footer layout conversion", () => {
     expect(nested.attrs?.spacing?.after).toBeUndefined();
   });
 
+  test.each([
+    { source: "paragraph formatting", attrs: { hasDirectParagraphFormatting: true } },
+    { source: "paragraph-mark formatting", attrs: { hasDirectParagraphMarkFormatting: true } },
+    { source: "an explicit style", attrs: { styleId: "Spacer" } },
+  ])("keeps inherited spacing on an empty paragraph authored through $source", ({ attrs }) => {
+    const [normalized] = normalizeHeaderFooterMeasureBlocks([
+      emptyParagraph({ attrs: { spacing: { after: 10 }, ...attrs } }),
+    ]);
+
+    expect(normalized).toMatchObject({
+      kind: "paragraph",
+      attrs: { spacing: { after: 10 } },
+    });
+  });
+
+  test("strips inherited spacing from a bare empty page-furniture paragraph", () => {
+    const [normalized] = normalizeHeaderFooterMeasureBlocks([
+      emptyParagraph({ attrs: { spacing: { after: 10 } } }),
+    ]);
+
+    expect(normalized).toMatchObject({ kind: "paragraph", attrs: { spacing: {} } });
+  });
+
   test("suppresses only the canonical trailing empty paragraph after a final table", () => {
     const blocks = normalizeHeaderFooterMeasureBlocks([
       table(),
@@ -655,6 +702,44 @@ describe("header/footer layout conversion", () => {
     );
 
     expect(bounds).toEqual({ top: 0, bottom: 24 });
+  });
+
+  test("keeps a paintless empty story out of body margin clearance", () => {
+    const bounds = calculateHeaderFooterMarginPushBounds(
+      [emptyParagraph({ id: "empty-story" })],
+      [{ kind: "paragraph", lines: [], totalHeight: 12 }],
+      12,
+      metrics,
+    );
+
+    expect(bounds).toEqual({ top: 0, bottom: 0 });
+  });
+
+  test("keeps a tab-only story out of body margin clearance", () => {
+    const bounds = calculateHeaderFooterMarginPushBounds(
+      [paragraph({ id: "tab-only-story", runs: [{ kind: "tab" }] })],
+      [{ kind: "paragraph", lines: [], totalHeight: 12 }],
+      12,
+      metrics,
+    );
+
+    expect(bounds).toEqual({ top: 0, bottom: 0 });
+  });
+
+  test("keeps authored spacing in empty-story body margin clearance", () => {
+    const bounds = calculateHeaderFooterMarginPushBounds(
+      [
+        emptyParagraph({
+          id: "authored-empty-story",
+          attrs: { spacingExplicit: { before: true } },
+        }),
+      ],
+      [{ kind: "paragraph", lines: [], totalHeight: 12 }],
+      12,
+      metrics,
+    );
+
+    expect(bounds).toEqual({ top: 0, bottom: 12 });
   });
 });
 

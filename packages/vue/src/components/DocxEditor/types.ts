@@ -10,8 +10,11 @@ import type {
   FolioAIEditOperation,
   FolioAIEditSnapshot,
   FolioCommentAnchor,
+  FolioDocumentNavigationTarget,
   FolioDocumentOperationBatch,
   FolioDocumentOperationResult,
+  FolioDocumentOperationUndoHandle,
+  FolioDocumentOperationUndoResult,
   FolioReviewChange,
 } from "@stll/folio-core/ai-edits";
 import type {
@@ -395,6 +398,10 @@ export type DocxEditorRef = {
   applyDocumentOperations: (
     options: DocxEditorApplyDocumentOperationsOptions,
   ) => FolioDocumentOperationResult;
+  /** Undo the latest unchanged document-operation batch. */
+  undoDocumentOperations: (
+    undoHandle: FolioDocumentOperationUndoHandle,
+  ) => FolioDocumentOperationUndoResult;
   /** Apply AI-authored operations against a previously created block snapshot. */
   applyAIEditOperations: (options: {
     snapshot: FolioAIEditSnapshot;
@@ -442,6 +449,11 @@ export type DocxEditorRef = {
    * accept. Without `snapshot`, falls back to a fresh-from-live-doc snapshot.
    */
   scrollToBlock: (blockId: string, snapshot?: FolioAIEditSnapshot) => boolean;
+  /** Resolve a stable block or text-range target and reveal it in the editor. */
+  showInDocument: (
+    target: FolioDocumentNavigationTarget,
+    snapshot?: FolioAIEditSnapshot,
+  ) => boolean;
 
   // -------------------------------------------------------------------------
   // Read surface (agents, review tooling)
@@ -469,6 +481,11 @@ export type DocxEditorRef = {
    * out of range or the layout hasn't been computed yet.
    */
   getPageText: (page: number) => string | null;
+  /** Resolve a stable block or text range to its real 1-based rendered page. */
+  getTargetPage: (
+    target: FolioDocumentNavigationTarget,
+    snapshot?: FolioAIEditSnapshot,
+  ) => number | null;
 
   // -------------------------------------------------------------------------
   // Block-level content controls (w:sdt)

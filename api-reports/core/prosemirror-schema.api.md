@@ -140,13 +140,15 @@ export type ImageAttrs = {
     cropRight?: number;
     cropBottom?: number;
     cropLeft?: number; /** Position for floating images (horizontal and vertical alignment) */
-    position?: ImagePositionAttrs; /** Border width in pixels */
+    position?: ImagePositionAttrs; /** Use the containing table cell as the anchor's positioning scope (the OOXML default). */
+    layoutInCell?: boolean; /** Border width in pixels */
     borderWidth?: number; /** Border color as CSS color string */
     borderColor?: string; /** Border style (CSS border-style value) */
     borderStyle?: string; /** Wrap text setting from DOCX (left, right, bothSides, largest) for round-trip */
     wrapText?: NonNullable<import__stll_docx_core_model.ImageWrap["wrapText"]>; /** Hyperlink URL for clickable image */
     hlinkHref?: string; /** Original OOXML for opaque/unsupported DOCX drawings. */
-    _docxRawXml?: string;
+    _docxRawXml?: string; /** Embedded-object previews use their authored box as the exact line height. */
+    _docxObjectPreview?: boolean;
 };
 
 // @public
@@ -163,6 +165,13 @@ export type ImagePositionAttrs = {
     };
 };
 
+// @public (undocumented)
+export type LanguageAttrs = {
+    val?: string;
+    eastAsia?: string;
+    bidi?: string;
+};
+
 // @public
 export type MathAttrs = {
     display?: "inline" | "block"; /** Raw OMML XML for round-trip preservation */
@@ -174,13 +183,17 @@ export type MathAttrs = {
 export type ParagraphAttrs = {
     paraId?: string;
     textId?: string;
-    alignment?: import__stll_docx_core_model.ParagraphAlignment;
+    alignment?: import__stll_docx_core_model.ParagraphAlignment; /** Effective East Asian line-edge policy (`w:kinsoku`). */
+    kinsoku?: boolean; /** Effective hanging-punctuation policy (`w:overflowPunct`). */
+    overflowPunctuation?: boolean; /** Effective paragraph opt-out from document automatic hyphenation. */
+    suppressAutoHyphens?: boolean;
     spaceBefore?: number;
     spaceAfter?: number;
     lineSpacing?: number;
     lineSpacingRule?: import__stll_docx_core_model.LineSpacingRule;
     spacingExplicit?: SpacingExplicit; /** Layout provenance: document defaults survive on empty paragraphs. */
-    spacingFromDocDefaults?: SpacingExplicit;
+    spacingFromDocDefaults?: SpacingExplicit; /** Layout provenance: implicit default-style spacing survives on empty paragraphs. */
+    spacingFromImplicitDefaultStyle?: SpacingExplicit;
     indentLeft?: number;
     indentRight?: number;
     indentFirstLine?: number;
@@ -199,7 +212,9 @@ export type ParagraphAttrs = {
     listMarker?: string; /** Whether the list marker is hidden (w:vanish on numbering level rPr) */
     listMarkerHidden?: boolean; /** Marker font family from numbering level rPr */
     listMarkerFontFamily?: string; /** Marker font size from numbering level rPr, in points */
-    listMarkerFontSize?: number;
+    listMarkerFontSize?: number; /** Marker bold state from numbering level rPr */
+    listMarkerBold?: boolean; /** Horizontal alignment of the marker around the paragraph's list anchor. */
+    listMarkerAlignment?: "left" | "center" | "right";
     listMarkerSuffix?: "tab" | "space" | "nothing"; /** `w:caps` on the numbering level rPr — render marker in upper case. */
     listMarkerAllCaps?: boolean;
     listImplicitChildLevelAdvances?: number;
@@ -220,7 +235,8 @@ export type ParagraphAttrs = {
     shading?: import__stll_docx_core_model.ShadingProperties;
     tabs?: import__stll_docx_core_model.TabStop[];
     pageBreakBefore?: boolean; /** Word's cached rendered-page-break marker; preserved for round-trip only. */
-    renderedPageBreakBefore?: boolean;
+    renderedPageBreakBefore?: boolean; /** Internal import marker for a paragraph whose only run content is a hard page break. */
+    _pageBreakCarrier?: boolean;
     keepNext?: boolean;
     keepLines?: boolean;
     widowControl?: boolean; /** Contextual spacing — suppress space between same-style paragraphs */
@@ -341,8 +357,10 @@ export type TableAttrs = {
         right?: number;
     }; /** Table look flags for conditional formatting (w:tblLook) */
     look?: import__stll_docx_core_model.TableLook; /** Table-level borders (w:tblBorders) — full BorderSpec per side */
-    borders?: import__stll_docx_core_model.TableBorders; /** Original table formatting from DOCX for lossless round-trip serialization */
-    _originalFormatting?: import__stll_docx_core_model.TableFormatting;
+    borders?: import__stll_docx_core_model.TableBorders; /** Effective table indent after style resolution. PM-only; never serialized. */
+    _resolvedIndent?: NonNullable<import__stll_docx_core_model.TableFormatting["indent"]>; /** Original table formatting from DOCX for lossless round-trip serialization */
+    _originalFormatting?: import__stll_docx_core_model.TableFormatting; /** Tracked table property changes (w:tblPrChange) for round-trip + accept/reject */
+    tblPrChange?: import__stll_docx_core_model.TablePropertyChange[];
 };
 
 // @public
@@ -353,22 +371,19 @@ export type TableCellAttrs = {
     width?: number; /** Cell width type */
     widthType?: import__stll_docx_core_model.TableWidthType; /** Vertical alignment */
     verticalAlign?: "top" | "center" | "bottom"; /** Background color (RGB hex) */
-    backgroundColor?: string; /** OOXML text direction (e.g. 'tbRl', 'btLr') */
+    backgroundColor?: string; /** Resolved source color. PM-only; distinguishes theme rendering from a user override. */
+    _resolvedBackgroundColor?: string; /** OOXML text direction (e.g. 'tbRl', 'btLr') */
     textDirection?: NonNullable<import__stll_docx_core_model.TableCellFormatting["textDirection"]>; /** No text wrapping in cell */
     noWrap?: boolean; /** Cell borders — full BorderSpec per side (style, color, size) */
-    borders?: {
-        top?: import__stll_docx_core_model.BorderSpec;
-        bottom?: import__stll_docx_core_model.BorderSpec;
-        left?: import__stll_docx_core_model.BorderSpec;
-        right?: import__stll_docx_core_model.BorderSpec;
-    }; /** Cell margins/padding in twips per side */
+    borders?: import__stll_docx_core_model.TableCellBorders; /** Cell margins/padding in twips per side */
     margins?: {
         top?: number;
         bottom?: number;
         left?: number;
         right?: number;
     }; /** Original cell formatting from DOCX for lossless round-trip serialization */
-    _originalFormatting?: import__stll_docx_core_model.TableCellFormatting; /** Preserve a DOCX vMerge restart even when PM cannot model it as a rowspan. */
+    _originalFormatting?: import__stll_docx_core_model.TableCellFormatting; /** Tracked cell property changes (w:tcPrChange) for round-trip + accept/reject */
+    tcPrChange?: import__stll_docx_core_model.TableCellPropertyChange[]; /** Preserve a DOCX vMerge restart even when PM cannot model it as a rowspan. */
     _preserveVMergeRestart?: boolean; /** Original DOCX vMerge continuation cells skipped into this PM rowspan. */
     _docxVMergeContinuationCells?: import__stll_docx_core_model.TableCell[];
 };
@@ -379,13 +394,15 @@ export type TableRowAttrs = {
     heightRule?: NonNullable<import__stll_docx_core_model.TableRowFormatting["heightRule"]>; /** Is header row */
     isHeader?: boolean; /** Whether the row is hidden (`w:hidden`) */
     hidden?: boolean; /** Original row formatting from DOCX for lossless round-trip serialization */
-    _originalFormatting?: import__stll_docx_core_model.TableRowFormatting;
+    _originalFormatting?: import__stll_docx_core_model.TableRowFormatting; /** Tracked row property changes (w:trPrChange) for round-trip + accept/reject */
+    trPrChange?: import__stll_docx_core_model.TableRowPropertyChange[];
 };
 
 // @public
 export type TextBoxAttrs = {
     width?: number; /** Height in pixels */
-    height?: number; /** Unique identifier */
+    height?: number; /** Text fitting behavior */
+    autoFit?: import__stll_docx_core_model.ShapeTextBody["autoFit"]; /** Unique identifier */
     textBoxId?: string; /** Fill color as CSS color */
     fillColor?: string; /** Outline width in pixels */
     outlineWidth?: number; /** Outline color as CSS color */
@@ -406,7 +423,20 @@ export type TextBoxAttrs = {
     distRight?: number; /** Position for floating/anchored text boxes */
     position?: ImagePositionAttrs; /** Original DOCX placement hint for save-path reconstruction. */
     _docxPlacement?: "standalone" | "inlineWithPrevious"; /** Original DOCX paragraph group for standalone text-box reconstruction. */
-    _docxGroupId?: string;
+    _docxGroupId?: string; /** Original run-level revision wrapper for save-path reconstruction. */
+    _docxTrackedChange?: {
+        type: "insertion";
+        info: import__stll_docx_core_model.TrackedChangeInfo;
+    } | {
+        type: "deletion";
+        info: import__stll_docx_core_model.TrackedChangeInfo;
+    } | {
+        type: "moveFrom";
+        info: import__stll_docx_core_model.TrackedChangeInfo;
+    } | {
+        type: "moveTo";
+        info: import__stll_docx_core_model.TrackedChangeInfo;
+    };
 };
 
 // @public

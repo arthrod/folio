@@ -65,6 +65,13 @@ export type { ColorPreset, FolioButtonProps, FolioUIComponents, OutlineItem } fr
 // i18n runtime (Vue-specific — React consumes `use-intl` directly). Locale-string
 // types live in the shared catalog; import them from `@stll/folio-core` if needed.
 export { defaultLocale, i18nPlugin, provideLocale, useTranslation } from "./i18n";
+export {
+  colorModePlugin,
+  defaultColorMode,
+  provideColorMode,
+  useColorMode,
+  type ColorMode,
+} from "./composables/useColorMode";
 
 // Wheel/keyboard zoom composable (Vue equivalent of React's `useWheelZoom` hook).
 export { useWheelZoom } from "./composables/useWheelZoom";
@@ -90,6 +97,26 @@ export {
   createEmptyDocument,
   type CreateEmptyDocumentOptions,
 } from "@stll/folio-core/utils/createDocument";
+export {
+  extractDocumentStyleSet,
+  extractDocumentStyleSetFromDocx,
+  inspectDocumentStyles,
+  inspectDocumentStylesFromDocx,
+  type DocumentStyleCatalog,
+  type DocumentStyleCatalogEntry,
+  type ExtractDocumentStyleSetOptions,
+} from "@stll/folio-core/style-sets/extract";
+export {
+  createStellaStyleDocumentPreset,
+  createStellaStyleSet,
+  STELLA_STYLE_SET_NAME,
+} from "@stll/folio-core/style-sets/stellaStyle";
+export {
+  DOCUMENT_PRESET_VERSION,
+  DOCUMENT_STYLE_SET_VERSION,
+  type DocumentPreset,
+  type DocumentStyleSet,
+} from "@stll/folio-core/style-sets/types";
 export { createDocx } from "@stll/folio-core/docx/rezip";
 export type { Document } from "@stll/folio-core/types/document";
 export type { DocxCompatibility } from "@stll/folio-core/docx/compatibility";

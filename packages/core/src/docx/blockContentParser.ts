@@ -15,9 +15,6 @@ import type {
   MediaFile,
   Paragraph,
   RelationshipMap,
-  Run,
-  Shape,
-  ShapeContent,
   Theme,
 } from "../types/document";
 import { parseBookmarkEnd, parseBookmarkStart } from "./bookmarkParser";
@@ -29,19 +26,13 @@ import type { BookmarkMarker } from "./bookmarkPlacement";
 import { convertBulletToUnicode } from "./bulletMarkers";
 import { padDecimal, type NumberingMap } from "./numberingParser";
 import { parseParagraph } from "./paragraphParser";
+import { enrichParagraphTextBoxes } from "./paragraphTextBoxEnrichment";
 import { parseSdtProperties } from "./sdtProperties";
 import type { StyleMap } from "./styleParser";
 import { parseTable } from "./tableParser";
 import {
-  getTextBoxContentElement,
-  isTextBoxDrawing,
-  parseTextBox,
-  parseTextBoxContent,
-} from "./textBoxParser";
-import {
   elementToXml,
   findChild,
-  findDeep,
   getChildElements,
   getLocalName,
   mergeXmlnsDeclarations,
@@ -114,28 +105,55 @@ const formatNumber = (value: number, numFmt: string): string => {
       return toRoman(value);
     case "bullet":
       return "\u2022";
+    case "none":
+      return "";
     default:
       return String(value);
   }
 };
 
+type PreviousListState = {
+  abstractNumId: number | null;
+  fromStyle: boolean;
+  numId: number | null;
+};
+
+type ComputeListMarkerOptions = {
+  numbering: NumberingMap | null;
+  listCounters: Map<number, number[]>;
+  abstractCounters: Map<number, number[]>;
+  restartedNumIds: Set<number>;
+  previousList: PreviousListState;
+};
+
 const computeListMarker = (
   paragraph: Paragraph,
-  numbering: NumberingMap | null,
-  listCounters: Map<number, number[]>,
-  abstractCounters: Map<number, number[]>,
+  {
+    numbering,
+    listCounters,
+    abstractCounters,
+    restartedNumIds,
+    previousList,
+  }: ComputeListMarkerOptions,
 ): void => {
   const listRendering = paragraph.listRendering;
   if (!listRendering || !numbering) {
+    previousList.abstractNumId = null;
+    previousList.fromStyle = false;
+    previousList.numId = null;
     return;
   }
 
   const { numId, level } = listRendering;
   if (numId === 0) {
+    previousList.abstractNumId = null;
+    previousList.fromStyle = false;
+    previousList.numId = null;
     return;
   }
 
-  if (!listCounters.has(numId)) {
+  const firstEncounter = !listCounters.has(numId);
+  if (firstEncounter) {
     listCounters.set(numId, Array.from<number>({ length: 9 }).fill(Number.NaN));
   }
 
@@ -146,7 +164,26 @@ const computeListMarker = (
 
   const abstractNumId = numbering.getAbstractNumId(numId);
   const styleNumbering = paragraph.formatting?.numPrFromStyle;
-  if (abstractNumId !== null && styleNumbering) {
+  let resumedAbstractCounters: number[] | undefined;
+  const resumesRestartedInstance =
+    firstEncounter &&
+    listRendering.startOverride === undefined &&
+    abstractNumId !== null &&
+    previousList.abstractNumId === abstractNumId &&
+    previousList.numId !== null &&
+    previousList.numId !== numId &&
+    restartedNumIds.has(previousList.numId);
+  const resumesStyleInstance =
+    firstEncounter &&
+    !styleNumbering &&
+    listRendering.startOverride === undefined &&
+    abstractNumId !== null &&
+    previousList.abstractNumId === abstractNumId &&
+    previousList.fromStyle === true;
+  if (
+    abstractNumId !== null &&
+    (styleNumbering || resumesRestartedInstance || resumesStyleInstance)
+  ) {
     const latestAbstractCounters = abstractCounters.get(abstractNumId);
     if (latestAbstractCounters) {
       // A paragraph whose numbering comes only from its style resumes the
@@ -157,7 +194,15 @@ const computeListMarker = (
       for (let i = 0; i < counters.length; i += 1) {
         counters[i] = latestAbstractCounters[i] ?? Number.NaN;
       }
+      resumedAbstractCounters = latestAbstractCounters;
     }
+  }
+  if (
+    listRendering.startOverride !== undefined ||
+    resumesRestartedInstance ||
+    (previousList.numId === numId && restartedNumIds.has(numId))
+  ) {
+    restartedNumIds.add(numId);
   }
   if (abstractNumId !== null && level > 0) {
     const latestAbstractCounters = abstractCounters.get(abstractNumId);
@@ -195,13 +240,33 @@ const computeListMarker = (
   }
 
   if (abstractNumId !== null) {
+    if (resumedAbstractCounters) {
+      for (const [otherNumId, otherCounters] of listCounters) {
+        if (
+          otherNumId === numId ||
+          numbering.getAbstractNumId(otherNumId) !== abstractNumId ||
+          !otherCounters.every((value, index) => Object.is(value, resumedAbstractCounters[index]))
+        ) {
+          continue;
+        }
+        for (let i = 0; i < otherCounters.length; i += 1) {
+          otherCounters[i] = counters[i] ?? Number.NaN;
+        }
+      }
+    }
     abstractCounters.set(abstractNumId, [...counters]);
   }
+  previousList.abstractNumId = abstractNumId;
+  previousList.fromStyle = Boolean(styleNumbering);
+  previousList.numId = numId;
 
   const pattern = listRendering.marker;
 
   if (listRendering.isBullet) {
     listRendering.marker = convertBulletToUnicode(pattern || "");
+    previousList.abstractNumId = null;
+    previousList.fromStyle = false;
+    previousList.numId = null;
     return;
   }
 
@@ -225,156 +290,11 @@ const computeListMarker = (
   listRendering.marker = computedMarker;
 };
 
-const enrichParagraphTextBoxes = (
-  paragraph: Paragraph,
-  paraXml: XmlElement,
-  styles: StyleMap | null,
-  theme: Theme | null,
-  numbering: NumberingMap | null,
-  rels: RelationshipMap | null,
-  media: Map<string, MediaFile> | null,
-): void => {
-  const xmlChildren = getChildElements(paraXml);
-  let parsedIndex = 0;
-  let lastConsumedRun: Run | undefined;
-
-  for (const xmlChild of xmlChildren) {
-    if (getLocalName(xmlChild.name ?? "") !== "r") {
-      if (
-        parsedIndex < paragraph.content.length &&
-        paragraph.content[parsedIndex]?.type !== "run"
-      ) {
-        parsedIndex += 1;
-      }
-      continue;
-    }
-
-    const { textBoxDrawings, hasNonTextBoxContent } = scanRunForTextBoxDrawings(xmlChild);
-
-    const parsedContent = paragraph.content[parsedIndex];
-    const parsedRun: Run | undefined = parsedContent?.type === "run" ? parsedContent : undefined;
-    const targetRun = parsedRun ?? (hasNonTextBoxContent ? lastConsumedRun : undefined);
-
-    for (const runEl of textBoxDrawings) {
-      const textBox = parseTextBox(runEl);
-      if (!textBox) {
-        continue;
-      }
-
-      const wsp = findDeep(runEl, "wps", "wsp");
-      if (wsp) {
-        const txbxContentEl = getTextBoxContentElement(wsp);
-        if (txbxContentEl) {
-          textBox.content = parseTextBoxContent(
-            txbxContentEl,
-            parseParagraph,
-            null,
-            styles,
-            theme,
-            numbering,
-            rels ?? undefined,
-            media ?? undefined,
-          );
-        }
-      }
-
-      const shape: Shape = {
-        type: "shape",
-        shapeType: "textBox",
-        size: textBox.size,
-        ...(textBox.position !== undefined ? { position: textBox.position } : {}),
-        ...(textBox.wrap !== undefined ? { wrap: textBox.wrap } : {}),
-        ...(textBox.fill !== undefined ? { fill: textBox.fill } : {}),
-        ...(textBox.outline !== undefined ? { outline: textBox.outline } : {}),
-        textBody: {
-          content: textBox.content,
-          ...(textBox.margins !== undefined ? { margins: textBox.margins } : {}),
-        },
-      };
-      if (textBox.id) {
-        shape.id = textBox.id;
-      }
-
-      const shapeContent: ShapeContent = { type: "shape", shape };
-
-      if (targetRun && hasNonTextBoxContent) {
-        targetRun.content.push(shapeContent);
-      } else {
-        const newRun: Run = { type: "run", content: [shapeContent] };
-        paragraph.content.splice(parsedIndex, 0, newRun);
-        lastConsumedRun = newRun;
-        parsedIndex += 1;
-      }
-    }
-
-    if (hasNonTextBoxContent && parsedRun) {
-      lastConsumedRun = parsedRun;
-      parsedIndex += 1;
-    }
-  }
-};
-
-type TextBoxRunScan = {
-  textBoxDrawings: XmlElement[];
-  hasNonTextBoxContent: boolean;
-};
-
-const scanRunForTextBoxDrawings = (xmlRun: XmlElement): TextBoxRunScan => {
-  const textBoxDrawings: XmlElement[] = [];
-  let hasNonTextBoxContent = false;
-
-  const visitDrawing = (drawingEl: XmlElement): void => {
-    if (isTextBoxDrawing(drawingEl)) {
-      textBoxDrawings.push(drawingEl);
-      return;
-    }
-    hasNonTextBoxContent = true;
-  };
-
-  for (const el of getChildElements(xmlRun)) {
-    const name = getLocalName(el.name ?? "");
-    if (name === "rPr") {
-      continue;
-    }
-    if (name === "drawing") {
-      visitDrawing(el);
-      continue;
-    }
-    if (name === "AlternateContent") {
-      const branches = getChildElements(el);
-      const choice = branches.find((branch) => getLocalName(branch.name ?? "") === "Choice");
-      const fallback = branches.find((branch) => getLocalName(branch.name ?? "") === "Fallback");
-      const tryBranch = (branch: XmlElement | undefined): boolean => {
-        if (!branch) {
-          return false;
-        }
-        let found = false;
-        for (const innerEl of getChildElements(branch)) {
-          if (getLocalName(innerEl.name ?? "") === "drawing") {
-            visitDrawing(innerEl);
-            found = true;
-          }
-        }
-        return found;
-      };
-      let foundInBranch = tryBranch(choice);
-      if (!foundInBranch) {
-        foundInBranch = tryBranch(fallback);
-      }
-      if (!foundInBranch) {
-        hasNonTextBoxContent = true;
-      }
-      continue;
-    }
-    hasNonTextBoxContent = true;
-  }
-
-  return { textBoxDrawings, hasNonTextBoxContent };
-};
-
 type ParseBlockContentState = {
   listCounters: Map<number, number[]>;
   abstractCounters: Map<number, number[]>;
+  restartedNumIds: Set<number>;
+  previousList: PreviousListState;
   options: ParseBlockContentOptions | undefined;
 };
 
@@ -390,6 +310,8 @@ export const parseBlockContent = (
   parseBlockContentWithState(parent, styles, theme, numbering, rels, media, {
     listCounters: new Map(),
     abstractCounters: new Map(),
+    restartedNumIds: new Set(),
+    previousList: { abstractNumId: null, fromStyle: false, numId: null },
     // Accumulate the container's own xmlns onto the inherited in-scope set so a
     // captured VML `w:pict` replay resolves prefixes scoped on this level too.
     options: {
@@ -418,8 +340,14 @@ const parseBlockContentWithState = (
     if (localName === "p") {
       const paragraph = parseParagraph(child, styles, theme, numbering, rels, media, state.options);
       prependPendingBookmarkMarkers(paragraph, pendingBookmarkMarkers);
-      enrichParagraphTextBoxes(paragraph, child, styles, theme, numbering, rels, media);
-      computeListMarker(paragraph, numbering, state.listCounters, state.abstractCounters);
+      enrichParagraphTextBoxes(paragraph, child, styles, theme, numbering, rels, media, parseTable);
+      computeListMarker(paragraph, {
+        numbering,
+        listCounters: state.listCounters,
+        abstractCounters: state.abstractCounters,
+        restartedNumIds: state.restartedNumIds,
+        previousList: state.previousList,
+      });
       content.push(paragraph);
       continue;
     }

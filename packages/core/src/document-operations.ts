@@ -31,6 +31,10 @@ export const FOLIO_DOCUMENT_OPERATION_TYPES = Object.freeze([
   "deleteBlock",
   "commentOnBlock",
   "insertSignatureTable",
+  "insertTableRow",
+  "deleteTableRow",
+  "insertTableColumn",
+  "deleteTableColumn",
 ] as const satisfies readonly FolioAIEditOperation["type"][]);
 
 export const FOLIO_DOCUMENT_OPERATION_MODES = Object.freeze([
@@ -38,7 +42,13 @@ export const FOLIO_DOCUMENT_OPERATION_MODES = Object.freeze([
   "tracked-changes",
 ] as const satisfies readonly FolioAIEditApplyMode[]);
 
-export const FOLIO_DOCUMENT_OPERATION_STORIES = Object.freeze(["main"] as const);
+export const FOLIO_DOCUMENT_OPERATION_STORIES = Object.freeze([
+  "main",
+  "header",
+  "footer",
+  "footnote",
+  "endnote",
+] as const);
 export const FOLIO_DOCUMENT_OPERATION_PRECONDITIONS = Object.freeze(["blockTextHash"] as const);
 export const FOLIO_DOCUMENT_OPERATION_BATCH_MODES = Object.freeze([
   "best-effort",
@@ -66,6 +76,10 @@ export const FOLIO_DOCUMENT_OPERATION_MODES_BY_TYPE = Object.freeze({
   deleteBlock: DIRECT_AND_TRACKED_MODES,
   commentOnBlock: DIRECT_AND_TRACKED_MODES,
   insertSignatureTable: DIRECT_ONLY_MODES,
+  insertTableRow: DIRECT_ONLY_MODES,
+  deleteTableRow: DIRECT_ONLY_MODES,
+  insertTableColumn: DIRECT_ONLY_MODES,
+  deleteTableColumn: DIRECT_ONLY_MODES,
 } as const satisfies Readonly<
   Record<FolioDocumentOperationType, readonly FolioDocumentOperationMode[]>
 >);
@@ -209,6 +223,26 @@ const readOptionalBoolean = (
     return candidate;
   }
   return invalidBatch(`${path}.${key}`, "expected a boolean when provided");
+};
+
+const readOptionalStringArray = (
+  value: Record<string, unknown>,
+  key: string,
+  path: string,
+): string[] | undefined => {
+  const candidate = value[key];
+  if (candidate === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(candidate)) {
+    return invalidBatch(`${path}.${key}`, "expected an array when provided");
+  }
+  return candidate.map((item, index) => {
+    if (typeof item === "string") {
+      return item;
+    }
+    return invalidBatch(`${path}.${key}[${index}]`, "expected a string");
+  });
 };
 
 const readNonNegativeInteger = (
@@ -367,11 +401,16 @@ const parseSignatureParties = (
     assertAllowedKeys(party, partyPath, ["name", "signatory", "title"]);
     const signatory = readOptionalString(party, "signatory", partyPath);
     const title = readOptionalString(party, "title", partyPath);
-    return {
+    const parsedParty: { name: string; signatory?: string; title?: string } = {
       name: readString(party, "name", partyPath),
-      ...(signatory !== undefined && { signatory }),
-      ...(title !== undefined && { title }),
     };
+    if (signatory !== undefined) {
+      parsedParty.signatory = signatory;
+    }
+    if (title !== undefined) {
+      parsedParty.title = title;
+    }
+    return parsedParty;
   });
 };
 
@@ -547,6 +586,50 @@ const parseDocumentOperation = (value: unknown, index: number): FolioDocumentOpe
     };
   }
 
+  if (type === "insertTableRow") {
+    assertAllowedKeys(value, path, [...COMMON_OPERATION_KEYS, "position", "cellTexts"]);
+    const position = value["position"];
+    if (position !== undefined && position !== "after" && position !== "before") {
+      return invalidBatch(`${path}.position`, 'expected "after" or "before" when provided');
+    }
+    const cellTexts = readOptionalStringArray(value, "cellTexts", path);
+    return {
+      ...operationMeta,
+      id,
+      type,
+      blockId,
+      ...(position !== undefined && { position }),
+      ...(cellTexts !== undefined && { cellTexts }),
+    };
+  }
+
+  if (type === "deleteTableRow") {
+    assertAllowedKeys(value, path, COMMON_OPERATION_KEYS);
+    return { ...operationMeta, id, type, blockId };
+  }
+
+  if (type === "insertTableColumn") {
+    assertAllowedKeys(value, path, [...COMMON_OPERATION_KEYS, "position", "cellTexts"]);
+    const position = value["position"];
+    if (position !== undefined && position !== "after" && position !== "before") {
+      return invalidBatch(`${path}.position`, 'expected "after" or "before" when provided');
+    }
+    const cellTexts = readOptionalStringArray(value, "cellTexts", path);
+    return {
+      ...operationMeta,
+      id,
+      type,
+      blockId,
+      ...(position !== undefined && { position }),
+      ...(cellTexts !== undefined && { cellTexts }),
+    };
+  }
+
+  if (type === "deleteTableColumn") {
+    assertAllowedKeys(value, path, COMMON_OPERATION_KEYS);
+    return { ...operationMeta, id, type, blockId };
+  }
+
   return invalidBatch(`${path}.type`, `unsupported operation type "${type}"`);
 };
 
@@ -602,11 +685,18 @@ export type FolioDocumentOperationIssue = {
   recovery: FolioDocumentOperationRecovery;
 };
 
+export type FolioDocumentOperationStory =
+  | "main"
+  | { type: "header"; relationshipId: string }
+  | { type: "footer"; relationshipId: string }
+  | { type: "footnote"; noteId: number }
+  | { type: "endnote"; noteId: number };
+
 /** One typed target affected by a successfully applied document operation. */
 export type FolioDocumentOperationAffectedTarget =
   | {
       type: "block";
-      story: "main";
+      story: FolioDocumentOperationStory;
       blockId: string;
       effect: "updated" | "deleted" | "commented";
     }
@@ -614,17 +704,30 @@ export type FolioDocumentOperationAffectedTarget =
       type: "textRange";
       range: FolioAITextRangeHandle;
       effect: "formatted" | "commented";
+      story?: Exclude<FolioDocumentOperationStory, "main">;
     }
   | {
       type: "insertion";
-      story: "main";
+      story: FolioDocumentOperationStory;
       anchorBlockId: string;
       position: "before" | "after";
-      content: "block" | "signatureTable";
+      content: "block" | "signatureTable" | "tableRow" | "tableColumn";
     }
   | {
       type: "comment";
       commentId: number;
+    }
+  | {
+      type: "tableRow";
+      story: FolioDocumentOperationStory;
+      anchorBlockId: string;
+      effect: "deleted";
+    }
+  | {
+      type: "tableColumn";
+      story: FolioDocumentOperationStory;
+      anchorBlockId: string;
+      effect: "deleted";
     };
 
 /** Input-ordered effect receipt for one successfully applied operation. */
@@ -634,6 +737,28 @@ export type FolioDocumentOperationReceipt = {
   affected: FolioDocumentOperationAffectedTarget[];
 };
 
+/** Opaque handle for undoing one committed document-operation batch. */
+export type FolioDocumentOperationUndoHandle = {
+  type: "documentOperationUndo";
+  id: string;
+};
+
+export type FolioDocumentOperationUndoFailureReason =
+  | "unknownHandle"
+  | "notLatest"
+  | "documentChanged";
+
+export type FolioDocumentOperationUndoResult =
+  | {
+      status: "undone";
+      undoHandle: FolioDocumentOperationUndoHandle;
+    }
+  | {
+      status: "rejected";
+      undoHandle: FolioDocumentOperationUndoHandle;
+      reason: FolioDocumentOperationUndoFailureReason;
+    };
+
 export type FolioDocumentOperationResult = {
   version: typeof FOLIO_DOCUMENT_OPERATION_CONTRACT_VERSION;
   status: FolioDocumentOperationStatus;
@@ -642,6 +767,8 @@ export type FolioDocumentOperationResult = {
   issues: FolioDocumentOperationIssue[];
   /** Successful effects in input-operation order; skipped operations are omitted. */
   receipts: FolioDocumentOperationReceipt[];
+  /** Present when the execution surface can undo this committed batch. */
+  undoHandle: FolioDocumentOperationUndoHandle | null;
 };
 
 const recoveryByReason = {
@@ -681,32 +808,43 @@ export const getFolioDocumentOperationIssues = (
 
 const getPrimaryAffectedTarget = (
   operation: FolioDocumentOperation,
+  story: FolioDocumentOperationStory,
 ): FolioDocumentOperationAffectedTarget => {
   switch (operation.type) {
     case "replaceInBlock":
     case "replaceBlock":
       return {
         type: "block",
-        story: "main",
+        story,
         blockId: operation.blockId,
         effect: "updated",
       };
     case "replaceRange":
       return {
         type: "block",
-        story: "main",
+        story,
         blockId: operation.range.blockId,
         effect: "updated",
       };
     case "commentOnRange":
-      return { type: "textRange", range: operation.range, effect: "commented" };
+      return {
+        type: "textRange",
+        range: operation.range,
+        effect: "commented",
+        ...(story !== "main" && { story }),
+      };
     case "formatRange":
-      return { type: "textRange", range: operation.range, effect: "formatted" };
+      return {
+        type: "textRange",
+        range: operation.range,
+        effect: "formatted",
+        ...(story !== "main" && { story }),
+      };
     case "insertAfterBlock":
     case "insertBeforeBlock":
       return {
         type: "insertion",
-        story: "main",
+        story,
         anchorBlockId: operation.blockId,
         position: operation.type === "insertBeforeBlock" ? "before" : "after",
         content: "block",
@@ -714,24 +852,54 @@ const getPrimaryAffectedTarget = (
     case "deleteBlock":
       return {
         type: "block",
-        story: "main",
+        story,
         blockId: operation.blockId,
         effect: "deleted",
       };
     case "commentOnBlock":
       return {
         type: "block",
-        story: "main",
+        story,
         blockId: operation.blockId,
         effect: "commented",
       };
     case "insertSignatureTable":
       return {
         type: "insertion",
-        story: "main",
+        story,
         anchorBlockId: operation.blockId,
         position: operation.position ?? "after",
         content: "signatureTable",
+      };
+    case "insertTableRow":
+      return {
+        type: "insertion",
+        story,
+        anchorBlockId: operation.blockId,
+        position: operation.position ?? "after",
+        content: "tableRow",
+      };
+    case "deleteTableRow":
+      return {
+        type: "tableRow",
+        story,
+        anchorBlockId: operation.blockId,
+        effect: "deleted",
+      };
+    case "insertTableColumn":
+      return {
+        type: "insertion",
+        story,
+        anchorBlockId: operation.blockId,
+        position: operation.position ?? "after",
+        content: "tableColumn",
+      };
+    case "deleteTableColumn":
+      return {
+        type: "tableColumn",
+        story,
+        anchorBlockId: operation.blockId,
+        effect: "deleted",
       };
   }
 };
@@ -740,7 +908,20 @@ const getPrimaryAffectedTarget = (
 export const getFolioDocumentOperationReceipts = (
   operations: readonly FolioDocumentOperation[],
   applied: readonly FolioAIEditAppliedOperation[],
-): FolioDocumentOperationReceipt[] => {
+): FolioDocumentOperationReceipt[] =>
+  getFolioDocumentOperationReceiptsForStory({ operations, applied, story: "main" });
+
+type GetFolioDocumentOperationReceiptsForStoryOptions = {
+  operations: readonly FolioDocumentOperation[];
+  applied: readonly FolioAIEditAppliedOperation[];
+  story: FolioDocumentOperationStory;
+};
+
+const getFolioDocumentOperationReceiptsForStory = ({
+  operations,
+  applied,
+  story,
+}: GetFolioDocumentOperationReceiptsForStoryOptions): FolioDocumentOperationReceipt[] => {
   const appliedById = new Map<string, FolioAIEditAppliedOperation>();
   applied.forEach((operation) => {
     appliedById.set(operation.id, operation);
@@ -751,7 +932,9 @@ export const getFolioDocumentOperationReceipts = (
     if (!appliedOperation) {
       return;
     }
-    const affected: FolioDocumentOperationAffectedTarget[] = [getPrimaryAffectedTarget(operation)];
+    const affected: FolioDocumentOperationAffectedTarget[] = [
+      getPrimaryAffectedTarget(operation, story),
+    ];
     if (appliedOperation.commentId !== undefined) {
       affected.push({ type: "comment", commentId: appliedOperation.commentId });
     }
@@ -764,8 +947,10 @@ export type ApplyFolioDocumentOperationsOptions = {
   view: FolioAIEditView;
   snapshot: FolioAIEditSnapshot;
   batch: FolioDocumentOperationBatch;
+  story?: FolioDocumentOperationStory;
   author?: string;
   createCommentId?: (text: string) => number;
+  createUndoHandle?: () => FolioDocumentOperationUndoHandle;
 };
 
 type ApplyParsedDocumentOperationBatchOptions = {
@@ -778,8 +963,10 @@ export const applyFolioDocumentOperations = ({
   view,
   snapshot,
   batch,
+  story = "main",
   author,
   createCommentId,
+  createUndoHandle,
 }: ApplyFolioDocumentOperationsOptions): FolioDocumentOperationResult => {
   const parsedBatch = parseFolioDocumentOperationBatch(batch);
   const apply = ({
@@ -818,6 +1005,7 @@ export const applyFolioDocumentOperations = ({
       skipped,
       issues: getFolioDocumentOperationIssues(parsedBatch.operations, skipped),
       receipts: [],
+      undoHandle: null,
     };
   };
 
@@ -832,7 +1020,12 @@ export const applyFolioDocumentOperations = ({
       applied: previewResult.applied.map(({ id }) => ({ id })),
       skipped: previewResult.skipped,
       issues: getFolioDocumentOperationIssues(parsedBatch.operations, previewResult.skipped),
-      receipts: getFolioDocumentOperationReceipts(parsedBatch.operations, previewResult.applied),
+      receipts: getFolioDocumentOperationReceiptsForStory({
+        operations: parsedBatch.operations,
+        applied: previewResult.applied,
+        story,
+      }),
+      undoHandle: null,
     };
   }
 
@@ -849,6 +1042,12 @@ export const applyFolioDocumentOperations = ({
     status: "committed",
     ...result,
     issues: getFolioDocumentOperationIssues(parsedBatch.operations, result.skipped),
-    receipts: getFolioDocumentOperationReceipts(parsedBatch.operations, result.applied),
+    receipts: getFolioDocumentOperationReceiptsForStory({
+      operations: parsedBatch.operations,
+      applied: result.applied,
+      story,
+    }),
+    undoHandle:
+      result.applied.length > 0 && createUndoHandle !== undefined ? createUndoHandle() : null,
   };
 };

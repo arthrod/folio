@@ -13,6 +13,8 @@
  * both contexts.
  */
 
+import type { FontKerningMode } from "./textMeasurementPolicy";
+
 /**
  * Single measurement request inside a batch. Mirrors the inputs that
  * `measureTextWidth` already takes on the main thread.
@@ -40,6 +42,7 @@ export type MeasureRequestEntry = {
   fontFingerprintWidth: number;
   letterSpacing: number;
   horizontalScale: number;
+  fontKerning: FontKerningMode;
 };
 
 export const WORKER_FONT_FINGERPRINT_TEXT = "HAMBURGEFONTS ivwqy 0123456789";

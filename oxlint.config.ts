@@ -56,10 +56,16 @@ export default library({
     "unicorn/no-hex-escape": "off",
     "unicorn/number-literal-case": "off",
     "unicorn/prefer-response-static-json": "off",
+    // The shared config enables compiler analysis globally, including for Vue.
+    // The React package runs the real compiler and ratchets its intentional
+    // bailouts in scripts/react-compiler-bailouts.json; this rule cannot model
+    // that gradual baseline and would turn every known bailout into an error.
+    "react/react-compiler": "off",
   },
   jsPlugins: [
     "./.oxlint-plugins/folio-layer-boundaries.ts",
     "./.oxlint-plugins/folio-asset-urls.ts",
+    "./.oxlint-plugins/no-untranslated-jsx-literal.ts",
   ],
   ignorePatterns: [
     // Module-augmentation files must use `interface` for declaration merging;
@@ -69,6 +75,10 @@ export default library({
     // shape mirrors en.json byte-for-byte so `i18n-typegen --check` can diff it;
     // linting/`--fix` would rewrite it and break that drift check.
     "**/*.gen.ts",
+    // Lint-rule fixtures contain deliberate violations; the repo-wide run must
+    // skip them. scripts/no-untranslated-jsx-literal.test.ts lints them
+    // explicitly with `--no-ignore` to assert the rule's behaviour.
+    "test/__fixtures__/**",
   ],
   overrides: [
     {
@@ -127,6 +137,26 @@ export default library({
       files: ["packages/*/src/**/*.{ts,tsx}"],
       rules: {
         "folio-asset-urls/no-source-extension-url": "error",
+      },
+    },
+    {
+      // Every user-facing string in the React editor must go through
+      // use-intl (`useTranslations`) so it exists in the locale catalogs;
+      // a raw JSX text literal ships English verbatim to all 18 locales.
+      // See `.oxlint-plugins/no-untranslated-jsx-literal.ts` and the
+      // matching test at `scripts/no-untranslated-jsx-literal.test.ts`,
+      // which lints the `test/__fixtures__` files covered here.
+      files: ["packages/react/src/**/*.tsx", "test/__fixtures__/**/*.tsx"],
+      rules: {
+        "no-untranslated-jsx-literal/no-untranslated-jsx-literal": [
+          "error",
+          {
+            // "stella" is the product brand mark (e.g. the autocomplete caret
+            // badge); like i18n-check's ALLOWED_IDENTICAL list, it reads the
+            // same in every locale and never belongs in the catalogs.
+            allowedText: ["stella"],
+          },
+        ],
       },
     },
     {

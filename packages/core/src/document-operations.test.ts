@@ -31,6 +31,10 @@ describe("document operation contract", () => {
         "deleteBlock",
         "commentOnBlock",
         "insertSignatureTable",
+        "insertTableRow",
+        "deleteTableRow",
+        "insertTableColumn",
+        "deleteTableColumn",
       ],
       modes: ["direct", "tracked-changes"],
       batchModes: ["best-effort", "atomic"],
@@ -46,9 +50,13 @@ describe("document operation contract", () => {
         deleteBlock: ["direct", "tracked-changes"],
         commentOnBlock: ["direct", "tracked-changes"],
         insertSignatureTable: ["direct"],
+        insertTableRow: ["direct"],
+        deleteTableRow: ["direct"],
+        insertTableColumn: ["direct"],
+        deleteTableColumn: ["direct"],
       },
       preconditions: ["blockTextHash"],
-      stories: ["main"],
+      stories: ["main", "header", "footer", "footnote", "endnote"],
     });
   });
 
@@ -58,6 +66,9 @@ describe("document operation contract", () => {
     expect(isFolioDocumentOperationModeSupported("insertSignatureTable", "tracked-changes")).toBe(
       false,
     );
+    expect(isFolioDocumentOperationModeSupported("deleteTableRow", "tracked-changes")).toBe(false);
+    expect(isFolioDocumentOperationModeSupported("insertTableColumn", "direct")).toBe(true);
+    expect(isFolioDocumentOperationModeSupported("deleteTableColumn", "direct")).toBe(true);
     expect(
       Reflect.apply(isFolioDocumentOperationModeSupported, null, ["unknownOperation", "direct"]),
     ).toBe(false);
@@ -103,6 +114,21 @@ describe("document operation contract", () => {
         blockId: "paragraph-5",
         parties: [{ name: "Party" }],
       },
+      {
+        id: "row",
+        type: "insertTableRow",
+        blockId: "paragraph-6",
+        position: "before",
+        cellTexts: ["A", "B"],
+      },
+      { id: "delete-row", type: "deleteTableRow", blockId: "paragraph-7" },
+      {
+        id: "column",
+        type: "insertTableColumn",
+        blockId: "paragraph-8",
+        cellTexts: ["A", "B"],
+      },
+      { id: "delete-column", type: "deleteTableColumn", blockId: "paragraph-9" },
     ] as const satisfies readonly FolioDocumentOperation[];
 
     expect(
@@ -113,6 +139,10 @@ describe("document operation contract", () => {
         { id: "insert" },
         { id: "comment", commentId: 18 },
         { id: "delete" },
+        { id: "row" },
+        { id: "delete-row" },
+        { id: "column" },
+        { id: "delete-column" },
       ]),
     ).toEqual([
       {
@@ -179,6 +209,56 @@ describe("document operation contract", () => {
           },
         ],
       },
+      {
+        operationId: "row",
+        operationIndex: 6,
+        affected: [
+          {
+            type: "insertion",
+            story: "main",
+            anchorBlockId: "paragraph-6",
+            position: "before",
+            content: "tableRow",
+          },
+        ],
+      },
+      {
+        operationId: "delete-row",
+        operationIndex: 7,
+        affected: [
+          {
+            type: "tableRow",
+            story: "main",
+            anchorBlockId: "paragraph-7",
+            effect: "deleted",
+          },
+        ],
+      },
+      {
+        operationId: "column",
+        operationIndex: 8,
+        affected: [
+          {
+            type: "insertion",
+            story: "main",
+            anchorBlockId: "paragraph-8",
+            position: "after",
+            content: "tableColumn",
+          },
+        ],
+      },
+      {
+        operationId: "delete-column",
+        operationIndex: 9,
+        affected: [
+          {
+            type: "tableColumn",
+            story: "main",
+            anchorBlockId: "paragraph-9",
+            effect: "deleted",
+          },
+        ],
+      },
     ]);
   });
 
@@ -236,6 +316,22 @@ describe("document operation contract", () => {
           severity: "high",
           area: "Execution",
         },
+        {
+          id: "8",
+          type: "insertTableRow",
+          blockId: "a",
+          position: "after",
+          cellTexts: ["First", "Second"],
+        },
+        { id: "9", type: "deleteTableRow", blockId: "a" },
+        {
+          id: "10",
+          type: "insertTableColumn",
+          blockId: "a",
+          position: "before",
+          cellTexts: ["Top", "Bottom"],
+        },
+        { id: "11", type: "deleteTableColumn", blockId: "a" },
       ],
     };
 
@@ -335,6 +431,21 @@ describe("document operation contract", () => {
         ],
       },
       "$.operations[0].parties[0].name",
+      "expected a string",
+    ],
+    [
+      {
+        version: 1,
+        operations: [
+          {
+            id: "1",
+            type: "insertTableRow",
+            blockId: "a",
+            cellTexts: ["valid", 42],
+          },
+        ],
+      },
+      "$.operations[0].cellTexts[1]",
       "expected a string",
     ],
   ] as const;

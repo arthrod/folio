@@ -5,6 +5,7 @@ import { IntlProvider } from "use-intl";
 import {
   DocxEditor,
   createEmptyDocument,
+  createStellaStyleDocumentPreset,
   insertImageFromFile,
   insertPageBreakInView,
   insertTableInView,
@@ -21,6 +22,9 @@ const DEFAULT_LOCALE = "en";
 // Only Arabic in the bundled set needs RTL; flip the shell so the editor chrome
 // (built on logical CSS properties) mirrors.
 const RTL_LOCALES = new Set<string>(["ar", "he"]);
+
+const createStellaStyleDocument = (): FolioDocument =>
+  createEmptyDocument({ preset: createStellaStyleDocumentPreset() });
 
 const languageLabel = (locale: string): string => {
   const name = new Intl.DisplayNames([locale], { type: "language" }).of(
@@ -63,6 +67,20 @@ export type FolioParityBridge = {
   insertText: (text: string) => boolean;
   /** Bold the first word of the document. Returns whether the mark applied. */
   boldFirstWord: () => boolean;
+  /** Select the first word through the shared editor controller. */
+  selectFirstWord: () => boolean;
+  /** Count painted range-selection rectangles. */
+  countSelectionRects: () => number;
+  /** Replace the live document with dropdown and date content controls. */
+  setupContentControls: () => boolean;
+  /** Dispatch a clipboard DOM event and return the matching host callback count. */
+  dispatchClipboardEvent: (kind: "copy" | "cut" | "paste") => number;
+  /** Table properties at the live selection, or null outside a table. */
+  getCurrentTableProperties: () => {
+    width: number | null;
+    widthType: string | null;
+    justification: string | null;
+  } | null;
   /** Insert a rows×cols table at the selection (core helper). Returns success. */
   insertTable: (rows: number, cols: number) => boolean;
   /** Count `table` nodes in the live document (0 with no live view). */
@@ -73,6 +91,12 @@ export type FolioParityBridge = {
   countCommentAnchors: () => number;
   /** Block count of the AI-edit snapshot over the live doc (0 with no live view). */
   aiSnapshotBlockCount: () => number;
+  /** Reveal the first stable snapshot block and report target/current pages. */
+  navigateToFirstBlock: () => { shown: boolean; targetPage: number; currentPage: number };
+  /** Plain text of the current live editor selection. */
+  getSelectedText: () => string;
+  /** Apply and undo one direct document-operation batch; true only when content restores. */
+  applyAndUndoDocumentOperation: () => boolean;
   /** Push an anonymization term matching the first word. Returns whether one was pushed. */
   anonymizeFirstWord: () => boolean;
   /** Count painted anonymization highlight rects in the overlay. */
@@ -94,7 +118,10 @@ export type FolioParityBridge = {
   getPageNumberForSelection: () => number;
 };
 
-function buildParityBridge(getRef: () => DocxEditorRef | null): FolioParityBridge {
+function buildParityBridge(
+  getRef: () => DocxEditorRef | null,
+  getClipboardCallbackCount: (kind: "copy" | "cut" | "paste") => number,
+): FolioParityBridge {
   const liveView = () => getRef()?.getEditor()?.getView() ?? null;
   return {
     getTotalPages: () => getRef()?.getTotalPages() ?? 0,
@@ -141,6 +168,86 @@ function buildParityBridge(getRef: () => DocxEditorRef | null): FolioParityBridg
       const { from, to } = range;
       view.dispatch(view.state.tr.addMark(from, to, boldType.create()));
       return view.state.doc.rangeHasMark(from, to, boldType);
+    },
+    selectFirstWord: () => {
+      const editor = getRef()?.getEditor();
+      const view = editor?.getView();
+      if (!editor || !view) {
+        return false;
+      }
+      let range: { from: number; to: number } | null = null;
+      view.state.doc.descendants((node, pos) => {
+        if (range || !node.isText || !node.text) {
+          return range === null;
+        }
+        const leading = node.text.length - node.text.trimStart().length;
+        const word = node.text.slice(leading).split(/\s+/u).at(0);
+        if (!word) {
+          return true;
+        }
+        range = { from: pos + leading, to: pos + leading + word.length };
+        return false;
+      });
+      if (!range) {
+        return false;
+      }
+      const { from, to } = range;
+      editor.setSelection(from, to);
+      return true;
+    },
+    countSelectionRects: () => document.querySelectorAll("[data-folio-selection-rect]").length,
+    setupContentControls: () => {
+      const view = liveView();
+      if (!view) {
+        return false;
+      }
+      const dropdown = view.state.schema.node(
+        "blockSdt",
+        {
+          sdtType: "dropdown",
+          tag: "state",
+          listItems: JSON.stringify([
+            { displayText: "California", value: "ca" },
+            { displayText: "New York", value: "ny" },
+          ]),
+        },
+        [view.state.schema.node("paragraph", {}, [view.state.schema.text("California")])],
+      );
+      const date = view.state.schema.node("blockSdt", { sdtType: "date", tag: "effective" }, [
+        view.state.schema.node("paragraph", {}, [view.state.schema.text("2026-01-15")]),
+      ]);
+      view.dispatch(view.state.tr.replaceWith(0, view.state.doc.content.size, [dropdown, date]));
+      return true;
+    },
+    dispatchClipboardEvent: (kind) => {
+      const view = liveView();
+      if (!view) {
+        return 0;
+      }
+      view.dom.dispatchEvent(new ClipboardEvent(kind, { bubbles: true, cancelable: true }));
+      return getClipboardCallbackCount(kind);
+    },
+    getCurrentTableProperties: () => {
+      const view = liveView();
+      if (!view) {
+        return null;
+      }
+      const { $from } = view.state.selection;
+      for (let depth = $from.depth; depth >= 0; depth--) {
+        const node = $from.node(depth);
+        if (node.type.name !== "table") {
+          continue;
+        }
+        const width = node.attrs["width"];
+        const widthType = node.attrs["widthType"];
+        const justification = node.attrs["justification"];
+        return {
+          width: typeof width === "number" ? width : null,
+          widthType: typeof widthType === "string" ? widthType : null,
+          justification: typeof justification === "string" ? justification : null,
+        };
+      }
+      return null;
     },
     insertTable: (rows, cols) => {
       const view = liveView();
@@ -197,6 +304,76 @@ function buildParityBridge(getRef: () => DocxEditorRef | null): FolioParityBridg
     countCommentAnchors: () =>
       document.querySelectorAll(".paged-editor__pages [data-comment-id]").length,
     aiSnapshotBlockCount: () => getRef()?.createAIEditSnapshot()?.blocks.length ?? 0,
+    navigateToFirstBlock: () => {
+      const ref = getRef();
+      const snapshot = ref?.createAIEditSnapshot();
+      const firstBlock = snapshot?.blocks.at(0);
+      if (!ref || !snapshot || !firstBlock) {
+        return { shown: false, targetPage: 0, currentPage: 0 };
+      }
+      const target = { type: "block", story: "main", blockId: firstBlock.id } as const;
+      const targetPage = ref.getTargetPage(target, snapshot) ?? 0;
+      const shown = ref.showInDocument(target, snapshot);
+      return { shown, targetPage, currentPage: ref.getCurrentPage() };
+    },
+    getSelectedText: () => getRef()?.getSelectionText() ?? "",
+    applyAndUndoDocumentOperation: () => {
+      const ref = getRef();
+      const firstSnapshot = ref?.createAIEditSnapshot();
+      const firstBlock = firstSnapshot?.blocks.at(0);
+      const before = liveView()?.state.doc.textContent;
+      if (!ref || !firstSnapshot || !firstBlock || before === undefined) {
+        return false;
+      }
+      const first = ref.applyDocumentOperations({
+        snapshot: firstSnapshot,
+        batch: {
+          version: 1,
+          mode: "direct",
+          operations: [
+            {
+              id: "parity-undo-first",
+              type: "insertAfterBlock",
+              blockId: firstBlock.id,
+              text: "First temporary undo paragraph.",
+            },
+          ],
+        },
+      });
+      const secondSnapshot = ref.createAIEditSnapshot();
+      const secondBlock = secondSnapshot?.blocks.at(0);
+      if (!first.undoHandle || !secondSnapshot || !secondBlock) {
+        return false;
+      }
+      const second = ref.applyDocumentOperations({
+        snapshot: secondSnapshot,
+        batch: {
+          version: 1,
+          mode: "direct",
+          operations: [
+            {
+              id: "parity-undo-second",
+              type: "insertAfterBlock",
+              blockId: secondBlock.id,
+              text: "Second temporary undo paragraph.",
+            },
+          ],
+        },
+      });
+      const view = liveView();
+      if (!second.undoHandle || !view || view.state.doc.textContent === before) {
+        return false;
+      }
+
+      view.dispatch(view.state.tr.setMeta("folioParitySelectionOnly", true));
+      const secondUndo = ref.undoDocumentOperations(second.undoHandle);
+      const firstUndo = ref.undoDocumentOperations(first.undoHandle);
+      return (
+        secondUndo.status === "undone" &&
+        firstUndo.status === "undone" &&
+        liveView()?.state.doc.textContent === before
+      );
+    },
     anonymizeFirstWord: () => {
       const view = liveView();
       if (!view) {
@@ -294,6 +471,7 @@ export function App() {
   }
 
   const editorRef = useRef<DocxEditorRef>(null);
+  const clipboardCallbackCountsRef = useRef({ copy: 0, cut: 0, paste: 0 });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [currentDocument, setCurrentDocument] = useState<FolioDocument | null>(null);
   const [documentBuffer, setDocumentBuffer] = useState<ArrayBuffer | null>(null);
@@ -333,12 +511,12 @@ export function App() {
       setFileName(`Generated ${paragraphCount} paragraphs.docx`);
       return;
     }
-    setCurrentDocument(createEmptyDocument());
+    setCurrentDocument(createStellaStyleDocument());
     setFileName("Untitled.docx");
   }, []);
 
   const handleNewDocument = useCallback(() => {
-    setCurrentDocument(createEmptyDocument());
+    setCurrentDocument(createStellaStyleDocument());
     setDocumentBuffer(null);
     setFileName("Untitled.docx");
     setStatus("");
@@ -453,7 +631,10 @@ export function App() {
     globalThis.__folioPlayground = {
       getEditorRef: () => editorRef.current,
     };
-    globalThis.__folioParity = buildParityBridge(() => editorRef.current);
+    globalThis.__folioParity = buildParityBridge(
+      () => editorRef.current,
+      (kind) => clipboardCallbackCountsRef.current[kind],
+    );
     return () => {
       globalThis.__folioPlayground = undefined;
       globalThis.__folioParity = undefined;
@@ -484,6 +665,9 @@ export function App() {
             showTableInsert={true}
             onInsertPageBreak={handleInsertPageBreak}
             onInsertTOC={handleInsertTOC}
+            onCopy={() => clipboardCallbackCountsRef.current.copy++}
+            onCut={() => clipboardCallbackCountsRef.current.cut++}
+            onPaste={() => clipboardCallbackCountsRef.current.paste++}
           />
         </main>
 

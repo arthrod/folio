@@ -2,7 +2,7 @@
  * Folio-side geometry extraction: loads a .docx in the playground (Playwright
  * + the existing `?file=` fixture route), walks the painted layout DOM
  * (`.layout-page` / `.layout-line`), and normalizes it into the same
- * `DocGeom` shape the Word-side extractor produces. Also captures a per-page
+ * `DocGeom` shape produced by external reference renderers. Also captures a per-page
  * PNG screenshot for the HTML report.
  *
  * DOM-only concerns (getBoundingClientRect, closest, getComputedStyle,
@@ -101,6 +101,7 @@ const EDITOR_SELECTOR = '[data-testid="folio-editor"]';
 const PAGE_SELECTOR = ".layout-page";
 
 const VIEWPORT = { width: 1400, height: 1000 };
+const SCREENSHOT_VIEWPORT_VERTICAL_CHROME_PX = 200;
 
 const SERVER_PROBE_TIMEOUT_MS = 2000;
 const SERVER_REUSE_PROBE_TIMEOUT_MS = 15_000;
@@ -169,11 +170,17 @@ export const formatNavigationFailure = (url: string, error: unknown, output: str
 /** A raw rect as returned by `getBoundingClientRect()` (visual/CSS px). */
 export type RawRect = { left: number; top: number; width: number; height: number };
 
-/** One `.layout-line` element, extracted with DOM-only reads (no math). */
+/** One ink segment extracted from a `.layout-line` with DOM-only reads (no math). */
 export type RawLine = {
   text: string;
   rect: RawRect;
+  /** Viewport-relative CSS-pixel position of the originating line's baseline. */
+  baselineTop?: number;
   region: Region;
+  /** True when the line's ink box falls fully outside an overflow-clipping ancestor. */
+  fullyClipped?: boolean;
+  /** CSS clipping ancestors, captured in visual pixels for visibility filtering. */
+  clippingAncestors?: RawClippingAncestor[];
   /** First actually available family from the computed CSS stack of the first
    * `.layout-run`; falls back to the computed stack when canvas probing is unavailable. */
   fontFamilyRaw?: string;
@@ -181,6 +188,17 @@ export type RawLine = {
   fontSizePx?: number;
   /** Stable page-local table-cell identity, when the line is inside a cell. */
   visualGroup?: string;
+  /** Stable page-local identity of the originating `.layout-line`. */
+  logicalLineGroup?: string;
+};
+
+export type RawClippingAncestor = {
+  rect: RawRect;
+  offsetWidth: number;
+  offsetHeight: number;
+  clipsX: boolean;
+  clipsY: boolean;
+  clipPath?: string;
 };
 
 /** One `.layout-page` element and its lines, extracted with DOM-only reads. */
@@ -204,6 +222,105 @@ export const computeZoomFactor = (offsetWidth: number, pageRectWidth: number): n
     return 1;
   }
   return offsetWidth / pageRectWidth;
+};
+
+const MIN_BASELINE_OFFSET_RATIO = -0.5;
+const MAX_BASELINE_OFFSET_RATIO = 1.5;
+
+/**
+ * Baseline probes are zero-width inline boxes. On a visually full line, a
+ * browser can wrap the probe onto the next row even though the document text
+ * itself did not wrap. Keep only probe positions near the extracted ink box;
+ * the comparator can fall back to ink-top geometry for rejected probes.
+ */
+export const isPlausibleBaseline = (baselineTop: number, rect: RawRect): boolean => {
+  if (!Number.isFinite(baselineTop) || rect.height <= 0) {
+    return false;
+  }
+  const offsetRatio = (baselineTop - rect.top) / rect.height;
+  return offsetRatio >= MIN_BASELINE_OFFSET_RATIO && offsetRatio <= MAX_BASELINE_OFFSET_RATIO;
+};
+
+type InsetClip = { top: number; right: number; bottom: number; left: number };
+
+const cssInsetLength = (token: string, dimension: number): number | null => {
+  if (token === "0") return 0;
+  if (token.endsWith("px")) {
+    const value = Number.parseFloat(token);
+    return Number.isFinite(value) ? value : null;
+  }
+  if (token.endsWith("%")) {
+    const value = Number.parseFloat(token);
+    return Number.isFinite(value) ? (value / 100) * dimension : null;
+  }
+  return null;
+};
+
+/** Parse the computed form of a CSS `inset()` clip path. Unsupported units
+ * return null so the visibility filter remains conservative. */
+export const parseInsetClipPath = (
+  clipPath: string | undefined,
+  width: number,
+  height: number,
+): InsetClip | null => {
+  const match = clipPath?.match(/^inset\(([^)]*)\)$/u);
+  const value = match?.[1]?.split(/\s+round\s+/u)[0]?.trim();
+  if (!value) return null;
+
+  const tokens = value.split(/\s+/u);
+  if (tokens.length < 1 || tokens.length > 4) return null;
+  const [topToken, rightToken = topToken, bottomToken = topToken, leftToken = rightToken] = tokens;
+  if (!topToken || !rightToken || !bottomToken || !leftToken) return null;
+
+  const top = cssInsetLength(topToken, height);
+  const right = cssInsetLength(rightToken, width);
+  const bottom = cssInsetLength(bottomToken, height);
+  const left = cssInsetLength(leftToken, width);
+  if (top === null || right === null || bottom === null || left === null) return null;
+  return { top, right, bottom, left };
+};
+
+/** Whether a visual rect has no remaining area after all supported CSS clips
+ * are intersected. Clip-path lengths are layout pixels, so they are scaled to
+ * the post-transform visual rect before comparison. */
+export const isFullyClippedByAncestors = (
+  rect: RawRect,
+  ancestors: RawClippingAncestor[] | undefined,
+): boolean => {
+  let left = rect.left;
+  let top = rect.top;
+  let right = rect.left + rect.width;
+  let bottom = rect.top + rect.height;
+
+  for (const ancestor of ancestors ?? []) {
+    const ancestorRight = ancestor.rect.left + ancestor.rect.width;
+    const ancestorBottom = ancestor.rect.top + ancestor.rect.height;
+    if (ancestor.clipsX) {
+      left = Math.max(left, ancestor.rect.left);
+      right = Math.min(right, ancestorRight);
+    }
+    if (ancestor.clipsY) {
+      top = Math.max(top, ancestor.rect.top);
+      bottom = Math.min(bottom, ancestorBottom);
+    }
+
+    const inset = parseInsetClipPath(
+      ancestor.clipPath,
+      ancestor.offsetWidth,
+      ancestor.offsetHeight,
+    );
+    if (inset) {
+      const scaleX = ancestor.offsetWidth > 0 ? ancestor.rect.width / ancestor.offsetWidth : 1;
+      const scaleY = ancestor.offsetHeight > 0 ? ancestor.rect.height / ancestor.offsetHeight : 1;
+      left = Math.max(left, ancestor.rect.left + inset.left * scaleX);
+      right = Math.min(right, ancestorRight - inset.right * scaleX);
+      top = Math.max(top, ancestor.rect.top + inset.top * scaleY);
+      bottom = Math.min(bottom, ancestorBottom - inset.bottom * scaleY);
+    }
+
+    if (right <= left || bottom <= top) return true;
+  }
+  return false;
 };
 
 /** First font-family in a CSS `font-family` list, with surrounding quotes stripped. */
@@ -240,7 +357,12 @@ export const toPageGeom = (rawPage: RawPage): PageGeom => {
 
   const lines: LineBox[] = [];
   for (const rawLine of rawPage.lines) {
-    if (rawLine.rect.width <= 0 || rawLine.rect.height <= 0) {
+    if (
+      rawLine.fullyClipped ||
+      isFullyClippedByAncestors(rawLine.rect, rawLine.clippingAncestors) ||
+      rawLine.rect.width <= 0 ||
+      rawLine.rect.height <= 0
+    ) {
       continue;
     }
     const normText = normalizeLineText(rawLine.text);
@@ -252,6 +374,10 @@ export const toPageGeom = (rawPage: RawPage): PageGeom => {
     const yPt = (rawLine.rect.top - rawPage.pageRect.top) * zoomFactor * PX_TO_PT;
     const lineWidthPt = rawLine.rect.width * zoomFactor * PX_TO_PT;
     const lineHeightPt = rawLine.rect.height * zoomFactor * PX_TO_PT;
+    const baselinePt =
+      rawLine.baselineTop === undefined || !isPlausibleBaseline(rawLine.baselineTop, rawLine.rect)
+        ? undefined
+        : (rawLine.baselineTop - rawPage.pageRect.top) * zoomFactor * PX_TO_PT;
 
     const fontName = parseFirstFontFamily(rawLine.fontFamilyRaw);
     const fontSizePt = rawLine.fontSizePx !== undefined ? rawLine.fontSizePx * PX_TO_PT : undefined;
@@ -261,10 +387,14 @@ export const toPageGeom = (rawPage: RawPage): PageGeom => {
       normText,
       xPt,
       yPt,
+      ...(baselinePt !== undefined ? { baselinePt } : {}),
       widthPt: lineWidthPt,
       heightPt: lineHeightPt,
       region: rawLine.region,
       ...(rawLine.visualGroup !== undefined ? { visualGroup: rawLine.visualGroup } : {}),
+      ...(rawLine.logicalLineGroup !== undefined
+        ? { logicalLineGroup: rawLine.logicalLineGroup }
+        : {}),
       ...(fontName !== undefined ? { fontName } : {}),
       ...(fontSizePt !== undefined ? { fontSizePt } : {}),
     });
@@ -465,6 +595,28 @@ const installCleanScreenshotStyle = async (page: Page): Promise<void> => {
   });
 };
 
+export const screenshotViewportHeight = (pageHeights: number[], currentHeight: number): number => {
+  const tallestPage = Math.max(0, ...pageHeights.filter(Number.isFinite));
+  return Math.max(currentHeight, Math.ceil(tallestPage + SCREENSHOT_VIEWPORT_VERTICAL_CHROME_PX));
+};
+
+const fitViewportToPages = async (page: Page): Promise<void> => {
+  const viewport = page.viewportSize();
+  if (!viewport) {
+    return;
+  }
+  const pageHeights = await page
+    .locator(PAGE_SELECTOR)
+    .evaluateAll((pageEls) => pageEls.map((pageEl) => (pageEl as HTMLElement).offsetHeight));
+  const height = screenshotViewportHeight(pageHeights, viewport.height);
+  if (height === viewport.height) {
+    return;
+  }
+  await page.setViewportSize({ width: viewport.width, height });
+  await waitForLayoutStability(page);
+  await page.waitForTimeout(STABILITY_SETTLE_MS);
+};
+
 /** One `.layout-page` element's identity, listed before any scrolling so the
  * per-page extraction loop below knows what to visit and in what order. */
 type PageMeta = { domIndex: number; pageNumber: number };
@@ -519,6 +671,18 @@ export const extractSinglePage = (page: Page, domIndex: number): Promise<RawPage
       const tableCells = Array.from(el.querySelectorAll(".layout-table-cell"));
       const lineEls = Array.from(el.querySelectorAll(".layout-line")) as HTMLElement[];
       const resolvedFontCache = new Map<string, string>();
+      const clippingValues = new Set(["auto", "clip", "hidden", "scroll"]);
+      const ancestorClipCache = new Map<
+        HTMLElement,
+        {
+          clipsX: boolean;
+          clipsY: boolean;
+          clipPath?: string;
+          rect?: DOMRect;
+          offsetWidth: number;
+          offsetHeight: number;
+        }
+      >();
       const canvasContext = document.createElement("canvas").getContext("2d");
       const fontProbeText = "mmmmmmmmmmlliWW0123456789";
       const genericFamilies = new Set([
@@ -565,7 +729,20 @@ export const extractSinglePage = (page: Page, domIndex: number): Promise<RawPage
         resolvedFontCache.set(computed.fontFamily, fallback);
         return fallback;
       };
-      const lines = lineEls.flatMap((lineEl) => {
+      const lines = lineEls.flatMap((lineEl, lineIndex) => {
+        const baselineProbe = document.createElement("span");
+        baselineProbe.setAttribute("aria-hidden", "true");
+        baselineProbe.style.display = "inline-block";
+        baselineProbe.style.width = "0";
+        baselineProbe.style.height = "0";
+        baselineProbe.style.margin = "0";
+        baselineProbe.style.padding = "0";
+        baselineProbe.style.border = "0";
+        baselineProbe.style.verticalAlign = "baseline";
+        lineEl.append(baselineProbe);
+        const baselineTop = baselineProbe.getBoundingClientRect().top;
+        baselineProbe.remove();
+
         const segmentInkRect = (segmentEl: HTMLElement): DOMRect | null => {
           if (
             segmentEl.matches("img, svg, canvas, video") ||
@@ -640,6 +817,7 @@ export const extractSinglePage = (page: Page, domIndex: number): Promise<RawPage
         })();
         const tableCell = lineEl.closest(".layout-table-cell");
         const visualGroup = tableCell ? `table-cell:${tableCells.indexOf(tableCell)}` : undefined;
+        const logicalLineGroup = `layout-line:${lineIndex}`;
 
         const fontFrom = (sourceEl: HTMLElement | null) => {
           if (!sourceEl) return {};
@@ -662,11 +840,70 @@ export const extractSinglePage = (page: Page, domIndex: number): Promise<RawPage
           return text;
         };
 
+        const clippingAncestorsFor = (sourceEl: HTMLElement | null) => {
+          const clippingAncestors = [];
+          let ancestor: HTMLElement | null = sourceEl ?? lineEl;
+          while (ancestor && el.contains(ancestor)) {
+            let clipInfo = ancestorClipCache.get(ancestor);
+            if (!clipInfo) {
+              const computed = getComputedStyle(ancestor);
+              const clipsX = clippingValues.has(computed.overflowX);
+              const clipsY = clippingValues.has(computed.overflowY);
+              const clipPath = computed.clipPath === "none" ? undefined : computed.clipPath;
+              clipInfo = {
+                clipsX,
+                clipsY,
+                ...(clipPath !== undefined ? { clipPath } : {}),
+                ...(clipsX || clipsY || clipPath !== undefined
+                  ? { rect: ancestor.getBoundingClientRect() }
+                  : {}),
+                offsetWidth: ancestor.offsetWidth,
+                offsetHeight: ancestor.offsetHeight,
+              };
+              ancestorClipCache.set(ancestor, clipInfo);
+            }
+            const {
+              clipsX,
+              clipsY,
+              clipPath,
+              rect: ancestorRect,
+              offsetWidth,
+              offsetHeight,
+            } = clipInfo;
+            if (clipsX || clipsY || clipPath !== undefined) {
+              if (!ancestorRect) {
+                throw new Error("clipping ancestor is missing cached geometry");
+              }
+              clippingAncestors.push({
+                rect: {
+                  left: ancestorRect.left,
+                  top: ancestorRect.top,
+                  width: ancestorRect.width,
+                  height: ancestorRect.height,
+                },
+                clipsX,
+                clipsY,
+                ...(clipPath !== undefined ? { clipPath } : {}),
+                offsetWidth,
+                offsetHeight,
+              });
+            }
+            if (ancestor === el) {
+              break;
+            }
+            ancestor = ancestor.parentElement;
+          }
+          return clippingAncestors;
+        };
+
         const toRawLine = (text: string, rect: DOMRect, sourceEl: HTMLElement | null) => ({
           text,
           rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+          ...(Number.isFinite(baselineTop) ? { baselineTop } : {}),
           region,
+          clippingAncestors: clippingAncestorsFor(sourceEl),
           ...(visualGroup !== undefined ? { visualGroup } : {}),
+          logicalLineGroup,
           ...fontFrom(sourceEl),
         });
 
@@ -759,7 +996,7 @@ export const extractSinglePage = (page: Page, domIndex: number): Promise<RawPage
 
         // The `.layout-line` box spans the full column width regardless of where
         // the text ink actually sits (centered/right-aligned lines, table cells),
-        // while the Word-side extractor reports glyph-ink bounds. Use the union
+        // while PDF-based reference extractors report glyph-ink bounds. Use the union
         // of the line's run and list-marker boxes as the ink rect so both sides
         // measure the same thing; fall back to the line box for lines without
         // segment children.
@@ -1009,6 +1246,7 @@ export const createFolioExtractor = async (
       if (pageMeta.length === 0) {
         throw new FolioExtractError(`folio rendered zero pages for ${absoluteDocxPath}`);
       }
+      await fitViewportToPages(page);
       await installCleanScreenshotStyle(page);
       const pagesToExtract =
         options.maxPages === undefined ? pageMeta : pageMeta.slice(0, options.maxPages);

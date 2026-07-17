@@ -57,7 +57,54 @@ describe("compareGeoms", () => {
     expect(merged).toHaveLength(2);
   });
 
-  test("merges nearby text from different table cells like Word PDF boxes", () => {
+  test("merges wide tab segments from the same logical line", () => {
+    const merged = mergeVisualRows([
+      makeLine({
+        text: "Left segment",
+        xPt: 45,
+        yPt: 100,
+        baselinePt: 109,
+        widthPt: 90,
+        logicalLineGroup: "layout-line:7",
+      }),
+      makeLine({
+        text: "Right segment",
+        xPt: 350,
+        yPt: 100,
+        baselinePt: 111,
+        widthPt: 100,
+        logicalLineGroup: "layout-line:7",
+      }),
+    ]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.normText).toBe(normalizeLineText("Left segment Right segment"));
+    expect(merged[0]?.logicalLineGroup).toBe("layout-line:7");
+    expect(merged[0]?.baselinePt).toBe(110);
+  });
+
+  test("keeps wide same-row segments from different logical lines separate", () => {
+    const merged = mergeVisualRows([
+      makeLine({
+        text: "Left column",
+        xPt: 45,
+        yPt: 100,
+        widthPt: 90,
+        logicalLineGroup: "layout-line:7",
+      }),
+      makeLine({
+        text: "Right column",
+        xPt: 350,
+        yPt: 100,
+        widthPt: 100,
+        logicalLineGroup: "layout-line:8",
+      }),
+    ]);
+
+    expect(merged).toHaveLength(2);
+  });
+
+  test("merges nearby text from different table cells like reference PDF boxes", () => {
     const merged = mergeVisualRows([
       makeLine({
         text: "Left cell",
@@ -79,6 +126,16 @@ describe("compareGeoms", () => {
 
     expect(merged).toHaveLength(1);
     expect(merged[0]?.normText).toBe(normalizeLineText("Left cell Right cell"));
+  });
+
+  test("merges adjacent row boxes across sub-point ink-width differences", () => {
+    const merged = mergeVisualRows([
+      makeLine({ text: "Label", xPt: 90, yPt: 100, widthPt: 30, heightPt: 12 }),
+      makeLine({ text: "Value", xPt: 144.6, yPt: 100, widthPt: 60, heightPt: 12 }),
+    ]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.normText).toBe(normalizeLineText("Label Value"));
   });
 
   test("merges nearby table and ungrouped text without Folio-only asymmetry", () => {
@@ -172,7 +229,11 @@ describe("compareGeoms", () => {
     const word = makeDoc("word", pages);
     const folio = makeDoc(
       "folio",
-      pages.map((p) => ({ ...p, lines: p.lines.map((l) => ({ ...l })) })),
+      pages.map((page) =>
+        Object.assign({}, page, {
+          lines: page.lines.map((line) => Object.assign({}, line)),
+        }),
+      ),
     );
 
     const result = compareGeoms(word, folio);
@@ -180,11 +241,11 @@ describe("compareGeoms", () => {
     expect(result.score).toBe(1);
     expect(result.divergences).toEqual([]);
     expect(result.medianYOffsetPt).toBe(0);
-    expect(result.totalWordLines).toBe(2);
+    expect(result.totalReferenceLines).toBe(2);
     expect(result.matchedLines).toBe(2);
   });
 
-  test("constant +6pt y offset on every folio line is absorbed by the median (no y-drift)", () => {
+  test("constant +6pt y offset on every folio line is absorbed as an extractor baseline", () => {
     const word = makeDoc("word", [
       makePage({
         lines: [
@@ -236,6 +297,201 @@ describe("compareGeoms", () => {
     expect(yDrifts[0]).toMatchObject({ kind: "y-drift", text: "Bravo line" });
     expect(result.medianYOffsetPt).toBe(0);
     expect(result.score).toBeCloseTo(2 / 3);
+  });
+
+  test("matching baselines ignore glyph-dependent ink-top differences", () => {
+    const texts = ["Alpha", "a", "Bravo"];
+    const reference = makeDoc("folio", [
+      makePage({
+        lines: texts.map((text, index) =>
+          makeLine({
+            text,
+            yPt: [72, 94, 108][index] ?? 0,
+            baselinePt: 80 + index * 18,
+          }),
+        ),
+      }),
+    ]);
+    const folio = makeDoc("folio", [
+      makePage({
+        lines: texts.map((text, index) =>
+          makeLine({
+            text,
+            yPt: 70 + index * 18,
+            baselinePt: 80 + index * 18,
+          }),
+        ),
+      }),
+    ]);
+
+    const result = compareGeoms(reference, folio);
+
+    expect(result.divergences.filter((item) => item.kind === "y-drift")).toEqual([]);
+    expect(result.medianYOffsetPt).toBe(0);
+    expect(result.score).toBe(1);
+  });
+
+  test("uses ink tops for both lines when only one baseline is available", () => {
+    const texts = ["Alpha", "Bravo", "Charlie"];
+    const reference = makeDoc("folio", [
+      makePage({
+        lines: texts.map((text, index) =>
+          makeLine({ text, yPt: 72 + index * 18, baselinePt: 80 + index * 18 }),
+        ),
+      }),
+    ]);
+    const folio = makeDoc("folio", [
+      makePage({
+        lines: texts.map((text, index) =>
+          makeLine({
+            text,
+            yPt: 72 + index * 18,
+            ...(index === 0 ? {} : { baselinePt: 80 + index * 18 }),
+          }),
+        ),
+      }),
+    ]);
+
+    const result = compareGeoms(reference, folio);
+
+    expect(result.divergences.filter((item) => item.kind === "y-drift")).toEqual([]);
+    expect(result.medianYOffsetPt).toBe(0);
+    expect(result.score).toBe(1);
+  });
+
+  test("baseline comparison still reports a real one-line vertical excursion", () => {
+    const texts = ["Alpha", "Bravo", "Charlie"];
+    const reference = makeDoc("folio", [
+      makePage({
+        lines: texts.map((text, index) =>
+          makeLine({ text, yPt: 72 + index * 18, baselinePt: 80 + index * 18 }),
+        ),
+      }),
+    ]);
+    const folio = makeDoc("folio", [
+      makePage({
+        lines: texts.map((text, index) =>
+          makeLine({
+            text,
+            yPt: 72 + index * 18,
+            baselinePt: 80 + index * 18 + (index === 1 ? 6 : 0),
+          }),
+        ),
+      }),
+    ]);
+
+    const result = compareGeoms(reference, folio);
+
+    expect(result.divergences.filter((item) => item.kind === "y-drift")).toEqual([
+      { kind: "y-drift", page: 1, text: "Bravo", residualPt: 6 },
+    ]);
+  });
+
+  test("an outlier on the first line is attributed to the first line", () => {
+    const texts = ["Alpha line", "Bravo line", "Charlie line"];
+    const word = makeDoc("word", [
+      makePage({
+        lines: texts.map((text, index) => makeLine({ text, yPt: 72 + index * 18 })),
+      }),
+    ]);
+    const folio = makeDoc("folio", [
+      makePage({
+        lines: texts.map((text, index) =>
+          makeLine({ text, yPt: 72 + index * 18 + (index === 0 ? 6 : 0) }),
+        ),
+      }),
+    ]);
+
+    const result = compareGeoms(word, folio);
+
+    expect(result.divergences.filter((item) => item.kind === "y-drift")).toEqual([
+      { kind: "y-drift", page: 1, text: "Alpha line", residualPt: 6 },
+    ]);
+    expect(result.score).toBeCloseTo(2 / 3);
+  });
+
+  test("persistent offset transitions stay localized when the page median shifts", () => {
+    const texts = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"];
+    const word = makeDoc("word", [
+      makePage({
+        lines: texts.map((text, index) => makeLine({ text, yPt: 72 + index * 18 })),
+      }),
+    ]);
+    const makeFolio = (offsets: number[]) =>
+      makeDoc("folio", [
+        makePage({
+          lines: texts.map((text, index) =>
+            makeLine({ text, yPt: 72 + index * 18 + (offsets[index] ?? 0) }),
+          ),
+        }),
+      ]);
+
+    const before = compareGeoms(word, makeFolio([-3, -3, 1, 1, -4, -4]));
+    const after = compareGeoms(word, makeFolio([-3, -3, 1, 1, 1, 1]));
+    const beforeYDrifts = before.divergences.filter((item) => item.kind === "y-drift");
+    const afterYDrifts = after.divergences.filter((item) => item.kind === "y-drift");
+
+    expect(beforeYDrifts).toEqual([
+      { kind: "y-drift", page: 1, text: "Charlie", residualPt: 4 },
+      { kind: "y-drift", page: 1, text: "Echo", residualPt: -5 },
+    ]);
+    expect(afterYDrifts).toEqual([{ kind: "y-drift", page: 1, text: "Charlie", residualPt: 4 }]);
+    expect(after.score).toBeGreaterThan(before.score);
+    expect(after.medianYOffsetPt).not.toBe(before.medianYOffsetPt);
+  });
+
+  test("punctuation-only rows do not create y-drift or bias the extractor offset", () => {
+    const word = makeDoc("word", [
+      makePage({
+        lines: [
+          makeLine({ text: "____________________", yPt: 72 }),
+          makeLine({ text: "....................", yPt: 90 }),
+          makeLine({ text: "Baseline text", yPt: 108 }),
+        ],
+      }),
+    ]);
+    const folio = makeDoc("folio", [
+      makePage({
+        lines: [
+          makeLine({ text: "____________________", yPt: 82 }),
+          makeLine({ text: "....................", yPt: 100 }),
+          makeLine({ text: "Baseline text", yPt: 114 }),
+        ],
+      }),
+    ]);
+
+    const result = compareGeoms(word, folio);
+
+    expect(result.divergences.filter((divergence) => divergence.kind === "y-drift")).toEqual([]);
+    expect(result.medianYOffsetPt).toBe(6);
+    expect(result.score).toBe(1);
+  });
+
+  test("punctuation-only rows still report horizontal geometry drift", () => {
+    const word = makeDoc("word", [
+      makePage({
+        lines: [
+          makeLine({ text: "Baseline text", yPt: 72 }),
+          makeLine({ text: "____________________", yPt: 90, widthPt: 100 }),
+        ],
+      }),
+    ]);
+    const folio = makeDoc("folio", [
+      makePage({
+        lines: [
+          makeLine({ text: "Baseline text", yPt: 72 }),
+          makeLine({ text: "____________________", yPt: 96, widthPt: 120 }),
+        ],
+      }),
+    ]);
+
+    const result = compareGeoms(word, folio);
+
+    expect(result.divergences.filter((divergence) => divergence.kind === "y-drift")).toEqual([]);
+    expect(
+      result.divergences.filter((divergence) => divergence.kind === "width-drift"),
+    ).toHaveLength(1);
+    expect(result.score).toBe(0.5);
   });
 
   test("absorbs each page's extractor offset independently", () => {
@@ -306,7 +562,7 @@ describe("compareGeoms", () => {
     expect(result.medianYOffsetPt).toBeCloseTo(4.5);
   });
 
-  test("a Word line split into two folio lines reconciles as a single line-break", () => {
+  test("a reference line split into two folio lines reconciles as a single line-break", () => {
     const word = makeDoc("word", [
       makePage({ lines: [makeLine({ text: "The quick brown fox jumps" })] }),
     ]);
@@ -324,12 +580,213 @@ describe("compareGeoms", () => {
     expect(result.divergences).toHaveLength(1);
     expect(result.divergences[0]).toMatchObject({
       kind: "line-break",
-      wordTexts: ["The quick brown fox jumps"],
+      referenceTexts: ["The quick brown fox jumps"],
       folioTexts: ["The quick brown", "fox jumps"],
     });
     expect(
       result.divergences.some((d) => d.kind === "missing-line" || d.kind === "extra-line"),
     ).toBe(false);
+  });
+
+  test("accepts equivalent same-row segmentation when union geometry agrees", () => {
+    const word = makeDoc("word", [
+      makePage({
+        lines: [
+          makeLine({ text: "Left one", xPt: 72, yPt: 72, widthPt: 60 }),
+          makeLine({ text: "Right one", xPt: 300, yPt: 72, widthPt: 60 }),
+          makeLine({ text: "Left two", xPt: 72, yPt: 100, widthPt: 60 }),
+          makeLine({ text: "Right two", xPt: 300, yPt: 100, widthPt: 60 }),
+        ],
+      }),
+    ]);
+    const folio = makeDoc("folio", [
+      makePage({
+        lines: [
+          makeLine({ text: "Left one Right one", xPt: 72, yPt: 78, widthPt: 288 }),
+          makeLine({ text: "Left two Right two", xPt: 72, yPt: 106, widthPt: 288 }),
+        ],
+      }),
+    ]);
+
+    const result = compareGeoms(word, folio);
+
+    expect(result.divergences).toEqual([]);
+    expect(result.matchedLines).toBe(4);
+    expect(result.medianYOffsetPt).toBe(6);
+    expect(result.score).toBe(1);
+  });
+
+  test("reconciles a matched prefix with a trailing segment on the same visual row", () => {
+    const reference = makeDoc("folio", [
+      makePage({
+        lines: [
+          makeLine({
+            text: "Primary registration 123 VAT:",
+            xPt: 72,
+            yPt: 72,
+            widthPt: 180,
+          }),
+        ],
+      }),
+    ]);
+    const candidate = makeDoc("folio", [
+      makePage({
+        lines: [
+          makeLine({
+            text: "Primary registration 123",
+            xPt: 72,
+            yPt: 72,
+            widthPt: 120,
+          }),
+          makeLine({ text: "VAT:", xPt: 222, yPt: 72, widthPt: 30 }),
+        ],
+      }),
+    ]);
+
+    const result = compareGeoms(reference, candidate);
+
+    expect(result.divergences).toEqual([]);
+    expect(result.matchedLines).toBe(1);
+    expect(result.score).toBe(1);
+  });
+
+  test("reconciles a leading candidate segment before a matched suffix", () => {
+    const reference = makeDoc("folio", [
+      makePage({
+        lines: [
+          makeLine({
+            text: "ID: Primary registration 123",
+            xPt: 72,
+            yPt: 72,
+            widthPt: 188,
+          }),
+        ],
+      }),
+    ]);
+    const candidate = makeDoc("folio", [
+      makePage({
+        lines: [
+          makeLine({ text: "ID:", xPt: 72, yPt: 72, widthPt: 15 }),
+          makeLine({
+            text: "Primary registration 123",
+            xPt: 140,
+            yPt: 72,
+            widthPt: 120,
+          }),
+        ],
+      }),
+    ]);
+
+    const result = compareGeoms(reference, candidate);
+
+    expect(result.divergences).toEqual([]);
+    expect(result.matchedLines).toBe(1);
+    expect(result.score).toBe(1);
+  });
+
+  test("reconciles a leading reference segment before a matched suffix", () => {
+    const reference = makeDoc("folio", [
+      makePage({
+        lines: [
+          makeLine({ text: "ID:", xPt: 72, yPt: 72, widthPt: 15 }),
+          makeLine({
+            text: "Primary registration 123",
+            xPt: 140,
+            yPt: 72,
+            widthPt: 120,
+          }),
+        ],
+      }),
+    ]);
+    const candidate = makeDoc("folio", [
+      makePage({
+        lines: [
+          makeLine({
+            text: "ID: Primary registration 123",
+            xPt: 72,
+            yPt: 72,
+            widthPt: 188,
+          }),
+        ],
+      }),
+    ]);
+
+    const result = compareGeoms(reference, candidate);
+
+    expect(result.divergences).toEqual([]);
+    expect(result.matchedLines).toBe(2);
+    expect(result.score).toBe(1);
+  });
+
+  test("leaves an unrelated preceding row outside leading-segment reconciliation", () => {
+    const reference = makeDoc("folio", [
+      makePage({
+        lines: [
+          makeLine({ text: "Unrelated row", xPt: 72, yPt: 48, widthPt: 80 }),
+          makeLine({ text: "ID:", xPt: 72, yPt: 72, widthPt: 15 }),
+          makeLine({
+            text: "Primary registration 123",
+            xPt: 140,
+            yPt: 72,
+            widthPt: 120,
+          }),
+        ],
+      }),
+    ]);
+    const candidate = makeDoc("folio", [
+      makePage({
+        lines: [
+          makeLine({
+            text: "ID: Primary registration 123",
+            xPt: 72,
+            yPt: 72,
+            widthPt: 188,
+          }),
+        ],
+      }),
+    ]);
+
+    const result = compareGeoms(reference, candidate);
+
+    expect(result.divergences).toEqual([{ kind: "missing-line", page: 1, text: "Unrelated row" }]);
+    expect(result.matchedLines).toBe(2);
+    expect(result.score).toBeCloseTo(2 / 3);
+  });
+
+  test("reconciles one segmented visual row inside a larger alignment gap", () => {
+    const reference = makeDoc("folio", [
+      makePage({
+        lines: [
+          makeLine({ text: "Short", xPt: 72, yPt: 72, widthPt: 30, region: "unknown" }),
+          makeLine({
+            text: "Right segment",
+            xPt: 180,
+            yPt: 72,
+            widthPt: 90,
+            region: "unknown",
+          }),
+          makeLine({
+            text: "Unmatched row",
+            xPt: 72,
+            yPt: 100,
+            widthPt: 80,
+            region: "unknown",
+          }),
+        ],
+      }),
+    ]);
+    const folio = makeDoc("folio", [
+      makePage({
+        lines: [makeLine({ text: "Short Right segment", xPt: 72, yPt: 78, widthPt: 198 })],
+      }),
+    ]);
+
+    const result = compareGeoms(reference, folio);
+
+    expect(result.divergences).toEqual([{ kind: "missing-line", page: 1, text: "Unmatched row" }]);
+    expect(result.matchedLines).toBe(2);
+    expect(result.medianYOffsetPt).toBe(6);
+    expect(result.score).toBeCloseTo(2 / 3);
   });
 
   test("a normalized 1-to-1 gap is treated as a match, not a line-break", () => {
@@ -367,17 +824,17 @@ describe("compareGeoms", () => {
 
     const result = compareGeoms(word, folio);
 
-    expect(result.divergences[0]).toEqual({ kind: "page-count", word: 1, folio: 2 });
+    expect(result.divergences[0]).toEqual({ kind: "page-count", reference: 1, folio: 2 });
     const pagination = result.divergences.find((d) => d.kind === "pagination");
     expect(pagination).toMatchObject({
       kind: "pagination",
       text: "Line two",
-      wordPage: 1,
+      referencePage: 1,
       folioPage: 2,
     });
   });
 
-  test("a line only in Word is missing-line; a line only in folio is extra-line", () => {
+  test("a reference-only line is missing; a folio-only line is extra", () => {
     const word = makeDoc("word", [
       makePage({
         lines: [
@@ -498,7 +955,7 @@ describe("compareGeoms", () => {
     expect(result.divergences).toContainEqual({
       kind: "text-mismatch",
       page: 1,
-      wordText: "The quick brown fox",
+      referenceText: "The quick brown fox",
       folioText: "The quick brown fox.",
     });
   });
@@ -510,7 +967,7 @@ describe("compareGeoms", () => {
 
     expect(emptyResult.score).toBe(1);
     expect(emptyResult.divergences).toEqual([]);
-    expect(emptyResult.totalWordLines).toBe(0);
+    expect(emptyResult.totalReferenceLines).toBe(0);
 
     const folioOnly = makeDoc("folio", [
       makePage({

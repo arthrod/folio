@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import type { Document, TableCell, Theme } from "../../types/document";
+import type { Document, ShadingProperties, TableCell, Theme } from "../../types/document";
+import { fromProseDoc } from "./fromProseDoc";
 import { toProseDoc } from "./toProseDoc";
 
 const officeTheme: Theme = {
@@ -43,6 +44,78 @@ function firstTableCellAttrs(doc: Document): Record<string, unknown> {
 }
 
 describe("toProseDoc", () => {
+  test("converts table-cell text-box shapes into block nodes", () => {
+    const document: Document = {
+      package: {
+        document: {
+          content: [
+            {
+              type: "table",
+              rows: [
+                {
+                  cells: [
+                    {
+                      content: [
+                        {
+                          type: "paragraph",
+                          content: [
+                            {
+                              type: "run",
+                              content: [
+                                {
+                                  type: "shape",
+                                  shape: {
+                                    type: "shape",
+                                    shapeType: "textBox",
+                                    size: { width: 914_400, height: 457_200 },
+                                    textBody: {
+                                      content: [
+                                        {
+                                          type: "paragraph",
+                                          content: [
+                                            {
+                                              type: "run",
+                                              content: [{ type: "text", text: "Cell card" }],
+                                            },
+                                          ],
+                                        },
+                                      ],
+                                    },
+                                  },
+                                },
+                              ],
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    };
+
+    const pmDoc = toProseDoc(document);
+    const tableCell = pmDoc.firstChild?.firstChild?.firstChild;
+    const textBox = tableCell?.firstChild;
+
+    expect(textBox?.type.name).toBe("textBox");
+    expect(textBox?.textContent).toBe("Cell card");
+
+    const rebuilt = fromProseDoc(pmDoc, document);
+    const rebuiltTable = rebuilt.package.document.content.at(0);
+    const rebuiltParagraph =
+      rebuiltTable?.type === "table" ? rebuiltTable.rows[0]?.cells[0]?.content[0] : undefined;
+    const rebuiltRun =
+      rebuiltParagraph?.type === "paragraph" ? rebuiltParagraph.content[0] : undefined;
+    const rebuiltShape = rebuiltRun?.type === "run" ? rebuiltRun.content[0] : undefined;
+
+    expect(rebuiltShape?.type).toBe("shape");
+  });
+
   test("tracks docDefaults spacing so empty paragraphs retain it during layout", () => {
     const document: Document = {
       package: {
@@ -63,7 +136,110 @@ describe("toProseDoc", () => {
     expect(doc.firstChild?.attrs.spacingExplicit).toBeNull();
   });
 
-  test("applies oneNDA paragraph mark defaults to unformatted visible text like Word", () => {
+  test("tracks implicit default-style spacing so empty paragraphs retain it during layout", () => {
+    const document: Document = {
+      package: {
+        document: {
+          content: [{ type: "paragraph", content: [] }],
+        },
+        styles: {
+          styles: [
+            {
+              styleId: "Normal",
+              type: "paragraph",
+              default: true,
+              pPr: { spaceBefore: 120, spaceAfter: 160 },
+            },
+          ],
+        },
+      },
+    };
+
+    const doc = toProseDoc(document, { styles: document.package.styles });
+
+    expect(doc.firstChild?.attrs.spaceBefore).toBe(120);
+    expect(doc.firstChild?.attrs.spaceAfter).toBe(160);
+    expect(doc.firstChild?.attrs.spacingFromImplicitDefaultStyle).toEqual({
+      before: true,
+      after: true,
+    });
+    expect(doc.firstChild?.attrs.spacingExplicit).toBeNull();
+  });
+
+  test("direct first-line indent clears a hanging indent inherited from the paragraph style", () => {
+    const document: Document = {
+      package: {
+        document: {
+          content: [
+            {
+              type: "paragraph",
+              formatting: { styleId: "Heading", indentFirstLine: 720 },
+              content: [],
+            },
+          ],
+        },
+        styles: {
+          styles: [
+            {
+              styleId: "Heading",
+              type: "paragraph",
+              pPr: { indentLeft: 360, indentFirstLine: -180, hangingIndent: true },
+            },
+          ],
+        },
+      },
+    };
+
+    const doc = toProseDoc(document, { styles: document.package.styles });
+
+    expect(doc.firstChild?.attrs.indentLeft).toBe(360);
+    expect(doc.firstChild?.attrs.indentFirstLine).toBe(720);
+    expect(doc.firstChild?.attrs.hangingIndent).toBe(false);
+  });
+
+  test("direct tab clear retains inherited stops at other positions", () => {
+    const document: Document = {
+      package: {
+        document: {
+          content: [
+            {
+              type: "paragraph",
+              formatting: {
+                styleId: "Footer",
+                tabs: [{ position: 4536, alignment: "clear" }],
+              },
+              content: [],
+            },
+          ],
+        },
+        styles: {
+          styles: [
+            {
+              styleId: "Footer",
+              type: "paragraph",
+              pPr: {
+                tabs: [
+                  { position: 1701, alignment: "left" },
+                  { position: 4536, alignment: "center" },
+                  { position: 9072, alignment: "right" },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    };
+
+    const doc = toProseDoc(document, { styles: document.package.styles });
+
+    expect(doc.firstChild?.attrs.tabs).toEqual([
+      { position: 1701, alignment: "left" },
+      { position: 4536, alignment: "clear" },
+      { position: 9072, alignment: "right" },
+    ]);
+  });
+
+  test("applies paragraph-mark defaults to otherwise unformatted visible text", () => {
     const document: Document = {
       package: {
         document: {
@@ -96,10 +272,10 @@ describe("toProseDoc", () => {
     expect(text?.marks.some((mark) => mark.type.name === "bold")).toBe(true);
     expect(text?.marks.some((mark) => mark.type.name === "italic")).toBe(false);
     expect(text?.marks.find((mark) => mark.type.name === "fontSize")?.attrs.size).toBe(21);
-    expect(text?.marks.find((mark) => mark.type.name === "fontFamily")?.attrs.ascii).toBe("Arial");
+    expect(text?.marks.some((mark) => mark.type.name === "fontFamily")).toBe(false);
   });
 
-  test("keeps oneNDA heading direct run formatting ahead of paragraph mark defaults", () => {
+  test("keeps direct run formatting ahead of paragraph-mark defaults", () => {
     const document: Document = {
       package: {
         document: {
@@ -265,6 +441,78 @@ describe("toProseDoc", () => {
     expect(text?.marks.find((mark) => mark.type.name === "fontSize")?.attrs.size).toBe(24);
   });
 
+  test("does not leak a paragraph-mark font into directly formatted body text", () => {
+    const document: Document = {
+      package: {
+        document: {
+          content: [
+            {
+              type: "paragraph",
+              formatting: {
+                runProperties: {
+                  fontFamily: { ascii: "Arial Narrow", hAnsi: "Arial Narrow" },
+                },
+              },
+              content: [
+                {
+                  type: "run",
+                  formatting: { boldCs: true },
+                  content: [{ type: "text", text: "Body text" }],
+                },
+              ],
+            },
+          ],
+        },
+        styles: {
+          docDefaults: {
+            rPr: { fontFamily: { ascii: "Arial", hAnsi: "Arial" } },
+          },
+        },
+      },
+    };
+
+    const doc = toProseDoc(document, { styles: document.package.styles });
+    const text = doc.firstChild?.firstChild;
+
+    expect(text?.marks.find((mark) => mark.type.name === "fontFamily")?.attrs.ascii).toBe("Arial");
+  });
+
+  test("keeps the default style font on an unformatted body run", () => {
+    const document: Document = {
+      package: {
+        document: {
+          content: [
+            {
+              type: "paragraph",
+              formatting: {
+                runProperties: {
+                  fontFamily: { ascii: "Arial Narrow", hAnsi: "Arial Narrow" },
+                },
+              },
+              content: [
+                {
+                  type: "run",
+                  formatting: {},
+                  content: [{ type: "text", text: "Body text" }],
+                },
+              ],
+            },
+          ],
+        },
+        styles: {
+          docDefaults: {
+            rPr: { fontFamily: { ascii: "Arial", hAnsi: "Arial" } },
+          },
+        },
+      },
+    };
+
+    const doc = toProseDoc(document, { styles: document.package.styles });
+    const text = doc.firstChild?.firstChild;
+
+    expect(text?.marks.find((mark) => mark.type.name === "fontFamily")?.attrs.ascii).toBe("Arial");
+  });
+
   test("keeps named paragraph style fonts ahead of paragraph-mark formatting", () => {
     const document: Document = {
       package: {
@@ -368,6 +616,39 @@ describe("toProseDoc", () => {
 
     expect(text?.marks.some((mark) => mark.type.name === "allCaps")).toBe(false);
     expect(text?.marks.some((mark) => mark.type.name === "italic")).toBe(true);
+  });
+
+  test("keeps paragraph-mark vertical alignment off visible text", () => {
+    const document: Document = {
+      package: {
+        document: {
+          content: [
+            {
+              type: "paragraph",
+              formatting: {
+                runProperties: {
+                  vertAlign: "superscript",
+                },
+              },
+              content: [
+                {
+                  type: "run",
+                  formatting: {},
+                  content: [{ type: "text", text: "Visible text" }],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    };
+
+    const doc = toProseDoc(document);
+    const paragraph = doc.firstChild;
+    const text = paragraph?.firstChild;
+
+    expect(paragraph?.attrs.defaultTextFormatting?.vertAlign).toBeUndefined();
+    expect(text?.marks.some((mark) => mark.type.name === "superscript")).toBe(false);
   });
 
   test("preserves explicit run-level all-caps", () => {
@@ -510,6 +791,78 @@ describe("toProseDoc", () => {
     );
   });
 
+  test("does not leak paragraph-mark emphasis through a character-style reference", () => {
+    const document: Document = {
+      package: {
+        document: {
+          content: [
+            {
+              type: "paragraph",
+              formatting: {
+                runProperties: {
+                  bold: true,
+                  italic: true,
+                },
+              },
+              content: [
+                {
+                  type: "run",
+                  formatting: {
+                    styleId: "BodyCharacter",
+                  },
+                  content: [{ type: "text", text: "Visible body text" }],
+                },
+              ],
+            },
+          ],
+        },
+        styles: {
+          styles: [
+            {
+              styleId: "BodyCharacter",
+              type: "character",
+              rPr: {},
+            },
+          ],
+        },
+      },
+    };
+
+    const doc = toProseDoc(document, { styles: document.package.styles });
+    const paragraph = doc.firstChild;
+    const text = paragraph?.firstChild;
+
+    const emphasisMarks = ["bold", "italic"] as const;
+    const formattingOverride = text?.marks.find(
+      (mark) => mark.type.name === "runFormattingOverride",
+    );
+
+    expect(paragraph?.attrs._originalFormatting.runProperties).toMatchObject({
+      bold: true,
+      italic: true,
+    });
+    for (const markName of emphasisMarks) {
+      expect(text?.marks.some((mark) => mark.type.name === markName)).toBe(false);
+      expect(formattingOverride?.attrs[markName]).toBe(false);
+    }
+    expect(text?.marks.find((mark) => mark.type.name === "characterStyle")?.attrs.styleId).toBe(
+      "BodyCharacter",
+    );
+
+    const rebuilt = fromProseDoc(doc, document);
+    const rebuiltParagraph = rebuilt.package.document.content.at(0);
+    const rebuiltRun =
+      rebuiltParagraph?.type === "paragraph" ? rebuiltParagraph.content.at(0) : null;
+
+    expect(rebuiltParagraph?.formatting?.runProperties).toMatchObject({
+      bold: true,
+      italic: true,
+    });
+    expect(rebuiltRun?.type === "run" ? rebuiltRun.formatting?.styleId : null).toBe(
+      "BodyCharacter",
+    );
+  });
+
   test("does not leak paragraph mark character spacing onto a directly formatted run", () => {
     const document: Document = {
       package: {
@@ -598,6 +951,211 @@ describe("toProseDoc", () => {
     expect(text?.marks.find((mark) => mark.type.name === "fontFamily")?.attrs.ascii).toBe(
       "Open Sans Light",
     );
+  });
+
+  test("resolves themed table-cell fills while preserving their OOXML metadata", () => {
+    const shading = {
+      pattern: "clear",
+      fill: { themeColor: "accent1", themeTint: "33" },
+    } as const satisfies ShadingProperties;
+    const document: Document = {
+      package: {
+        theme: officeTheme,
+        document: {
+          content: [
+            {
+              type: "table",
+              rows: [
+                {
+                  cells: [
+                    {
+                      formatting: { shading },
+                      content: [{ type: "paragraph", content: [] }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    };
+
+    const pmDoc = toProseDoc(document);
+    const attrs = firstTableCellAttrs(document);
+    const rebuilt = fromProseDoc(pmDoc, document);
+    const rebuiltTable = rebuilt.package.document.content.at(0);
+    const rebuiltCell =
+      rebuiltTable?.type === "table" ? rebuiltTable.rows.at(0)?.cells.at(0) : null;
+
+    expect(attrs["backgroundColor"]).toBe("DAE3F3");
+    expect(attrs["_resolvedBackgroundColor"]).toBe("DAE3F3");
+    expect(rebuiltCell?.formatting?.shading).toEqual(shading);
+  });
+
+  test("serializes an edited themed table-cell fill as direct RGB shading", () => {
+    const document: Document = {
+      package: {
+        theme: officeTheme,
+        document: {
+          content: [
+            {
+              type: "table",
+              rows: [
+                {
+                  cells: [
+                    {
+                      formatting: {
+                        shading: {
+                          pattern: "clear",
+                          fill: { themeColor: "accent1", themeTint: "33" },
+                        },
+                      },
+                      content: [{ type: "paragraph", content: [] }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    };
+    const pmDoc = toProseDoc(document);
+    const table = pmDoc.firstChild;
+    const row = table?.firstChild;
+    const cell = row?.firstChild;
+    if (!table || !row || !cell) {
+      throw new Error("Expected themed table cell");
+    }
+    const editedPmDoc = pmDoc.type.create(pmDoc.attrs, [
+      table.type.create(table.attrs, [
+        row.type.create(row.attrs, [
+          cell.type.create({ ...cell.attrs, backgroundColor: "123456" }, cell.content),
+        ]),
+      ]),
+    ]);
+
+    const rebuilt = fromProseDoc(editedPmDoc, document);
+    const rebuiltTable = rebuilt.package.document.content.at(0);
+    const rebuiltCell =
+      rebuiltTable?.type === "table" ? rebuiltTable.rows.at(0)?.cells.at(0) : null;
+
+    expect(rebuiltCell?.formatting?.shading).toEqual({ fill: { rgb: "123456" } });
+  });
+
+  test("resolves themed table-style fills without materializing direct cell shading", () => {
+    const document: Document = {
+      package: {
+        theme: officeTheme,
+        styles: {
+          styles: [
+            {
+              styleId: "ThemedTable",
+              type: "table",
+              tblStylePr: [
+                {
+                  type: "wholeTable",
+                  tcPr: {
+                    shading: {
+                      pattern: "clear",
+                      fill: { themeColor: "accent6" },
+                    },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        document: {
+          content: [
+            {
+              type: "table",
+              formatting: { styleId: "ThemedTable" },
+              rows: [
+                {
+                  cells: [{ content: [{ type: "paragraph", content: [] }] }],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    };
+
+    const pmDoc = toProseDoc(document);
+    const attrs = firstTableCellAttrs(document);
+    const rebuilt = fromProseDoc(pmDoc, document);
+    const rebuiltTable = rebuilt.package.document.content.at(0);
+    const rebuiltCell =
+      rebuiltTable?.type === "table" ? rebuiltTable.rows.at(0)?.cells.at(0) : null;
+
+    expect(attrs["backgroundColor"]).toBe("70AD47");
+    expect(rebuiltCell?.formatting?.shading).toBeUndefined();
+
+    const table = pmDoc.firstChild;
+    const row = table?.firstChild;
+    const cell = row?.firstChild;
+    if (!table || !row || !cell) {
+      throw new Error("Expected themed table cell");
+    }
+    const clearedPmDoc = pmDoc.type.create(pmDoc.attrs, [
+      table.type.create(table.attrs, [
+        row.type.create(row.attrs, [
+          cell.type.create({ ...cell.attrs, backgroundColor: null }, cell.content),
+        ]),
+      ]),
+    ]);
+    const cleared = fromProseDoc(clearedPmDoc, document);
+    const clearedTable = cleared.package.document.content.at(0);
+    const clearedCell =
+      clearedTable?.type === "table" ? clearedTable.rows.at(0)?.cells.at(0) : null;
+
+    expect(clearedCell?.formatting?.shading).toEqual({ pattern: "nil" });
+  });
+
+  test("lets explicit nil cell shading suppress a themed table-style fill", () => {
+    const document: Document = {
+      package: {
+        theme: officeTheme,
+        styles: {
+          styles: [
+            {
+              styleId: "ThemedTable",
+              type: "table",
+              tcPr: {
+                shading: {
+                  pattern: "clear",
+                  fill: { themeColor: "accent2" },
+                },
+              },
+            },
+          ],
+        },
+        document: {
+          content: [
+            {
+              type: "table",
+              formatting: { styleId: "ThemedTable" },
+              rows: [
+                {
+                  cells: [
+                    {
+                      formatting: { shading: { pattern: "nil" } },
+                      content: [{ type: "paragraph", content: [] }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    };
+
+    const attrs = firstTableCellAttrs(document);
+
+    expect(attrs["backgroundColor"]).toBeNull();
   });
 
   test("resolves themed table-cell border colors against the document theme", () => {
@@ -1050,6 +1608,50 @@ describe("toProseDoc", () => {
     expect(sdt?.type.name).toBe("sdt");
     expect(sdt?.marks).toEqual([]);
     expect(sdt?.firstChild?.text).toBe("Controlled");
+  });
+
+  test("converts tracked run changes inside inline content controls", () => {
+    const document: Document = {
+      package: {
+        document: {
+          content: [
+            {
+              type: "paragraph",
+              content: [
+                {
+                  type: "inlineSdt",
+                  properties: { sdtType: "richText" },
+                  content: [
+                    {
+                      type: "insertion",
+                      info: { id: 1, author: "Reviewer" },
+                      content: [{ type: "run", content: [{ type: "text", text: "added" }] }],
+                    },
+                    {
+                      type: "deletion",
+                      info: { id: 2, author: "Reviewer" },
+                      content: [{ type: "run", content: [{ type: "text", text: "removed" }] }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    };
+
+    const sdt = toProseDoc(document).firstChild?.firstChild;
+    expect(sdt?.type.name).toBe("sdt");
+    expect(sdt?.textContent).toBe("addedremoved");
+    expect(
+      Array.from({ length: sdt?.childCount ?? 0 }, (_, index) =>
+        sdt?.child(index).marks.map((mark) => ({
+          type: mark.type.name,
+          moveKind: mark.attrs.moveKind,
+        })),
+      ),
+    ).toEqual([[{ type: "insertion", moveKind: null }], [{ type: "deletion", moveKind: null }]]);
   });
 
   test("anchors point comments to nearby text for display", () => {

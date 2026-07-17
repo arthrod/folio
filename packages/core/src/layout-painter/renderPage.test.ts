@@ -554,7 +554,7 @@ describe("floating text box render zones", () => {
 });
 
 describe("header and footer rendering", () => {
-  test("dims header and footer chrome while editing body content", () => {
+  test("preserves authored header and footer colors", () => {
     const pageElement = renderPage(
       { ...page, fragments: [] },
       { pageNumber: 1, totalPages: 1, section: "body" },
@@ -563,10 +563,39 @@ describe("header and footer rendering", () => {
 
     expect(
       findByClass(pageElement as unknown as FakeElement, "layout-page-header")?.style.opacity,
-    ).toBe("0.62");
+    ).toBeUndefined();
     expect(
       findByClass(pageElement as unknown as FakeElement, "layout-page-footer")?.style.opacity,
-    ).toBe("0.62");
+    ).toBeUndefined();
+  });
+
+  test("keeps horizontal paragraph rule endpoints visible outside the text band", () => {
+    const content: HeaderFooterContent = {
+      blocks: [
+        {
+          kind: "paragraph",
+          id: "header-rule",
+          attrs: { borders: { bottom: { width: 1 / 3, style: "solid", color: "#000000" } } },
+          runs: [{ kind: "text", text: "Header" }],
+        },
+      ],
+      measures: [{ kind: "paragraph", lines: [], totalHeight: 16 }],
+      height: 16,
+      visualTop: 0,
+      visualBottom: 16,
+    };
+    const pageElement = renderPage(
+      { ...page, fragments: [] },
+      { pageNumber: 1, totalPages: 1, section: "body" },
+      { document: fakeDocument, headerContent: content },
+    ) as unknown as FakeElement;
+    const header = findByClass(pageElement, "layout-page-header");
+    const rule = findByClass(pageElement, "layout-paragraph-border");
+
+    expect(header?.style.overflow).toBe("clip");
+    expect(header?.style.overflowClipMargin).toBe("2px");
+    expect(rule?.style.left).toBe("-2px");
+    expect(rule?.style.right).toBe("-2px");
   });
 
   test("ignores even footers unless odd/even headers are enabled", () => {
@@ -626,6 +655,34 @@ describe("header and footer rendering", () => {
     });
   });
 
+  test("leaves enabled even-page slots blank when no even part exists", () => {
+    const pageOptions = {
+      headerContent: headerFooterTextContent("Odd header"),
+      footerContent: headerFooterTextContent("Odd footer"),
+    };
+    const applied = applySectionHeaderFooterOptions(
+      {
+        ...page,
+        number: 2,
+        sectionPageNumber: 2,
+        headerFooterRefs: {
+          evenAndOddHeaders: true,
+          headerDefault: "default-header",
+          footerDefault: "default-footer",
+        },
+        fragments: [],
+      },
+      pageOptions,
+      {
+        headerContentByRId: new Map([["default-header", headerFooterTextContent("Odd header")]]),
+        footerContentByRId: new Map([["default-footer", headerFooterTextContent("Odd footer")]]),
+      },
+    );
+
+    expect(applied).toBe(true);
+    expect(pageOptions).toEqual({});
+  });
+
   test("keeps top-and-bottom text boxes in header flow", () => {
     const textBoxBlock: TextBoxBlock = {
       kind: "textBox",
@@ -666,6 +723,45 @@ describe("header and footer rendering", () => {
     const afterParagraph = paragraphs.find((element) => element.dataset["blockId"] === "hf-after");
 
     expect(afterParagraph?.style.top).toBe("40px");
+  });
+
+  test("honors page-relative vertical positions for footer text boxes", () => {
+    const emusPerPixel = 9_525;
+    const anchoredTop = 900;
+    const textBoxBlock: TextBoxBlock = {
+      kind: "textBox",
+      id: "positioned-footer-box",
+      width: 80,
+      height: 20,
+      content: [],
+      wrapType: "behind",
+      position: {
+        vertical: {
+          relativeTo: "page",
+          posOffset: anchoredTop * emusPerPixel,
+        },
+      },
+    };
+
+    const pageElement = renderPage(
+      { ...page, fragments: [] },
+      { pageNumber: 1, totalPages: 1, section: "body" },
+      {
+        document: fakeDocument,
+        footerContent: {
+          rId: "rIdFooter",
+          blocks: [textBoxBlock],
+          measures: [textBoxMeasure(textBoxBlock.width, textBoxBlock.height)],
+          height: 0,
+        },
+      },
+    ) as unknown as FakeElement;
+
+    const textBox = findByClass(pageElement, "layout-textbox");
+    expect(textBox?.parent).toBe(pageElement);
+    expect(textBox?.style.top).toBe(`${anchoredTop}px`);
+    expect(textBox?.dataset["hfSlotKind"]).toBe("footer");
+    expect(textBox?.dataset["hfRid"]).toBe("rIdFooter");
   });
 
   test("interactive header/footer box tracks the flow band, not a floating shape's extent (#869)", () => {

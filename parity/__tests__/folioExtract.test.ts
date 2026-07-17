@@ -6,9 +6,13 @@ import {
   computeZoomFactor,
   formatNavigationFailure,
   formatServerStartFailure,
+  isFullyClippedByAncestors,
+  isPlausibleBaseline,
   meaningfulTextRange,
   parseCssFontFamilies,
   parseFirstFontFamily,
+  parseInsetClipPath,
+  screenshotViewportHeight,
   toPageGeom,
 } from "../folioExtract";
 import type { RawLine, RawPage } from "../folioExtract";
@@ -29,6 +33,20 @@ describe("clean screenshot style", () => {
   test("keeps the page and its document content visible", () => {
     expect(CLEAN_SCREENSHOT_CSS).toContain(".layout-page,");
     expect(CLEAN_SCREENSHOT_CSS).toContain(".layout-page *");
+  });
+});
+
+describe("screenshot viewport height", () => {
+  test("grows enough to paint the tallest page above playground chrome", () => {
+    expect(screenshotViewportHeight([1123, 794], 1000)).toBe(1323);
+  });
+
+  test("does not shrink an already tall viewport", () => {
+    expect(screenshotViewportHeight([1123], 1600)).toBe(1600);
+  });
+
+  test("ignores invalid page heights", () => {
+    expect(screenshotViewportHeight([Number.NaN, Number.POSITIVE_INFINITY], 1000)).toBe(1000);
   });
 });
 
@@ -127,6 +145,42 @@ describe("computeZoomFactor", () => {
   });
 });
 
+describe("isPlausibleBaseline", () => {
+  test("rejects a zero-width probe that wrapped below the extracted ink row", () => {
+    expect(isPlausibleBaseline(190, rect(0, 146, 200, 20))).toBe(false);
+  });
+
+  test("keeps a baseline near the extracted ink row", () => {
+    expect(isPlausibleBaseline(174, rect(0, 146, 200, 20))).toBe(true);
+  });
+});
+
+describe("CSS clipping geometry", () => {
+  test("parses computed inset shorthand in pixels and percentages", () => {
+    expect(parseInsetClipPath("inset(10px 5% 20px)", 200, 100)).toEqual({
+      top: 10,
+      right: 10,
+      bottom: 20,
+      left: 10,
+    });
+    expect(parseInsetClipPath("circle(50%)", 200, 100)).toBeNull();
+  });
+
+  test("scales inset clips from layout pixels to transformed visual pixels", () => {
+    const ancestor = {
+      rect: rect(0, 0, 100, 100),
+      offsetWidth: 200,
+      offsetHeight: 200,
+      clipsX: false,
+      clipsY: false,
+      clipPath: "inset(80px 0 40px)",
+    };
+
+    expect(isFullyClippedByAncestors(rect(10, 10, 50, 10), [ancestor])).toBe(true);
+    expect(isFullyClippedByAncestors(rect(10, 45, 50, 10), [ancestor])).toBe(false);
+  });
+});
+
 describe("parseFirstFontFamily", () => {
   test("takes the first family and strips double quotes", () => {
     expect(parseFirstFontFamily('"Calibri", "Arial", sans-serif')).toBe("Calibri");
@@ -164,6 +218,40 @@ describe("toPageGeom", () => {
     expect(page.lines[0]?.heightPt).toBeCloseTo(20 * PX_TO_PT, 5);
   });
 
+  test("converts an extracted baseline to page-relative points", () => {
+    const rawPage = makeRawPage({
+      pageRect: rect(100, 50, 816, 1056),
+      lines: [
+        makeRawLine({
+          text: "Hello",
+          rect: rect(196, 146, 200, 20),
+          baselineTop: 162,
+        }),
+      ],
+    });
+
+    const page = toPageGeom(rawPage);
+
+    expect(page.lines[0]?.baselinePt).toBeCloseTo((162 - 50) * PX_TO_PT, 5);
+  });
+
+  test("omits a baseline probe that wrapped onto the following visual row", () => {
+    const rawPage = makeRawPage({
+      pageRect: rect(100, 50, 816, 1056),
+      lines: [
+        makeRawLine({
+          text: "Full line",
+          rect: rect(196, 146, 200, 20),
+          baselineTop: 190,
+        }),
+      ],
+    });
+
+    const page = toPageGeom(rawPage);
+
+    expect(page.lines[0]?.baselinePt).toBeUndefined();
+  });
+
   test("normalizes coordinates against a CSS-zoomed page (zoomFactor != 1)", () => {
     // Page laid out at 816 layout px, rendered at 50% zoom (visual rect
     // 408px wide). A line whose visual left edge is 48px from the visual
@@ -198,6 +286,46 @@ describe("toPageGeom", () => {
 
     expect(page.lines).toHaveLength(1);
     expect(page.lines[0]?.text).toBe("Visible");
+  });
+
+  test("drops lines fully clipped by an overflow ancestor", () => {
+    const rawPage = makeRawPage({
+      lines: [
+        makeRawLine({ text: "Visible", rect: rect(0, 0, 100, 10) }),
+        makeRawLine({ text: "Clipped", rect: rect(0, 20, 100, 10), fullyClipped: true }),
+      ],
+    });
+
+    const page = toPageGeom(rawPage);
+
+    expect(page.lines.map((line) => line.text)).toEqual(["Visible"]);
+  });
+
+  test("drops lines fully excluded by a CSS inset clip path", () => {
+    const clippingAncestor = {
+      rect: rect(0, 0, 100, 100),
+      offsetWidth: 100,
+      offsetHeight: 100,
+      clipsX: false,
+      clipsY: true,
+      clipPath: "inset(60px 0 0)",
+    };
+    const rawPage = makeRawPage({
+      lines: [
+        makeRawLine({
+          text: "Clipped",
+          rect: rect(0, 20, 100, 10),
+          clippingAncestors: [clippingAncestor],
+        }),
+        makeRawLine({
+          text: "Visible",
+          rect: rect(0, 70, 100, 10),
+          clippingAncestors: [clippingAncestor],
+        }),
+      ],
+    });
+
+    expect(toPageGeom(rawPage).lines.map((line) => line.text)).toEqual(["Visible"]);
   });
 
   test("drops lines whose normalized text is empty (whitespace-only / soft hyphen only)", () => {
@@ -259,6 +387,20 @@ describe("toPageGeom", () => {
     });
 
     expect(toPageGeom(rawPage).lines.at(0)?.visualGroup).toBe("table-cell:3");
+  });
+
+  test("preserves logical line groups", () => {
+    const rawPage = makeRawPage({
+      lines: [
+        makeRawLine({
+          text: "Segment",
+          rect: rect(96, 96, 200, 20),
+          logicalLineGroup: "layout-line:4",
+        }),
+      ],
+    });
+
+    expect(toPageGeom(rawPage).lines.at(0)?.logicalLineGroup).toBe("layout-line:4");
   });
 
   test("computes fontName/fontSizePt from raw px values, omitting when absent", () => {

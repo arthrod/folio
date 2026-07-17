@@ -344,6 +344,28 @@ describe("parseParagraph spacing explicit flags", () => {
 // docProps-bound title fields (and similar template content) lost their
 // wrapper on parse.
 describe("parseParagraph SDT content preservation", () => {
+  test("keeps tracked run changes inside an inline SDT", () => {
+    const paragraph = parseParagraphXml(`
+      <w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+        <w:sdt>
+          <w:sdtPr><w:alias w:val="reviewed-control"/></w:sdtPr>
+          <w:sdtContent>
+            <w:ins w:id="1" w:author="Reviewer"><w:r><w:t>added</w:t></w:r></w:ins>
+            <w:del w:id="2" w:author="Reviewer"><w:r><w:delText>removed</w:delText></w:r></w:del>
+          </w:sdtContent>
+        </w:sdt>
+      </w:p>
+    `);
+
+    expect(paragraph.content).toHaveLength(1);
+    const sdt = paragraph.content.at(0);
+    expect(sdt?.type).toBe("inlineSdt");
+    if (sdt?.type !== "inlineSdt") {
+      return;
+    }
+    expect(sdt.content.map((content) => content.type)).toEqual(["insertion", "deletion"]);
+  });
+
   test("keeps a simple field that lives inside an inline SDT", () => {
     const paragraph = parseParagraphXml(`
       <w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
@@ -493,5 +515,33 @@ describe("parseParagraph smartTag wrapper", () => {
     const text = getParagraphText(paragraph);
     expect(text).toContain("SMARTTAG-CITY");
     expect(text).toContain(", STATE");
+  });
+});
+
+describe("parseParagraph native frame geometry", () => {
+  test("captures frame size, offsets, anchors, and wrap spacing", () => {
+    const paragraph = parseParagraphXml(`
+      <w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+        <w:pPr>
+          <w:framePr w:dropCap="none" w:lines="2" w:w="3600" w:h="1440" w:hSpace="144" w:vSpace="72"
+            w:hAnchor="page" w:vAnchor="text" w:x="720" w:y="144" w:wrap="around"/>
+        </w:pPr>
+        <w:r><w:t>Framed text</w:t></w:r>
+      </w:p>
+    `);
+
+    expect(paragraph.formatting?.frame).toEqual({
+      dropCap: "none",
+      lines: 2,
+      width: 3600,
+      height: 1440,
+      hSpace: 144,
+      vSpace: 72,
+      hAnchor: "page",
+      vAnchor: "text",
+      x: 720,
+      y: 144,
+      wrap: "around",
+    });
   });
 });

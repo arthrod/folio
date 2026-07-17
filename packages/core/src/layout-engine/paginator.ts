@@ -7,6 +7,7 @@
 
 import { panic } from "better-result";
 
+import { collapseParagraphSpacing } from "./paragraphSpacing";
 import type { Page, PageMargins, Fragment, ColumnLayout, PageHeaderFooterRefs } from "./types";
 import { FOOTNOTE_SEPARATOR_HEIGHT } from "./types";
 
@@ -62,6 +63,8 @@ export type PaginatorOptions = {
    * first-page header) vs. its body pages. Pages 2+ use `margins`.
    */
   firstPageMargins?: PageMargins;
+  /** Per-section body margins used on even section pages. */
+  sectionEvenPageMargins?: (PageMargins | undefined)[];
   /** Column configuration (optional). */
   columns?: ColumnLayout;
   /** Per-page footnote reserved heights (pageNumber → height in pixels). */
@@ -76,19 +79,27 @@ type ForcePageBreakOptions = {
   coalesceBlankPage?: boolean;
 };
 
-/**
- * Calculate the width of a single column.
- */
-function calculateColumnWidth(
+/** Calculate active column widths, preferring authored unequal widths. */
+function calculateColumnWidths(
   pageWidth: number,
   leftMargin: number,
   rightMargin: number,
   columns: ColumnLayout,
-): number {
+): number[] {
+  if (
+    columns.widths?.length === columns.count &&
+    columns.widths.every((width) => Number.isFinite(width) && width > 0)
+  ) {
+    return [...columns.widths];
+  }
   const contentWidth = pageWidth - leftMargin - rightMargin;
   const totalGaps = (columns.count - 1) * columns.gap;
-  return (contentWidth - totalGaps) / columns.count;
+  const equalWidth = (contentWidth - totalGaps) / columns.count;
+  return Array.from({ length: columns.count }, () => equalWidth);
 }
+
+const gapAfterColumn = (columns: ColumnLayout, columnIndex: number): number =>
+  columns.gaps?.[columnIndex] ?? columns.gap;
 
 function arePageSizesEqual(
   left: { w: number; h: number },
@@ -141,7 +152,10 @@ export function createPaginator(options: PaginatorOptions) {
     }
     return (
       arePageSizesEqual(state.page.size, pageSize) &&
-      areMarginsEqual(state.page.margins, getPageMargins(state.page.number))
+      areMarginsEqual(
+        state.page.margins,
+        getPageMargins(state.page.number, state.page.sectionPageNumber ?? currentSectionPageNumber),
+      )
     );
   }
 
@@ -149,11 +163,10 @@ export function createPaginator(options: PaginatorOptions) {
     panic("Paginator: page size and margins yield no content area");
   }
 
-  // Calculate column width
-  let columnWidth = calculateColumnWidth(pageSize.w, margins.left, margins.right, columns);
+  let columnWidths = calculateColumnWidths(pageSize.w, margins.left, margins.right, columns);
 
-  function recalculateColumnWidth(): void {
-    columnWidth = calculateColumnWidth(pageSize.w, margins.left, margins.right, columns);
+  function recalculateColumnWidths(): void {
+    columnWidths = calculateColumnWidths(pageSize.w, margins.left, margins.right, columns);
   }
 
   function applyPendingLayout(): void {
@@ -168,14 +181,18 @@ export function createPaginator(options: PaginatorOptions) {
     if (getContentHeight() <= 0) {
       panic("Paginator: section page size and margins yield no content area");
     }
-    recalculateColumnWidth();
+    recalculateColumnWidths();
   }
 
-  function getPageMargins(pageNumber: number): PageMargins {
+  function getPageMargins(pageNumber: number, sectionPageNumber: number): PageMargins {
+    const evenMargins =
+      sectionPageNumber % 2 === 0
+        ? options.sectionEvenPageMargins?.[currentSectionIndex]
+        : undefined;
     const pageMargins =
       pageNumber === 1 && options.firstPageMargins
         ? { ...options.firstPageMargins }
-        : { ...margins };
+        : { ...(evenMargins ?? margins) };
     if (options.mirrorMargins === true && pageNumber % 2 === 0) {
       return { ...pageMargins, left: pageMargins.right, right: pageMargins.left };
     }
@@ -187,13 +204,18 @@ export function createPaginator(options: PaginatorOptions) {
   // (continuous section break). When advanceColumn moves to the next column,
   // it resets cursorY to this value instead of topMargin.
   let columnRegionTop = margins.top;
+  let columnRegionMaxBottom = margins.top;
 
   /**
    * Get X position for a given column index.
    */
   function getColumnX(columnIndex: number): number {
-    const activeLeftMargin = states.at(-1)?.page.margins.left ?? getPageMargins(1).left;
-    return activeLeftMargin + columnIndex * (columnWidth + columns.gap);
+    const activeLeftMargin = states.at(-1)?.page.margins.left ?? getPageMargins(1, 1).left;
+    let x = activeLeftMargin;
+    for (let index = 0; index < columnIndex; index++) {
+      x += (columnWidths[index] ?? columnWidths[0] ?? 0) + gapAfterColumn(columns, index);
+    }
+    return x;
   }
 
   /**
@@ -212,7 +234,7 @@ export function createPaginator(options: PaginatorOptions) {
     // every page in the section would inherit page 1's title-page top
     // margin, leaving large empty space at the top of pages 2+ on
     // first-page-header docs (NVCA-style templates).
-    const pageMargins = getPageMargins(pageNumber);
+    const pageMargins = getPageMargins(pageNumber, currentSectionPageNumber);
     const topMargin = pageMargins.top;
     const contentBottom = pageSize.h - pageMargins.bottom;
 
@@ -251,6 +273,7 @@ export function createPaginator(options: PaginatorOptions) {
 
     // Reset column region to page top on new page
     columnRegionTop = topMargin;
+    columnRegionMaxBottom = topMargin;
 
     if (options.onNewPage) {
       options.onNewPage(state);
@@ -295,6 +318,7 @@ export function createPaginator(options: PaginatorOptions) {
   function advanceColumn(state: PageState): PageState {
     // Check if there are more columns on this page
     if (state.columnIndex < columns.count - 1) {
+      columnRegionMaxBottom = Math.max(columnRegionMaxBottom, state.cursorY);
       state.columnIndex += 1;
       state.cursorY = columnRegionTop;
       state.trailingSpacing = 0;
@@ -316,7 +340,7 @@ export function createPaginator(options: PaginatorOptions) {
 
     // Keep advancing until we have space
     while (!fits(safeHeight, state)) {
-      const columnCapacity = state.contentBottom - state.topMargin;
+      const columnCapacity = state.contentBottom - columnRegionTop;
       if (safeHeight > columnCapacity) {
         if (state.cursorY !== state.topMargin) {
           state = advanceColumn(state);
@@ -345,7 +369,10 @@ export function createPaginator(options: PaginatorOptions) {
     // Word collapses adjacent paragraph spacing: the inter-paragraph gap is
     // the larger of the previous paragraph's `spaceAfter` and the next
     // paragraph's `spaceBefore`.
-    const effectiveSpaceBefore = Math.max(spaceBefore, initialState.trailingSpacing);
+    const effectiveSpaceBefore = collapseParagraphSpacing({
+      before: spaceBefore,
+      after: initialState.trailingSpacing,
+    });
     const totalHeight = effectiveSpaceBefore + height;
 
     // Ensure we have space
@@ -448,7 +475,7 @@ export function createPaginator(options: PaginatorOptions) {
       applyPendingLayout();
     }
 
-    const pageMargins = getPageMargins(current.page.number);
+    const pageMargins = getPageMargins(current.page.number, 1);
     const topMargin = pageMargins.top;
     const rawContentBottom = pageSize.h - pageMargins.bottom;
     const footnoteHeight = options.footnoteReservedHeights?.get(current.page.number) ?? 0;
@@ -495,21 +522,33 @@ export function createPaginator(options: PaginatorOptions) {
    * column advancement stays below existing content (for continuous breaks).
    */
   function updateColumns(newColumns: ColumnLayout): void {
+    const previousColumnCount = columns.count;
+    const state = getCurrentState();
+    const previousRegionBottom = Math.max(columnRegionMaxBottom, state.cursorY);
+
     columns = newColumns;
-    columnWidth = calculateColumnWidth(pageSize.w, margins.left, margins.right, columns);
+    recalculateColumnWidths();
 
     // Update current page's column info for rendering
-    const state = getCurrentState();
     if (columns.count > 1) {
       state.page.columns = { ...columns };
     } else {
       delete state.page.columns;
     }
 
+    // A balanced section temporarily shortens contentBottom. Restore the
+    // physical page boundary before starting the next column layout.
+    state.contentBottom = state.rawContentBottom - state.footnoteHeight;
+
+    if (previousColumnCount > 1) {
+      state.cursorY = previousRegionBottom;
+    }
+
     // Set column region top to current cursor position.
     // This ensures that when advancing columns, new columns start
     // at the same Y as where the multi-column content began (not page top).
     columnRegionTop = state.cursorY;
+    columnRegionMaxBottom = state.cursorY;
 
     // Reset to column 0 for the new column layout
     state.columnIndex = 0;
@@ -535,7 +574,7 @@ export function createPaginator(options: PaginatorOptions) {
     if (getContentHeight() <= 0) {
       panic("Paginator: section page size and margins yield no content area");
     }
-    recalculateColumnWidth();
+    recalculateColumnWidths();
     pendingPageSize = undefined;
     pendingMargins = undefined;
   }
@@ -563,7 +602,8 @@ export function createPaginator(options: PaginatorOptions) {
     states,
     /** Column width in pixels (use getColumnWidth() for current value after updates). */
     get columnWidth() {
-      return columnWidth;
+      const columnIndex = states.at(-1)?.columnIndex ?? 0;
+      return columnWidths[columnIndex] ?? columnWidths[0] ?? getContentWidth();
     },
     /** Get current column layout (returns copy to prevent external mutation). */
     get columns() {

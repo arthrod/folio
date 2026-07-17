@@ -113,6 +113,22 @@ interface FolioEditor {
 Framework adapters only instantiate this, forward lifecycle/events, and render
 chrome. The editor _surface_ (pages) is painted imperatively by `render-dom`.
 
+The controller owns every editable story, not only the main body. Header and
+footer relationship ids are persistent story identities: the shared
+`HeaderFooterEditorManager` owns one ProseMirror view per id, while
+`render-dom/HeaderFooterSelectionOverlay` projects its selection into painted
+page coordinates. React and Vue provide host refs and chrome only.
+
+Typed content-control chrome follows the same rule. The shared
+`ContentControlWidgetController` owns picker state, view binding, dismissal,
+and transaction dispatch for dropdown and date controls; adapters only render
+the discriminated snapshot with their native menu and date-picker primitives.
+
+The shared hidden-editor manager also owns clipboard event reporting and the
+read-only refusal policy. Adapters thread host callbacks and cover only their
+explicit menu operations; native copy, cut, and paste events stay in the shared
+controller seam.
+
 ### Seam 7 — Operation / Edit API (the agentic surface)
 
 A stable, versioned, documented schema of edit operations over `Document`

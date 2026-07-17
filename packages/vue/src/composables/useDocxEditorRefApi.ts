@@ -15,10 +15,8 @@
  * controller (`opts.editor`), which already implements the hidden-editor
  * imperative API 1:1 with React's `PagedEditorRef`; the scroll/page methods
  * reuse this file's own `scrollToPage` / `scrollToParaId` /
- * `scrollVisiblePositionIntoView`. `getHfView` stays a documented no-op:
- * `useDocxEditor`'s layout pipeline always passes `hfPMs: null`, so there is no
- * persistent hidden header/footer `EditorView` to look up by `rId` yet
- * (PORT-BLOCKED, see that method's note). The AI-edit and content-control
+ * `scrollVisiblePositionIntoView`. Header/footer view lookup delegates to the
+ * shared persistent-view manager owned by `useDocxEditor`. The AI-edit and content-control
  * methods are wired over folio-core directly, mirroring the React adapter.
  * `hasPendingChanges` is wired from the doc-dirty flag (`useDocxEditor`) OR-ed
  * with the comment-list dirty flag (`useCommentManagement`); see its
@@ -30,6 +28,7 @@ import type { Ref } from "vue";
 import { TextSelection } from "prosemirror-state";
 import type { Transaction } from "prosemirror-state";
 import type { EditorView } from "prosemirror-view";
+import { closeHistory } from "prosemirror-history";
 
 import {
   applyFolioAIEditOperations,
@@ -41,6 +40,8 @@ import {
   getFolioDocumentOperationIssues,
   getTrackedChangesFromDoc,
   type FolioDocumentOperationStatus,
+  type FolioDocumentOperationUndoHandle,
+  type FolioDocumentOperationUndoResult,
 } from "@stll/folio-core/ai-edits";
 import type { FolioEditor } from "@stll/folio-core/controller/folioEditor";
 import type { Layout } from "@stll/folio-core/layout-engine";
@@ -66,6 +67,7 @@ import {
 } from "@stll/folio-core/prosemirror/commands/contentControls";
 import { setContentControlContentBlocksTr } from "@stll/folio-core/prosemirror/commands/contentControlsBlockFill";
 import type { Document } from "@stll/folio-core/types/document";
+import type { Comment } from "@stll/folio-core/types/content";
 import type { DocxInput } from "@stll/folio-core/utils/docxInput";
 
 import type { DocxEditorRef } from "../components/DocxEditor/types";
@@ -73,8 +75,18 @@ import type { PagedEditorRef } from "../components/DocxEditor/pagedEditorRef";
 import {
   clampRangeToDocSize,
   resolveFolioAIBlockRange,
+  resolveFolioAITextRange,
 } from "@stll/folio-core/ai-edits/blockRange";
 import { getPageTextFromLayout } from "@stll/folio-core/paged-layout/pageText";
+
+type LiveDocumentOperationUndoEntry = {
+  undoHandle: FolioDocumentOperationUndoHandle;
+  afterState: EditorView["state"];
+  commentsBefore: Comment[];
+  commentsAfter: Comment[];
+};
+
+let documentOperationUndoHandleCursor = Date.now();
 
 export type UseDocxEditorRefApiOptions = {
   /** Headless controller handle (imperative API + events; Seam 6). */
@@ -120,9 +132,13 @@ export type UseDocxEditorRefApiOptions = {
    * closure over the comment manager). Wired from useCommentManagement.
    */
   createAIEditComment: (text: string) => number;
+  /** Read and replace the current comment array for transactional undo. */
+  getComments: () => Comment[];
+  setComments: (comments: Comment[]) => void;
   // Action handles from useDocxEditor.
   focus: () => void;
   getDocument: () => Document | null;
+  getHeaderFooterView: (rId: string) => EditorView | null;
   setZoom: (zoom: number) => void;
   /** useDocxEditor.save returns a Blob; the ref surface exposes an ArrayBuffer. */
   save: (options?: { selective?: boolean }) => Promise<Blob | null>;
@@ -137,6 +153,7 @@ export type UseDocxEditorRefApiOptions = {
 export function useDocxEditorRefApi(opts: UseDocxEditorRefApiOptions): {
   exposed: DocxEditorRef;
 } {
+  const documentOperationUndoEntries: LiveDocumentOperationUndoEntry[] = [];
   function print(): void {
     opts.onPrint?.();
     window.print();
@@ -193,12 +210,7 @@ export function useDocxEditorRefApi(opts: UseDocxEditorRefApiOptions): {
       getDocument: () => opts.editor.getDocument(),
       getState: () => opts.editor.getState(),
       getView: () => opts.editor.getView(),
-      // PORT-BLOCKED: no persistent hidden header/footer EditorView to look up
-      // by rId yet. useDocxEditor's layout pipeline always calls
-      // runLayoutPipelineCompute with `hfPMs: null` (see HfPmsHandle there),
-      // so header/footer content is rendered straight from the document model
-      // rather than a live PM view. Returns null until that lands.
-      getHfView: () => null,
+      getHfView: (rId) => opts.getHeaderFooterView(rId),
       // The fork's controller ensureView() takes no focus argument yet; the
       // { focus } option is accepted for React parity but ignored, matching
       // ensureEditorView above (PORT-BLOCKED).
@@ -321,15 +333,73 @@ export function useDocxEditorRefApi(opts: UseDocxEditorRefApiOptions): {
           skipped,
           issues: getFolioDocumentOperationIssues(batch.operations, skipped),
           receipts: [],
+          undoHandle: null,
         };
       }
-      return applyFolioDocumentOperations({
-        view,
+      const existingUndoEntry = documentOperationUndoEntries.at(-1);
+      if (
+        existingUndoEntry &&
+        (!view.state.doc.eq(existingUndoEntry.afterState.doc) ||
+          opts.getComments() !== existingUndoEntry.commentsAfter)
+      ) {
+        documentOperationUndoEntries.length = 0;
+      }
+      const commentsBefore = opts.getComments();
+      const operationView = {
+        state: view.state,
+        dispatch: (transaction: Parameters<EditorView["dispatch"]>[0]) => {
+          view.dispatch(closeHistory(transaction));
+          operationView.state = view.state;
+        },
+      };
+      const result = applyFolioDocumentOperations({
+        view: operationView,
         snapshot,
         batch,
         author: operationAuthor,
         createCommentId: opts.createAIEditComment,
+        createUndoHandle: () => ({
+          type: "documentOperationUndo",
+          id: `vue-${String(documentOperationUndoHandleCursor++)}`,
+        }),
       });
+      if (result.undoHandle !== null) {
+        documentOperationUndoEntries.push({
+          undoHandle: result.undoHandle,
+          afterState: view.state,
+          commentsBefore,
+          commentsAfter: opts.getComments(),
+        });
+      }
+      return result;
+    },
+    undoDocumentOperations: (undoHandle): FolioDocumentOperationUndoResult => {
+      const entryIndex = documentOperationUndoEntries.findIndex(
+        (entry) =>
+          entry.undoHandle.type === undoHandle.type && entry.undoHandle.id === undoHandle.id,
+      );
+      if (entryIndex === -1) {
+        return { status: "rejected", undoHandle, reason: "unknownHandle" };
+      }
+      if (entryIndex !== documentOperationUndoEntries.length - 1) {
+        return { status: "rejected", undoHandle, reason: "notLatest" };
+      }
+
+      const entry = documentOperationUndoEntries.at(-1);
+      const view = opts.editorView.value;
+      if (!entry || !view) {
+        return { status: "rejected", undoHandle, reason: "unknownHandle" };
+      }
+      if (!view.state.doc.eq(entry.afterState.doc) || opts.getComments() !== entry.commentsAfter) {
+        return { status: "rejected", undoHandle, reason: "documentChanged" };
+      }
+      if (!opts.editor.undo()) {
+        return { status: "rejected", undoHandle, reason: "documentChanged" };
+      }
+
+      opts.setComments(entry.commentsBefore);
+      documentOperationUndoEntries.pop();
+      return { status: "undone", undoHandle };
     },
     applyAIEditOperations: ({
       snapshot,
@@ -413,6 +483,29 @@ export function useDocxEditorRefApi(opts: UseDocxEditorRefApiOptions): {
       requestAnimationFrame(() => opts.scrollVisiblePositionIntoView(from));
       return true;
     },
+    showInDocument: (target, snapshot) => {
+      const view = opts.editorView.value;
+      if (!view) {
+        return false;
+      }
+      const range =
+        target.type === "textRange"
+          ? resolveFolioAITextRange({ range: target, doc: view.state.doc, snapshot })
+          : resolveFolioAIBlockRange({
+              blockId: target.blockId,
+              doc: view.state.doc,
+              snapshot,
+            });
+      if (range === null) {
+        return false;
+      }
+      const { from, to } = range;
+      const $from = view.state.doc.resolve(from);
+      const $to = view.state.doc.resolve(to);
+      view.dispatch(view.state.tr.setSelection(TextSelection.between($from, $to)));
+      requestAnimationFrame(() => opts.scrollVisiblePositionIntoView(from));
+      return true;
+    },
     getTrackedChanges: () => {
       const view = opts.editorView.value;
       return view ? getTrackedChangesFromDoc(view.state.doc) : [];
@@ -431,6 +524,26 @@ export function useDocxEditorRefApi(opts: UseDocxEditorRefApiOptions): {
         return null;
       }
       return getPageTextFromLayout(opts.layout.value, view.state.doc, page);
+    },
+    getTargetPage: (target, snapshot) => {
+      const view = opts.editorView.value;
+      const currentLayout = opts.layout.value;
+      if (!view || !currentLayout) {
+        return null;
+      }
+      const range =
+        target.type === "textRange"
+          ? resolveFolioAITextRange({ range: target, doc: view.state.doc, snapshot })
+          : resolveFolioAIBlockRange({
+              blockId: target.blockId,
+              doc: view.state.doc,
+              snapshot,
+            });
+      if (range === null) {
+        return null;
+      }
+      const pageIndex = findPageIndexContainingPmPos(currentLayout, range.from);
+      return pageIndex == null ? null : pageIndex + 1;
     },
     getContentControls: (filter = {}) => {
       const view = opts.editorView.value;

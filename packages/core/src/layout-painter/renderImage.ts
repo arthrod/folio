@@ -25,7 +25,7 @@ export const IMAGE_CLASS_NAMES = {
 // (opacity render pipeline).
 
 /**
- * Structural shape required to apply Word's per-image visual attributes:
+ * Structural shape required to apply OOXML per-image visual attributes:
  * `wp:srcRect` crop fractions and `a:alphaModFix` opacity. `ImageRun` and
  * `ImageBlock` both satisfy this, so callers don't need an adapter.
  */
@@ -51,13 +51,17 @@ export function hasImageVisualAttrs(v: ImageVisualAttrs): boolean {
   if (v.opacity != null && v.opacity < 1) {
     return true;
   }
+  return hasImageCrop(v);
+}
+
+export function hasImageCrop(v: ImageVisualAttrs): boolean {
   return Boolean(v.cropTop || v.cropRight || v.cropBottom || v.cropLeft);
 }
 
 /**
- * Apply Word's `<a:srcRect>` crop to an `<img>` whose parent already has
+ * Apply an OOXML `<a:srcRect>` crop to an `<img>` whose parent already has
  * `overflow: hidden` and is sized to the *visible* (cropped) dimensions
- * (this matches `wp:extent` semantics: in Word the extent is the cropped
+ * (this matches `wp:extent` semantics: the extent is the cropped
  * frame, with `<a:stretch><a:fillRect/>` stretching the cropped source to
  * fill it).
  *
@@ -96,10 +100,33 @@ export function applyImageVisualAttrs(img: HTMLImageElement, v: ImageVisualAttrs
   const fh = 1 / remainingH;
   img.style.width = `${fw * 100}%`;
   img.style.height = `${fh * 100}%`;
+  // Cropping deliberately enlarges the bitmap beyond its visible frame.
+  // Opt out of host image resets that cap replaced elements to their parent.
+  img.style.maxWidth = "none";
+  img.style.maxHeight = "none";
   img.style.marginLeft = `${-left * fw * 100}%`;
-  img.style.marginTop = `${-top * fh * 100}%`;
+  const existingTransform = img.style.transform;
+  if (existingTransform) {
+    // The enlarged bitmap's center differs from the visible crop frame's
+    // center when opposite crop amounts are asymmetric. Rotate or flip around
+    // the visible center so the cropped region stays aligned with its frame.
+    const visibleCenterX = (left + 1 - right) * 50;
+    const visibleCenterY = (top + 1 - bottom) * 50;
+    img.style.transformOrigin = `${visibleCenterX}% ${visibleCenterY}%`;
+  }
+  if (top !== 0) {
+    // Vertical percentage margins resolve against the containing block's
+    // width, so they over-shift wide, shallow images. A percentage translate
+    // resolves against the enlarged bitmap itself: `top * fullHeight` is the
+    // exact source offset that must move above the clipped frame. Append the
+    // translation so source cropping occurs before any image flip or rotation.
+    const cropTransform = `translateY(${-top * 100}%)`;
+    img.style.transform = existingTransform
+      ? `${existingTransform} ${cropTransform}`
+      : cropTransform;
+  }
   // Object-fit on the upscaled `<img>` would re-letterbox inside the
-  // enlarged box; force fill so the bitmap stretches to fw×fh as Word does.
+  // enlarged box; force fill so the bitmap stretches to fw×fh.
   img.style.objectFit = "fill";
 }
 

@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
 
 import { layoutDocument } from "./index";
-import type { FlowBlock, ParagraphBlock, ParagraphMeasure, SectionBreakBlock } from "./types";
+import type {
+  ColumnBreakBlock,
+  FlowBlock,
+  Measure,
+  ParagraphBlock,
+  ParagraphMeasure,
+  SectionBreakBlock,
+} from "./types";
 
 function paragraph(
   id: string,
@@ -36,6 +43,207 @@ function paragraph(
 }
 
 describe("continuous section break geometry", () => {
+  test("balances a short paragraph-only multi-column section", () => {
+    const intro = paragraph("intro", 100);
+    const firstBreak: SectionBreakBlock = {
+      kind: "sectionBreak",
+      id: "first-break",
+      type: "continuous",
+      pageSize: { w: 800, h: 1000 },
+      margins: { top: 50, right: 50, bottom: 50, left: 50 },
+    };
+    const first = paragraph("first", 100);
+    const second = paragraph("second", 100);
+    const third = paragraph("third", 100);
+    const fourth = paragraph("fourth", 100);
+    const secondBreak: SectionBreakBlock = {
+      kind: "sectionBreak",
+      id: "second-break",
+      type: "continuous",
+      pageSize: { w: 800, h: 1000 },
+      margins: { top: 50, right: 50, bottom: 50, left: 50 },
+      columns: { count: 2, gap: 20 },
+    };
+    const outro = paragraph("outro", 100);
+    const blocks: FlowBlock[] = [
+      intro.block,
+      firstBreak,
+      first.block,
+      second.block,
+      third.block,
+      fourth.block,
+      secondBreak,
+      outro.block,
+    ];
+    const measures = [
+      intro.measure,
+      { kind: "sectionBreak" },
+      first.measure,
+      second.measure,
+      third.measure,
+      fourth.measure,
+      { kind: "sectionBreak" },
+      outro.measure,
+    ] as never;
+
+    const result = layoutDocument(blocks, measures, {
+      pageSize: { w: 800, h: 1000 },
+      margins: { top: 50, right: 50, bottom: 50, left: 50 },
+      finalPageSize: { w: 800, h: 1000 },
+      finalMargins: { top: 50, right: 50, bottom: 50, left: 50 },
+    });
+
+    expect(result.pages).toHaveLength(1);
+    const page = result.pages[0];
+    const firstColumn = page?.fragments.filter(
+      (fragment) => fragment.kind === "paragraph" && ["first", "second"].includes(fragment.blockId),
+    );
+    const secondColumn = page?.fragments.filter(
+      (fragment) => fragment.kind === "paragraph" && ["third", "fourth"].includes(fragment.blockId),
+    );
+    expect(firstColumn?.map(({ x }) => x)).toEqual([50, 50]);
+    expect(secondColumn?.map(({ x }) => x)).toEqual([410, 410]);
+    expect(secondColumn?.map(({ y }) => y)).toEqual([150, 250]);
+  });
+
+  test("a final multi-column section keeps a forced column break on the current page", () => {
+    const first = paragraph("a", 100);
+    const sectionBreak: SectionBreakBlock = {
+      kind: "sectionBreak",
+      id: "sb",
+      type: "continuous",
+    };
+    const firstColumn = paragraph("b", 100);
+    const columnBreak: ColumnBreakBlock = { kind: "columnBreak", id: "cb" };
+    const secondColumn = paragraph("c", 100);
+    const blocks: FlowBlock[] = [
+      first.block,
+      sectionBreak,
+      firstColumn.block,
+      columnBreak,
+      secondColumn.block,
+    ];
+    const measures = [
+      first.measure,
+      { kind: "sectionBreak" },
+      firstColumn.measure,
+      { kind: "columnBreak" },
+      secondColumn.measure,
+    ] as never;
+
+    const result = layoutDocument(blocks, measures, {
+      pageSize: { w: 800, h: 1000 },
+      margins: { top: 50, right: 50, bottom: 50, left: 50 },
+      finalColumns: { count: 2, gap: 20, widths: [200, 300], gaps: [100] },
+      bodyBreakType: "continuous",
+    });
+
+    expect(result.pages).toHaveLength(1);
+    const secondColumnFragment = result.pages[0]?.fragments.find(
+      (fragment) => fragment.kind === "paragraph" && fragment.blockId === "c",
+    );
+    expect(secondColumnFragment?.x).toBe(350);
+    expect(secondColumnFragment?.width).toBe(300);
+  });
+
+  test("an omitted next section type defaults to a new page", () => {
+    const first = paragraph("first", 100);
+    const firstBreak: SectionBreakBlock = {
+      kind: "sectionBreak",
+      id: "first-break",
+      type: "continuous",
+    };
+    const second = paragraph("second", 100);
+    const omittedTypeBreak: SectionBreakBlock = {
+      kind: "sectionBreak",
+      id: "omitted-type-break",
+    };
+    const third = paragraph("third", 100);
+    const blocks: FlowBlock[] = [
+      first.block,
+      firstBreak,
+      second.block,
+      omittedTypeBreak,
+      third.block,
+    ];
+    const measures = [
+      first.measure,
+      { kind: "sectionBreak" },
+      second.measure,
+      { kind: "sectionBreak" },
+      third.measure,
+    ] satisfies Measure[];
+
+    const result = layoutDocument(blocks, measures, {
+      pageSize: { w: 800, h: 1000 },
+      margins: { top: 50, right: 50, bottom: 50, left: 50 },
+      bodyBreakType: "continuous",
+    });
+
+    expect(result.pages).toHaveLength(2);
+    expect(result.pages[0]?.fragments.map((fragment) => fragment.blockId)).toEqual(["first"]);
+    expect(result.pages[1]?.fragments.map((fragment) => fragment.blockId)).toEqual([
+      "second",
+      "third",
+    ]);
+  });
+
+  test("content after a continuous column section resumes below its tallest column", () => {
+    const intro = paragraph("intro", 100);
+    const firstBreak: SectionBreakBlock = {
+      kind: "sectionBreak",
+      id: "first-break",
+      type: "continuous",
+      pageSize: { w: 800, h: 1000 },
+      margins: { top: 50, right: 50, bottom: 50, left: 50 },
+    };
+    const first = paragraph("first", 100);
+    const second = paragraph("second", 100);
+    const columnBreak: ColumnBreakBlock = { kind: "columnBreak", id: "column-break" };
+    const third = paragraph("third", 50);
+    const secondBreak: SectionBreakBlock = {
+      kind: "sectionBreak",
+      id: "second-break",
+      type: "continuous",
+      pageSize: { w: 800, h: 1000 },
+      margins: { top: 50, right: 50, bottom: 50, left: 50 },
+      columns: { count: 2, gap: 20 },
+    };
+    const outro = paragraph("outro", 100);
+    const blocks: FlowBlock[] = [
+      intro.block,
+      firstBreak,
+      first.block,
+      second.block,
+      columnBreak,
+      third.block,
+      secondBreak,
+      outro.block,
+    ];
+    const measures = [
+      intro.measure,
+      { kind: "sectionBreak" },
+      first.measure,
+      second.measure,
+      { kind: "columnBreak" },
+      third.measure,
+      { kind: "sectionBreak" },
+      outro.measure,
+    ] as never;
+
+    const result = layoutDocument(blocks, measures, {
+      pageSize: { w: 800, h: 1000 },
+      margins: { top: 50, right: 50, bottom: 50, left: 50 },
+      finalPageSize: { w: 800, h: 1000 },
+      finalMargins: { top: 50, right: 50, bottom: 50, left: 50 },
+    });
+
+    const outroFragment = result.pages[0]?.fragments.find(
+      (fragment) => fragment.kind === "paragraph" && fragment.blockId === "outro",
+    );
+    expect(outroFragment?.y).toBe(350);
+  });
+
   test("current page keeps old geometry and overflow page picks up new geometry", () => {
     const first = paragraph("a", 200);
     const sectionBreak: SectionBreakBlock = {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Clean-room validation that the *published* shape of a folio package works.
 //
-// Usage: `bun scripts/validate-dist.ts <core|react|agents|vue>`
+// Usage: `bun scripts/validate-dist.ts <docx-core|core|react|agents|vue>`
 //
 // For the named package it builds, transforms its package.json to the dist
 // shape exactly like the publish workflow (`prepare-publish.ts`), packs a
@@ -17,6 +17,8 @@
 // rejects (a pre-existing vue build gap). nuxt is a Nuxt module (a different
 // dist shape: `module.mjs` + `types.d.mts`) and is validated by its own
 // `nuxt-module-build` step, not here.
+//
+//   docx-core — runtime, types, externals, packaged assets, and attribution.
 //
 //   core  — 4 checks:
 //     1. Runtime  — ESM `import` of `.`, `/markdown`, `/server`, and a `./*`
@@ -34,8 +36,10 @@
 //     2. Types    — node16 + bundler.
 //     3. CSS      — `dist/editor.css` exists, parses, carries the bundled rules,
 //                   and preserves `@fontsource` `@import`s (not inlined).
-//     4. External — React / react-dom / ProseMirror AND `@stll/folio-core` are
-//                   imported as externals, never bundled into the JS.
+//     4. External — React / react-dom / React Compiler runtime / ProseMirror
+//                   AND `@stll/folio-core` are imported as externals, never
+//                   bundled into the JS. Requiring the compiler runtime import
+//                   also proves the published JS passed through the compiler.
 //     5. Messages — the published `messages.d.ts` exports `FolioMessages` /
 //                   `getFolioMessages` and never imports a `./messages/*.json`
 //                   source file (dist inlines the JSON, ships no JSON).
@@ -80,8 +84,14 @@ const prepareScript = path.join(repoRoot, "scripts", "prepare-publish.ts");
 const tscBin = path.join(repoRoot, "node_modules", "typescript", "bin", "tsc");
 
 const target = process.argv[2];
-if (target !== "core" && target !== "react" && target !== "agents" && target !== "vue") {
-  panic("usage: bun scripts/validate-dist.ts <core|react|agents|vue>");
+if (
+  target !== "docx-core" &&
+  target !== "core" &&
+  target !== "react" &&
+  target !== "agents" &&
+  target !== "vue"
+) {
+  panic("usage: bun scripts/validate-dist.ts <docx-core|core|react|agents|vue>");
 }
 
 type CheckResult = { name: string; ok: boolean; detail: string };
@@ -101,17 +111,20 @@ const record = (name: string, ok: boolean, detail: string): void => {
 // their `workspace:` deps to concrete versions, so no transform is needed.
 const buildAndPack = async (pkgDir: string, destDir: string, prepare: boolean): Promise<string> => {
   const name = path.basename(pkgDir);
-  console.log(`→ building @stll/folio-${name}`);
+  const packageJson = (await Bun.file(path.join(pkgDir, "package.json")).json()) as {
+    name: string;
+  };
+  console.log(`→ building ${packageJson.name}`);
   await $`bun run build`.cwd(pkgDir).quiet();
 
   const pkgJsonPath = path.join(pkgDir, "package.json");
   const original = await readFile(pkgJsonPath, "utf-8");
   try {
     if (prepare) {
-      console.log(`→ transforming @stll/folio-${name} package.json to dist shape`);
+      console.log(`→ transforming ${packageJson.name} package.json to dist shape`);
       await $`bun ${prepareScript} ${pkgDir}`.quiet();
     }
-    console.log(`→ packing @stll/folio-${name} tarball`);
+    console.log(`→ packing ${packageJson.name} tarball`);
     await $`bun pm pack --destination ${destDir}`.cwd(pkgDir).quiet();
   } finally {
     // Always restore the in-repo source-shape package.json.
@@ -124,14 +137,17 @@ const buildAndPack = async (pkgDir: string, destDir: string, prepare: boolean): 
 };
 
 const dirs: Record<string, string> = {
+  "docx-core": path.join(repoRoot, "packages", "docx-core"),
   core: path.join(repoRoot, "packages", "core"),
   react: path.join(repoRoot, "packages", "react"),
   agents: path.join(repoRoot, "packages", "agents"),
   vue: path.join(repoRoot, "packages", "vue"),
 };
+const docxCoreDir = dirs["docx-core"];
 const coreDir = dirs.core;
 
 const packDir = await mkdtemp(path.join(tmpdir(), "folio-pack-"));
+const docxCorePackDir = await mkdtemp(path.join(tmpdir(), "folio-docx-core-pack-"));
 const corePackDir = await mkdtemp(path.join(tmpdir(), "folio-core-pack-"));
 const consumerDir = await mkdtemp(path.join(tmpdir(), "folio-consumer-"));
 
@@ -139,13 +155,19 @@ const consumerDir = await mkdtemp(path.join(tmpdir(), "folio-consumer-"));
 // rewrites; vue already ships dist-shaped exports (skip the transform).
 const needsPrepare = target !== "vue";
 const pkgDir = dirs[target];
-const pkgName = `@stll/folio-${target}`;
+const pkgName = target === "docx-core" ? "@stll/docx-core" : `@stll/folio-${target}`;
 const tarball = await buildAndPack(pkgDir, packDir, needsPrepare);
 
-// react, agents, and vue all depend on @stll/folio-core; pack it too so the
-// clean room resolves it npm-style (no workspace leak). An `overrides` entry
-// pins the transitive dependency to this exact tarball, since the package is
-// not yet on a registry.
+// Every package above docx-core depends on its sibling build. Pack it too so
+// the clean room resolves coordinated workspace changes npm-style (no
+// workspace leak). `overrides` pins transitive dependencies to these exact
+// tarballs, since their next versions are not yet on a registry.
+let docxCoreTarball: string | null = null;
+if (target !== "docx-core") {
+  docxCoreTarball = await buildAndPack(docxCoreDir, docxCorePackDir, true);
+}
+
+// react, agents, and vue all depend on @stll/folio-core.
 let coreTarball: string | null = null;
 if (target === "react" || target === "agents" || target === "vue") {
   coreTarball = await buildAndPack(coreDir, corePackDir, true);
@@ -158,8 +180,15 @@ const consumerPkg: Record<string, unknown> = {
   private: true,
   type: "module",
 };
+const overrides: Record<string, string> = {};
+if (docxCoreTarball) {
+  overrides["@stll/docx-core"] = docxCoreTarball;
+}
 if (coreTarball) {
-  consumerPkg.overrides = { "@stll/folio-core": coreTarball };
+  overrides["@stll/folio-core"] = coreTarball;
+}
+if (Object.keys(overrides).length > 0) {
+  consumerPkg.overrides = overrides;
 }
 await writeFile(
   path.join(consumerDir, "package.json"),
@@ -167,6 +196,9 @@ await writeFile(
 );
 
 const installArgs: string[] = [tarball];
+if (docxCoreTarball) {
+  installArgs.push(docxCoreTarball);
+}
 if (target === "react") {
   if (!coreTarball) panic("validate-dist: react needs a @stll/folio-core tarball");
   installArgs.push(coreTarball, ...reactPeerInstallArgs("19"), "use-intl@^4");
@@ -189,11 +221,18 @@ if (target === "vue") {
 }
 await $`bun add ${installArgs}`.cwd(consumerDir).quiet();
 
-const installedDir = path.join(consumerDir, "node_modules", "@stll", `folio-${target}`);
+const installedDir = path.join(consumerDir, "node_modules", ...pkgName.split("/"));
 const installedDist = path.join(installedDir, "dist");
 
 // --- runtime expectations ---------------------------------------------------
 const runtimeExpect: Record<string, Record<string, string[]>> = {
+  "docx-core": {
+    "@stll/docx-core": [
+      "compileLegalSourceToDocx",
+      "serializeDocumentToDocx",
+      "validateDocxPackage",
+    ],
+  },
   core: {
     "@stll/folio-core": ["createEmptyDocument", "createDocx", "deriveBlockId"],
     "@stll/folio-core/markdown": ["toMarkdown", "fromMarkdown", "toMarkdownResult"],
@@ -291,6 +330,18 @@ record(
 
 // --- Check 2: types resolve under node16 AND bundler ------------------------
 const consumerTsByTarget: Record<string, string> = {
+  "docx-core": `
+import {
+  compileLegalSourceToDocx,
+  serializeDocumentToDocx,
+  validateDocxPackage,
+  type Document,
+} from "@stll/docx-core";
+import type { Paragraph, Run } from "@stll/docx-core/model";
+
+export const used = [compileLegalSourceToDocx, serializeDocumentToDocx, validateDocxPackage];
+export type Surface = [Document, Paragraph, Run];
+`,
   core: `
 import { createEmptyDocument, createDocx, type Document } from "@stll/folio-core";
 import { fromMarkdown, toMarkdown, type MarkdownOptions } from "@stll/folio-core/markdown";
@@ -567,10 +618,13 @@ const reactSentinels = [
   "__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED",
 ];
 const leaked = reactSentinels.filter((s) => allJs.includes(s));
-// Each external must appear only as an import specifier, never bundled.
+// Runtime externals used by each built package must appear as import
+// specifiers, never bundled. Type-only dependencies do not survive in JS and
+// therefore cannot be asserted here.
 const externalsByTarget: Record<string, string[]> = {
+  "docx-core": ["better-result", "jszip"],
   core: ["prosemirror-state", "prosemirror-model", "jszip"],
-  react: ["react", "react-dom", "react/jsx-runtime", "@stll/folio-core", "prosemirror-view"],
+  react: ["react", "react-dom", "react/jsx-runtime", "react-compiler-runtime", "@stll/folio-core"],
   agents: ["@stll/folio-core"],
   vue: ["vue", "@stll/folio-core", "prosemirror-history", "prosemirror-state"],
 };
@@ -581,8 +635,9 @@ const notExternalized = expectedExternals.filter(
 const dataFontInlined = /["']data:font|["']data:application\/font/u.test(allJs);
 const externalOk = leaked.length === 0 && notExternalized.length === 0 && !dataFontInlined;
 const externalLabels: Record<string, string> = {
+  "docx-core": "external: better-result and JSZip stay external",
   core: "external: React never bundled; deps stay external",
-  react: "external: React / ProseMirror / @stll/folio-core not bundled into JS",
+  react: "external: React / compiler runtime / ProseMirror / @stll/folio-core not bundled",
   agents: "external: @stll/folio-core not bundled into JS",
   vue: "external: Vue / ProseMirror / @stll/folio-core not bundled into JS",
 };
@@ -645,6 +700,19 @@ record(
     : `missing target(s): ${urlTargets.dangling.join("; ")}`,
 );
 
+if (target === "docx-core") {
+  const missingAttribution = ["LICENSE", "NOTICE.md"].filter(
+    (file) => !existsSync(path.join(installedDir, file)),
+  );
+  record(
+    "attribution: license and notice ship in the tarball",
+    missingAttribution.length === 0,
+    missingAttribution.length === 0
+      ? "LICENSE and NOTICE.md present"
+      : `missing: ${missingAttribution.join(", ")}`,
+  );
+}
+
 // --- Check 5 (react only): messages subpath declaration is self-contained ---
 if (target === "react") {
   const dtsPath = path.join(installedDist, "messages.d.ts");
@@ -682,6 +750,7 @@ if (target === "react") {
 
 // --- Summary ----------------------------------------------------------------
 await rm(packDir, { recursive: true, force: true });
+await rm(docxCorePackDir, { recursive: true, force: true });
 await rm(corePackDir, { recursive: true, force: true });
 await rm(consumerDir, { recursive: true, force: true });
 

@@ -16,7 +16,20 @@ import {
 import { measuredLineAdvance } from "./lineFlow";
 import { FOOTNOTE_SEPARATOR_HEIGHT, createPaginator } from "./paginator";
 import { getParagraphFragmentPmRange } from "./paragraphFragmentRange";
-import { buildTableRowBreakInfo, snapRowBreak } from "./tableRowBreak";
+import {
+  collapseParagraphSpacing,
+  getParagraphSpacingAfter,
+  getParagraphSpacingBefore,
+  paragraphsShareStyle,
+  resolveEffectiveParagraphSpacingTree,
+} from "./paragraphSpacing";
+import {
+  INITIAL_RENDERED_BREAK_STATE,
+  reconcileAfterBlock,
+  reconcileBreakBeforeBlock,
+  recordReflowBoundary,
+} from "./renderedBreakReconciliation";
+import { buildTableRowBreakInfo, getRowContinuationSkip, snapRowBreak } from "./tableRowBreak";
 import { bandFragmentX, bandTopContentY, isPageFrameRelativeAnchor } from "./textBoxFlow";
 import { floatingTextBoxReservesBand } from "./types";
 import type {
@@ -24,7 +37,6 @@ import type {
   Measure,
   Layout,
   LayoutOptions,
-  Page,
   PageMargins,
   ColumnLayout,
   ParagraphBlock,
@@ -49,6 +61,7 @@ export type SectionLayoutConfig = {
 };
 
 const DEFAULT_COLUMNS: ColumnLayout = { count: 1, gap: 0 };
+const DEFAULT_SECTION_BREAK_TYPE = "nextPage";
 
 export function collectSectionConfigs(
   blocks: FlowBlock[],
@@ -86,77 +99,112 @@ export function collectSectionConfigs(
 }
 
 /**
- * Whether a paragraph block has no visible content (no runs, or a single
- * empty text run). Word collapses style-inherited spacing on empty
- * paragraphs (only direct `<w:pPr><w:spacing>` formatting survives) — see
- * eigenpal #402.
+ * Estimate the height of a short paragraph-only multi-column section so its
+ * final page can use Word-style balanced columns. Sections containing tables,
+ * floating blocks, or authored breaks keep the normal bottom-up pagination;
+ * those need structure-aware balancing rather than a height estimate.
  */
-function isEmptyParagraph(block: ParagraphBlock): boolean {
-  if (block.runs.length === 0) {
-    return true;
-  }
-  if (block.runs.length !== 1) {
-    return false;
-  }
-  const r = block.runs[0];
-  return r?.kind === "text" && r.text === "";
-}
+type BalancedParagraphSectionHeightOptions = {
+  blocks: FlowBlock[];
+  measures: Measure[];
+  startIndex: number;
+  endIndex: number;
+  incomingSpacing: number;
+  columnCount: number;
+  availableHeight: number;
+};
 
-function isPaginationEmptyParagraph(block: ParagraphBlock): boolean {
-  return block.runs.every((run) => {
-    if (run.kind === "text") {
-      return run.text.trim().length === 0;
+function balancedParagraphSectionHeight({
+  blocks,
+  measures,
+  startIndex,
+  endIndex,
+  incomingSpacing,
+  columnCount,
+  availableHeight,
+}: BalancedParagraphSectionHeightOptions): number | undefined {
+  if (columnCount <= 1 || startIndex >= endIndex || availableHeight <= 0) {
+    return undefined;
+  }
+
+  const lineUnits: number[] = [];
+  let totalHeight = 0;
+  let tallestUnit = 0;
+  let trailingSpacing = incomingSpacing;
+  for (let index = startIndex; index < endIndex; index++) {
+    const block = blocks[index];
+    const measure = measures[index];
+    if (block?.kind !== "paragraph" || measure?.kind !== "paragraph") {
+      return undefined;
     }
-    return run.kind === "tab" || run.kind === "lineBreak";
-  });
-}
-
-function pageHasVisibleBodyContent(
-  page: Page,
-  blocksById: ReadonlyMap<string, FlowBlock>,
-): boolean {
-  for (const fragment of page.fragments) {
-    if (fragment.kind !== "paragraph") {
-      return true;
+    if (
+      block.attrs?.keepNext === true ||
+      block.attrs?.keepLines === true ||
+      block.runs.some((run) => run.kind === "text" && run.footnoteRefId !== undefined)
+    ) {
+      return undefined;
     }
-    const block = blocksById.get(String(fragment.blockId));
-    if (block?.kind !== "paragraph" || !isPaginationEmptyParagraph(block)) {
-      return true;
+
+    const leadingSpacing = collapseParagraphSpacing({
+      before: getParagraphSpacingBefore(block),
+      after: trailingSpacing,
+    });
+    if (measure.lines.length === 0) {
+      if (leadingSpacing > 0) {
+        lineUnits.push(leadingSpacing);
+        totalHeight += leadingSpacing;
+        tallestUnit = Math.max(tallestUnit, leadingSpacing);
+      }
+    }
+    for (let lineIndex = 0; lineIndex < measure.lines.length; lineIndex++) {
+      const line = measure.lines[lineIndex];
+      if (!line) {
+        continue;
+      }
+      const lineHeight = measuredLineAdvance(line);
+      const unitHeight = lineHeight + (lineIndex === 0 ? leadingSpacing : 0);
+      lineUnits.push(unitHeight);
+      totalHeight += unitHeight;
+      tallestUnit = Math.max(tallestUnit, unitHeight);
+    }
+    if (tallestUnit > availableHeight || totalHeight > availableHeight * columnCount) {
+      return undefined;
+    }
+    trailingSpacing = getParagraphSpacingAfter(block);
+  }
+
+  if (totalHeight <= 0) {
+    return undefined;
+  }
+
+  const columnsNeeded = (targetHeight: number): number => {
+    let usedHeight = 0;
+    let usedColumns = 1;
+    for (const unitHeight of lineUnits) {
+      if (usedHeight > 0 && usedHeight + unitHeight > targetHeight) {
+        usedColumns += 1;
+        usedHeight = unitHeight;
+      } else {
+        usedHeight += unitHeight;
+      }
+    }
+    return usedColumns;
+  };
+
+  let lower = Math.max(tallestUnit, totalHeight / columnCount);
+  let upper = Math.min(totalHeight, availableHeight);
+  if (columnsNeeded(upper) > columnCount) {
+    return undefined;
+  }
+  for (let iteration = 0; iteration < 32; iteration++) {
+    const middle = (lower + upper) / 2;
+    if (columnsNeeded(middle) <= columnCount) {
+      upper = middle;
+    } else {
+      lower = middle;
     }
   }
-  return false;
-}
-
-/**
- * Get spacing before a paragraph block. Empty paragraphs whose
- * `before` came only from the implicit default paragraph style collapse to
- * zero. An explicit `w:pStyle` selection is authored paragraph formatting,
- * so Word keeps the selected style's spacing even when the paragraph is empty.
- */
-function getSpacingBefore(block: ParagraphBlock): number {
-  const value = block.attrs?.spacing?.before ?? 0;
-  if (value === 0) {
-    return 0;
-  }
-  if (isEmptyParagraph(block) && !block.attrs?.styleId && !block.attrs?.spacingExplicit?.before) {
-    return 0;
-  }
-  return value;
-}
-
-/**
- * Get spacing after a paragraph block. Same implicit-default-style collapse
- * rule as `getSpacingBefore`.
- */
-function getSpacingAfter(block: ParagraphBlock): number {
-  const value = block.attrs?.spacing?.after ?? 0;
-  if (value === 0) {
-    return 0;
-  }
-  if (isEmptyParagraph(block) && !block.attrs?.styleId && !block.attrs?.spacingExplicit?.after) {
-    return 0;
-  }
-  return value;
+  return Math.ceil(upper * 1000) / 1000;
 }
 
 function hasWidowControl(block: ParagraphBlock): boolean {
@@ -185,7 +233,7 @@ export function applyContextualSpacing(blocks: FlowBlock[]): void {
     const currAttrs = curr.attrs;
     const nextAttrs = next.attrs;
 
-    if (currAttrs?.styleId !== nextAttrs?.styleId) {
+    if (!paragraphsShareStyle(curr, next)) {
       continue;
     }
     if (currAttrs?.contextualSpacing && currAttrs.spacing) {
@@ -274,18 +322,16 @@ export function layoutDocument(
     pageSize: finalPageSize,
     margins: finalMargins,
   };
-  if (options.columns !== undefined) {
-    finalConfig.columns = options.columns;
+  const finalColumns = options.finalColumns ?? options.columns;
+  if (finalColumns !== undefined) {
+    finalConfig.columns = finalColumns;
   }
   const { configs: sectionConfigs, breakIndices } = collectSectionConfigs(
     blocks,
     bodyConfig,
     finalConfig,
   );
-  const sectionBreakTypes = [
-    ...breakIndices.map((index) => (blocks[index] as SectionBreakBlock).type),
-    options.bodyBreakType,
-  ];
+  const sectionBreakTypes = breakIndices.map((index) => (blocks[index] as SectionBreakBlock).type);
   const initialConfig = sectionConfigs.at(0) ?? bodyConfig;
 
   // Create paginator with first section's columns
@@ -296,6 +342,9 @@ export function layoutDocument(
     ...(options.firstPageMargins !== undefined
       ? { firstPageMargins: options.firstPageMargins }
       : {}),
+    ...(options.sectionEvenPageMargins !== undefined
+      ? { sectionEvenPageMargins: options.sectionEvenPageMargins }
+      : {}),
     columns: initialConfig.columns ?? DEFAULT_COLUMNS,
     ...(options.footnoteReservedHeights !== undefined
       ? { footnoteReservedHeights: options.footnoteReservedHeights }
@@ -305,10 +354,9 @@ export function layoutDocument(
       : {}),
   });
 
-  // Apply contextual spacing: suppress spaceBefore/spaceAfter between
-  // consecutive paragraphs that both have contextualSpacing=true and share
-  // the same styleId (OOXML spec 17.3.1.9 / ECMA-376 §17.3.1.9).
-  applyContextualSpacing(blocks);
+  // Resolve contextual and automatic-list spacing without mutating the input
+  // flow tree. Re-resolution is idempotent for pipeline-prepared blocks.
+  blocks = resolveEffectiveParagraphSpacingTree(blocks);
 
   // Pre-compute keepNext chains for pagination decisions
   const keepNextChains = computeKeepNextChains(blocks);
@@ -327,54 +375,52 @@ export function layoutDocument(
   let activeSectionMarginTop = initialConfig.margins.top;
   let activeSectionPageHeight = initialConfig.pageSize.h;
   let activeSectionMarginBottom = initialConfig.margins.bottom;
-  let naturalPageAdvanceSinceRenderedBreak = false;
+  let renderedBreakState = INITIAL_RENDERED_BREAK_STATE;
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i]!; // SAFETY: i < blocks.length
     const measure = measures[i]!; // SAFETY: measures.length === blocks.length (validated above)
 
-    // A cached Word pagination marker records a break at this paragraph, not
-    // an ordinal page target: Word does not emit markers for every physical
-    // page. Honor the break whenever visible content precedes it on Folio's
-    // current page. A structural/natural break that opened an empty page, or a
-    // page containing only overflowed empty paragraphs, already satisfies it.
-    const hasRenderedPageBreak =
-      block.kind === "paragraph" && block.attrs?.renderedPageBreakBefore === true;
-    if (hasPageBreakBefore(block)) {
+    const renderedBreakNeedsSnap =
+      measure.kind === "paragraph" && !paginator.fits(measure.totalHeight);
+    const hasExplicitPageBreak = hasPageBreakBefore(block);
+    const breakDecision = reconcileBreakBeforeBlock({
+      state: renderedBreakState,
+      block,
+      previousBlock: blocks[i - 1],
+      page: paginator.getCurrentState().page,
+      blocksById,
+      hasExplicitPageBreak,
+      renderedBreakNeedsSnap,
+    });
+    if (breakDecision.forcePageBreak) {
       paginator.forcePageBreak();
-    } else if (hasRenderedPageBreak) {
-      const state = paginator.getCurrentState();
-      const naturalOverflowAlreadyCrossedEmptyMarker =
-        block.kind === "paragraph" &&
-        isPaginationEmptyParagraph(block) &&
-        naturalPageAdvanceSinceRenderedBreak;
-      if (
-        !naturalOverflowAlreadyCrossedEmptyMarker &&
-        pageHasVisibleBodyContent(state.page, blocksById)
-      ) {
-        paginator.forcePageBreak();
-      }
     }
-    if (hasRenderedPageBreak || hasPageBreakBefore(block)) {
-      naturalPageAdvanceSinceRenderedBreak = false;
-    }
+    renderedBreakState = breakDecision.state;
 
     // Handle keepNext chains - if this is a chain start, check if chain fits
     const chain = keepNextChains.get(i);
     if (chain && !midChainIndices.has(i)) {
       const chainHeight = calculateChainHeight(chain, blocks, measures);
+      const pageBeforeChainLayout = paginator.getCurrentState().page.number;
       paginator.ensureFits(chainHeight);
+      if (paginator.getCurrentState().page.number > pageBeforeChainLayout) {
+        // The chain moved as one unit across the cached boundary. A rendered
+        // marker immediately after it describes the page Folio just opened.
+        renderedBreakState = recordReflowBoundary(renderedBreakState, true);
+      }
     }
 
     const pageBeforeBlockLayout = paginator.getCurrentState().page.number;
     switch (block.kind) {
       case "paragraph":
-        layoutParagraph(
+        layoutParagraph({
           block,
-          measure as ParagraphMeasure,
+          measure: measure as ParagraphMeasure,
           paginator,
-          paginator.getContentWidth(),
-          options.footnoteHeightById,
-        );
+          contentWidth: paginator.columnWidth,
+          footnoteHeightById: options.footnoteHeightById,
+          suppressSpaceBefore: breakDecision.suppressSpaceBefore,
+        });
         break;
 
       case "table":
@@ -386,7 +432,7 @@ export function layoutDocument(
             paginator.getContentWidth(),
           );
         } else {
-          layoutTable(block, measure as TableMeasure, paginator);
+          layoutTable(block, measure as TableMeasure, paginator, options.footnoteHeightById);
         }
         break;
 
@@ -412,10 +458,15 @@ export function layoutDocument(
         break;
 
       case "sectionBreak": {
-        // Use the NEXT section's columns; for break type, prefer next section's
-        // type but fall back to current break's type (preserves explicit 'continuous')
+        // A concrete following section with no authored type uses the format
+        // default. Only the final body retains the current type as a fallback
+        // when direct engine callers cannot supply its section properties.
         const nextSectionConfig = sectionConfigs[sectionIdx + 1] ?? initialConfig;
-        const nextType = sectionBreakTypes[sectionIdx + 1] ?? sectionBreakTypes[sectionIdx];
+        let nextType =
+          options.bodyBreakType ?? sectionBreakTypes[sectionIdx] ?? DEFAULT_SECTION_BREAK_TYPE;
+        if (sectionIdx + 1 < sectionBreakTypes.length) {
+          nextType = sectionBreakTypes[sectionIdx + 1] ?? DEFAULT_SECTION_BREAK_TYPE;
+        }
         handleSectionBreak(
           block as SectionBreakBlock,
           paginator,
@@ -423,6 +474,27 @@ export function layoutDocument(
           nextType,
           sectionIdx + 1,
         );
+        const nextColumns = nextSectionConfig.columns;
+        const nextBreakIndex = breakIndices[sectionIdx + 1] ?? blocks.length;
+        const nextBreak = blocks[nextBreakIndex];
+        const sectionEndsContinuously =
+          nextBreakIndex === blocks.length ||
+          (nextBreak?.kind === "sectionBreak" && nextBreak.type === "continuous");
+        if (nextColumns && sectionEndsContinuously) {
+          const state = paginator.getCurrentState();
+          const balancedHeight = balancedParagraphSectionHeight({
+            blocks,
+            measures,
+            startIndex: i + 1,
+            endIndex: nextBreakIndex,
+            incomingSpacing: state.trailingSpacing,
+            columnCount: nextColumns.count,
+            availableHeight: paginator.getAvailableHeight(),
+          });
+          if (balancedHeight !== undefined) {
+            state.contentBottom = Math.min(state.contentBottom, state.cursorY + balancedHeight);
+          }
+        }
         activeSectionMarginTop = nextSectionConfig.margins.top;
         activeSectionPageHeight = nextSectionConfig.pageSize.h;
         activeSectionMarginBottom = nextSectionConfig.margins.bottom;
@@ -433,22 +505,13 @@ export function layoutDocument(
         break;
     }
 
-    const isVisibleBodyBlock =
-      block.kind === "paragraph"
-        ? !isEmptyParagraph(block)
-        : block.kind !== "pageBreak" &&
-          block.kind !== "columnBreak" &&
-          block.kind !== "sectionBreak";
-    const isStructuralBreak =
-      block.kind === "pageBreak" || block.kind === "columnBreak" || block.kind === "sectionBreak";
-    if (isStructuralBreak) {
-      naturalPageAdvanceSinceRenderedBreak = false;
-    } else if (
-      isVisibleBodyBlock &&
-      paginator.getCurrentState().page.number > pageBeforeBlockLayout
-    ) {
-      naturalPageAdvanceSinceRenderedBreak = true;
-    }
+    renderedBreakState = reconcileAfterBlock({
+      state: renderedBreakState,
+      block,
+      pageNumberBefore: pageBeforeBlockLayout,
+      pageNumberAfter: paginator.getCurrentState().page.number,
+      previousPage: paginator.pages[pageBeforeBlockLayout - 1],
+    });
   }
 
   // Ensure at least one page exists
@@ -513,18 +576,28 @@ function getLineFootnoteRefs(
  * lacks room for both — preventing footnote overflow without the
  * static-reservation iteration loop.
  */
-function layoutParagraph(
-  block: ParagraphBlock,
-  measure: ParagraphMeasure,
-  paginator: ReturnType<typeof createPaginator>,
-  contentWidth: number,
-  footnoteHeightById?: Map<number, number>,
-): void {
+type LayoutParagraphOptions = {
+  block: ParagraphBlock;
+  measure: ParagraphMeasure;
+  paginator: ReturnType<typeof createPaginator>;
+  contentWidth: number;
+  footnoteHeightById: Map<number, number> | undefined;
+  suppressSpaceBefore: boolean;
+};
+
+function layoutParagraph({
+  block,
+  measure,
+  paginator,
+  contentWidth,
+  footnoteHeightById,
+  suppressSpaceBefore,
+}: LayoutParagraphOptions): void {
   const lines = measure.lines;
   if (lines.length === 0) {
     // Empty paragraph - still takes up space based on spacing
-    const spaceBefore = getSpacingBefore(block);
-    const spaceAfter = getSpacingAfter(block);
+    const spaceBefore = suppressSpaceBefore ? 0 : getParagraphSpacingBefore(block);
+    const spaceAfter = getParagraphSpacingAfter(block);
     const state = paginator.getCurrentState();
 
     // Create minimal fragment
@@ -546,8 +619,8 @@ function layoutParagraph(
     return;
   }
 
-  const spaceBefore = getSpacingBefore(block);
-  const spaceAfter = getSpacingAfter(block);
+  const spaceBefore = suppressSpaceBefore ? 0 : getParagraphSpacingBefore(block);
+  const spaceAfter = getParagraphSpacingAfter(block);
 
   // Try to fit all lines on current page/column
   let currentLineIndex = 0;
@@ -578,7 +651,10 @@ function layoutParagraph(
         footnoteHeightById,
       );
       const firstLineHeight = measuredLineAdvance(firstLine) + firstLineRefs.height;
-      const collapsedLead = Math.max(spaceBefore, state.trailingSpacing);
+      const collapsedLead = collapseParagraphSpacing({
+        before: spaceBefore,
+        after: state.trailingSpacing,
+      });
       const columnCapacity = state.contentBottom - state.topMargin;
       if (
         collapsedLead + firstLineHeight > availableHeight &&
@@ -610,7 +686,9 @@ function layoutParagraph(
     // spacing, so the fit loop must reserve the same amount; otherwise a large
     // preceding `spaceAfter` repeats the same over-count (eigenpal/docx-editor#782).
     const firstFragmentSpaceBefore =
-      currentLineIndex === 0 ? Math.max(spaceBefore, state.trailingSpacing) : 0;
+      currentLineIndex === 0
+        ? collapseParagraphSpacing({ before: spaceBefore, after: state.trailingSpacing })
+        : 0;
 
     for (let j = currentLineIndex; j < lines.length; j++) {
       const line = lines[j]!; // SAFETY: j < lines.length
@@ -783,11 +861,15 @@ function layoutTable(
   block: TableBlock,
   measure: TableMeasure,
   paginator: ReturnType<typeof createPaginator>,
+  footnoteHeightById?: Map<number, number>,
 ): void {
   const rows = measure.rows;
   if (rows.length === 0) {
     return;
   }
+  const rowFootnoteIds = block.rows.map((row) =>
+    collectTableRowFootnoteIds(row, footnoteHeightById),
+  );
 
   // Detect header rows (consecutive rows at start with isHeader: true)
   const headerRowCount = countHeaderRows(block);
@@ -796,6 +878,9 @@ function layoutTable(
   let currentRowIndex = 0;
 
   const breakInfo = buildTableRowBreakInfo(block, measure);
+  const hasVerticalMerges = block.rows.some((row) =>
+    row.cells.some((cell) => (cell.rowSpan ?? 1) > 1),
+  );
 
   // X position from justification / indent, recomputed per fragment because the
   // active column can change across section breaks.
@@ -805,24 +890,20 @@ function layoutTable(
       x += (paginator.columnWidth - measure.totalWidth) / 2;
     } else if (block.justification === "right") {
       x = x + paginator.columnWidth - measure.totalWidth;
+    } else if (block.indent !== undefined) {
+      // An authored w:tblInd offsets the table border from the content margin.
+      // Keep the absent-value path separate because Word's inherited default
+      // aligns the first-cell text edge instead.
+      x += block.indent;
     } else {
-      // w:tblInd positions the leading edge of the first cell's text, not
-      // the table border. The border therefore extends left by that cell's
-      // leading margin. An absent w:tblInd leaves the table border at the
-      // content edge, so only translate explicitly authored indent values.
-      if (block.indent !== undefined) {
-        const leadingCellMargin = block.rows[0]?.cells[0]?.padding?.left ?? 0;
-        x += block.indent - leadingCellMargin;
-      }
+      const leadingCellMargin = block.rows.at(0)?.cells.at(0)?.padding?.left ?? 0;
+      x -= leadingCellMargin;
     }
     return x;
   };
 
   const getCurrentRowCapacity = (state = paginator.getCurrentState()): number =>
     state.rawContentBottom - state.topMargin;
-
-  const getCurrentAvailableHeight = (state = paginator.getCurrentState()): number =>
-    state.contentBottom - state.cursorY;
 
   const hasAdjacentPriorTableRows = (
     rowIndex: number,
@@ -849,33 +930,34 @@ function layoutTable(
 
   const canSplitRow = (rowIndex: number, state = paginator.getCurrentState()): boolean => {
     const row = rows[rowIndex];
-    if (!row) {
+    const sourceRow = block.rows[rowIndex];
+    if (!row || !sourceRow || sourceRow.cantSplit || sourceRow.isHeader || hasVerticalMerges) {
       return false;
     }
-    const repeatedHeaderOverhead = shouldRepeatHeaderRows(rowIndex, 0, state)
-      ? headerRowsHeight
-      : 0;
     if ((breakInfo.breakOffsets[rowIndex]?.length ?? 0) <= 1) {
       return false;
     }
-    const requiredHeight = row.height + repeatedHeaderOverhead;
-    if (requiredHeight > getCurrentRowCapacity(state)) {
-      return true;
+    const freshHeaderOverhead =
+      headerRowCount > 0 && rowIndex >= headerRowCount ? headerRowsHeight : 0;
+    const requiredHeight = row.height + freshHeaderOverhead;
+    const oversized = requiredHeight > getCurrentRowCapacity(state);
+    if (!oversized && (state.footnoteHeight > 0 || (rowFootnoteIds[rowIndex]?.length ?? 0) > 0)) {
+      return false;
     }
-    return (
-      hasAdjacentPriorTableRows(rowIndex, state) &&
-      requiredHeight > getCurrentAvailableHeight(state) - state.trailingSpacing
-    );
+
+    const currentHeaderOverhead = shouldRepeatHeaderRows(rowIndex, 0, state) ? headerRowsHeight : 0;
+    const currentAvailableHeight =
+      paginator.getAvailableHeight() - currentHeaderOverhead - state.trailingSpacing;
+    return oversized || row.height > currentAvailableHeight;
   };
 
   while (currentRowIndex < rows.length) {
-    // A row taller than a whole page can't fit anywhere; break it between whole
-    // text lines across pages instead of overflowing the page and clipping the
-    // content. eigenpal/docx-editor#698 (fixes their #570).
-    const oversizedRow = rows[currentRowIndex]!; // SAFETY: currentRowIndex < rows.length
+    // Break permitted rows between whole text lines when they exceed the current
+    // flow region; rows taller than a full region use the same path repeatedly.
+    const splittableRow = rows[currentRowIndex]!; // SAFETY: currentRowIndex < rows.length
     if (canSplitRow(currentRowIndex)) {
       let consumed = 0;
-      while (consumed < oversizedRow.height) {
+      while (consumed < splittableRow.height) {
         const sliceState = paginator.getCurrentState();
         const repeatHeaderRows = shouldRepeatHeaderRows(currentRowIndex, consumed, sliceState);
         const headerOverhead = repeatHeaderRows ? headerRowsHeight : 0;
@@ -897,10 +979,15 @@ function layoutTable(
           // the next whole line anyway so the loop always makes progress.
           const from = consumed;
           const next = breakInfo.breakOffsets[currentRowIndex]?.find((o) => o > from);
-          slice = (next ?? oversizedRow.height) - consumed;
+          slice = (next ?? splittableRow.height) - consumed;
         }
         const sliceBottom = consumed + slice;
-        const reachesRowEnd = sliceBottom >= oversizedRow.height;
+        const continuationSkip =
+          sliceBottom < splittableRow.height
+            ? getRowContinuationSkip(breakInfo, currentRowIndex, sliceBottom)
+            : 0;
+        const nextConsumed = Math.min(splittableRow.height, sliceBottom + continuationSkip);
+        const reachesRowEnd = nextConsumed >= splittableRow.height;
         const moreAfter = !reachesRowEnd || currentRowIndex + 1 < rows.length;
         const fragmentHeight = headerOverhead + slice;
         const sliceFragment: TableFragment = {
@@ -918,14 +1005,14 @@ function layoutTable(
           ...(moreAfter ? { continuesOnNext: true } : {}),
           ...(repeatHeaderRows ? { headerRowCount } : {}),
           ...(consumed > 0 ? { topClip: consumed } : {}),
-          ...(reachesRowEnd ? {} : { bottomClip: sliceBottom }),
+          ...(sliceBottom >= splittableRow.height ? {} : { bottomClip: sliceBottom }),
           ...(block.sdtGroups ? { sdtGroups: block.sdtGroups } : {}),
         };
         const sliceResult = paginator.addFragment(sliceFragment, fragmentHeight, 0, 0);
         sliceFragment.y = sliceResult.y;
         sliceFragment.x = computeTableX(sliceResult.state.columnIndex);
-        consumed = sliceBottom;
-        if (consumed < oversizedRow.height) {
+        consumed = nextConsumed;
+        if (consumed < splittableRow.height) {
           paginator.forceColumnBreak();
         }
       }
@@ -955,17 +1042,60 @@ function layoutTable(
     // Calculate how many rows fit (excluding header rows which are prepended separately)
     let rowsHeight = 0;
     let fittingRows = 0;
+    const pageFootnoteIds = new Set(state.page.footnoteIds ?? []);
+    const fragmentFootnoteIds: number[] = [];
+    let fragmentFootnoteHeight = 0;
+    let retryOnNextFlowRegion = false;
 
     for (let j = currentRowIndex; j < rows.length; j++) {
       const rowHeight = rows[j]!.height; // SAFETY: j < rows.length
-      const totalWithRow = rowsHeight + rowHeight + normalHeaderOverhead;
+      const currentRowFootnoteIds = rowFootnoteIds[j] ?? [];
+      const fragmentFootnoteCountBeforeRow = fragmentFootnoteIds.length;
+      let rowFootnoteHeight = 0;
+      for (const id of currentRowFootnoteIds) {
+        if (pageFootnoteIds.has(id) || fragmentFootnoteIds.includes(id)) {
+          continue;
+        }
+        fragmentFootnoteIds.push(id);
+        rowFootnoteHeight += footnoteHeightById?.get(id) ?? 0;
+      }
+      const separatorHeight =
+        pageFootnoteIds.size === 0 && fragmentFootnoteHeight + rowFootnoteHeight > 0
+          ? FOOTNOTE_SEPARATOR_HEIGHT
+          : 0;
+      const totalWithRow =
+        rowsHeight +
+        rowHeight +
+        normalHeaderOverhead +
+        fragmentFootnoteHeight +
+        rowFootnoteHeight +
+        separatorHeight;
 
-      if (totalWithRow <= availableHeight || fittingRows === 0) {
+      if (totalWithRow <= availableHeight) {
         rowsHeight += rowHeight;
+        fragmentFootnoteHeight += rowFootnoteHeight;
         fittingRows++;
+      } else if (fittingRows === 0) {
+        const isFreshFlowRegion =
+          state.cursorY === state.topMargin && state.page.fragments.length === 0;
+        if (isFreshFlowRegion) {
+          rowsHeight += rowHeight;
+          fragmentFootnoteHeight += rowFootnoteHeight;
+          fittingRows++;
+          break;
+        }
+        fragmentFootnoteIds.splice(fragmentFootnoteCountBeforeRow);
+        paginator.forceColumnBreak();
+        retryOnNextFlowRegion = true;
+        break;
       } else {
+        fragmentFootnoteIds.splice(fragmentFootnoteCountBeforeRow);
         break;
       }
+    }
+
+    if (retryOnNextFlowRegion) {
+      continue;
     }
 
     // Total fragment height includes header rows for continuation fragments
@@ -994,6 +1124,9 @@ function layoutTable(
       ...(block.sdtGroups ? { sdtGroups: block.sdtGroups } : {}),
     };
 
+    if (fragmentFootnoteHeight > 0) {
+      paginator.addFootnoteHeight(fragmentFootnoteHeight, fragmentFootnoteIds);
+    }
     const result = paginator.addFragment(fragment, fragmentHeight, bandSkip, 0);
     fragment.y = result.y;
     fragment.x = desiredX;
@@ -1021,6 +1154,50 @@ function layoutTable(
       paginator.ensureFits(nextRowHeight);
     }
   }
+}
+
+function collectTableRowFootnoteIds(
+  row: TableBlock["rows"][number] | undefined,
+  footnoteHeightById: Map<number, number> | undefined,
+): number[] {
+  if (!row || !footnoteHeightById) {
+    return [];
+  }
+
+  const ids: number[] = [];
+  const walk = (blocks: FlowBlock[]): void => {
+    for (const block of blocks) {
+      if (block.kind === "paragraph") {
+        for (const run of block.runs) {
+          if (
+            run.kind === "text" &&
+            run.footnoteRefId !== undefined &&
+            footnoteHeightById.has(run.footnoteRefId) &&
+            !ids.includes(run.footnoteRefId)
+          ) {
+            ids.push(run.footnoteRefId);
+          }
+        }
+        continue;
+      }
+      if (block.kind === "table") {
+        for (const nestedRow of block.rows) {
+          for (const cell of nestedRow.cells) {
+            walk(cell.blocks);
+          }
+        }
+        continue;
+      }
+      if (block.kind === "textBox") {
+        walk(block.content);
+      }
+    }
+  };
+
+  for (const cell of row.cells) {
+    walk(cell.blocks);
+  }
+  return ids;
 }
 
 /**
@@ -1101,9 +1278,14 @@ function layoutFloatingTable(
     y = fitState.cursorY;
   }
 
-  // Clamp within content area to avoid negative positions
-  const minX = margins.left;
-  const maxX = margins.left + contentWidth - tableWidth;
+  // Alignment keywords stay inside their selected anchor frame. A numeric
+  // offset may deliberately move a margin-anchored table into the page margin,
+  // so clamp that resolved position only against the physical page.
+  const usesNumericOffset = floating?.tblpX !== undefined;
+  const pageAnchored = floating?.horzAnchor === "page";
+  const clampToPage = pageAnchored || usesNumericOffset;
+  const minX = clampToPage ? 0 : margins.left;
+  const maxX = clampToPage ? page.size.w - tableWidth : margins.left + contentWidth - tableWidth;
   if (Number.isFinite(maxX)) {
     x = Math.max(minX, Math.min(x, maxX));
   }
@@ -1427,6 +1609,7 @@ export {
   hasPageBreakBefore,
 } from "./keep-together";
 export type { KeepNextChain } from "./keep-together";
+export { resolveSectionHeaderFooterRefs } from "./headerFooterRefs";
 export {
   scheduleSectionBreak,
   applyPendingToActive,

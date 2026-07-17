@@ -6,6 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 
+import type { MediaFile, RelationshipMap } from "../types/document";
 import { parseDocumentBody } from "./documentParser";
 
 const XML_DECLARATION = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
@@ -35,6 +36,91 @@ const textBoxDrawingXml = (text: string) => `
   </w:drawing>`;
 
 describe("parseDocumentBody — AlternateContent text boxes", () => {
+  test("prefers a renderable grouped Choice over a flattened fallback picture", () => {
+    const rels: RelationshipMap = new Map([
+      [
+        "rIdChoice",
+        {
+          id: "rIdChoice",
+          type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+          target: "media/choice.png",
+        },
+      ],
+      [
+        "rIdFallback",
+        {
+          id: "rIdFallback",
+          type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+          target: "media/fallback.png",
+        },
+      ],
+    ]);
+    const media = new Map<string, MediaFile>([
+      [
+        "word/media/choice.png",
+        {
+          path: "word/media/choice.png",
+          mimeType: "image/png",
+          data: new ArrayBuffer(0),
+          dataUrl: "data:image/png;base64,Y2hvaWNl",
+        },
+      ],
+      [
+        "word/media/fallback.png",
+        {
+          path: "word/media/fallback.png",
+          mimeType: "image/png",
+          data: new ArrayBuffer(0),
+          dataUrl: "data:image/png;base64,ZmFsbGJhY2s=",
+        },
+      ],
+    ]);
+    const body = parseDocumentBody(
+      `${XML_DECLARATION}
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+  xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"
+  xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"
+  xmlns:v="urn:schemas-microsoft-com:vml"
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body><w:p><w:r><mc:AlternateContent>
+    <mc:Choice Requires="wpg"><w:drawing><wp:anchor behindDoc="1">
+      <wp:extent cx="2000000" cy="1000000"/><wp:wrapNone/>
+      <a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"><wpg:wgp>
+        <pic:pic><pic:blipFill><a:blip r:embed="rIdChoice"/></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2000000" cy="1000000"/></a:xfrm></pic:spPr></pic:pic>
+      </wpg:wgp></a:graphicData></a:graphic>
+    </wp:anchor></w:drawing></mc:Choice>
+    <mc:Fallback><w:pict><v:shape style="width:9000;height:4000"><v:imagedata r:id="rIdFallback"/></v:shape></w:pict></mc:Fallback>
+  </mc:AlternateContent></w:r></w:p></w:body>
+</w:document>`,
+      null,
+      null,
+      null,
+      rels,
+      media,
+    );
+
+    const paragraph = body.content.at(0);
+    if (paragraph?.type !== "paragraph") {
+      throw new Error("Expected paragraph");
+    }
+    const drawing = paragraph.content
+      .filter((content) => content.type === "run")
+      .flatMap((run) => run.content)
+      .find((content) => content.type === "drawing");
+    expect(drawing?.type).toBe("drawing");
+    if (drawing?.type !== "drawing") {
+      throw new Error("Expected drawing");
+    }
+    expect(drawing.image.mimeType).toBe("image/svg+xml");
+    expect(drawing.image.size).toEqual({ width: 2_000_000, height: 1_000_000 });
+    expect(decodeURIComponent(drawing.image.src ?? "")).toContain("Y2hvaWNl");
+    expect(decodeURIComponent(drawing.image.src ?? "")).not.toContain("ZmFsbGJhY2s=");
+    expect(drawing.rawXml).toContain("<mc:Fallback>");
+  });
+
   test("renders a wpg Choice as SVG while preserving the complete alternate content", () => {
     const body = parseDocumentBody(`${XML_DECLARATION}
 <w:document
@@ -201,5 +287,49 @@ describe("parseDocumentBody — AlternateContent text boxes", () => {
       .flatMap((run) => run.content.filter((content) => content.type === "shape"));
 
     expect(shapes).toHaveLength(2);
+  });
+
+  test("preserves text boxes anchored from a table-cell paragraph", () => {
+    const body = parseDocumentBody(`${XML_DECLARATION}
+<w:document
+  xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+  xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+  xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+  <w:body>
+    <w:tbl><w:tr><w:tc><w:p>
+      <w:r><mc:AlternateContent><mc:Choice Requires="wps">${textBoxDrawingXml("Cell card 1")}</mc:Choice><mc:Fallback><w:pict/></mc:Fallback></mc:AlternateContent></w:r>
+      <w:r><mc:AlternateContent><mc:Choice Requires="wps">${textBoxDrawingXml("Cell card 2")}</mc:Choice><mc:Fallback><w:pict/></mc:Fallback></mc:AlternateContent></w:r>
+    </w:p></w:tc></w:tr></w:tbl>
+  </w:body>
+</w:document>`);
+
+    const table = body.content.at(0);
+    if (table?.type !== "table") {
+      throw new Error("Expected table");
+    }
+    const paragraph = table.rows.at(0)?.cells.at(0)?.content.at(0);
+    if (paragraph?.type !== "paragraph") {
+      throw new Error("Expected table-cell paragraph");
+    }
+
+    const cardTitles = paragraph.content
+      .filter((content) => content.type === "run")
+      .flatMap((run) => run.content.filter((content) => content.type === "shape"))
+      .map((shape) => {
+        const innerParagraph = shape.shape.textBody?.content.at(0);
+        if (innerParagraph?.type !== "paragraph") {
+          return null;
+        }
+        const innerRun = innerParagraph.content.at(0);
+        if (innerRun?.type !== "run") {
+          return null;
+        }
+        const innerText = innerRun.content.at(0);
+        return innerText?.type === "text" ? innerText.text : null;
+      });
+
+    expect(cardTitles).toEqual(["Cell card 1", "Cell card 2"]);
   });
 });

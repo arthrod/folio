@@ -13,7 +13,10 @@ import { buildSeqValues } from "../fields/seqValues";
 import {
   FOOTNOTE_ENTRY_MARGIN_BOTTOM,
   buildFootnoteContentMap,
+  collectEndnoteRefs,
   collectFootnoteRefs,
+  computeNoteDisplayNumbers,
+  remapNoteMarkerText,
 } from "../layout-bridge/convert/footnoteLayout";
 import type { MeasureBlocksFn } from "../layout-bridge/convert/footnoteLayout";
 import type {
@@ -23,6 +26,7 @@ import type {
 import { applyTemplatePreviewToBlocks } from "../layout-bridge/convert/templatePreviewFlow";
 import { toFlowBlocks } from "../layout-bridge/convert/toFlowBlocks";
 import type { ToFlowBlocksOptions } from "../layout-bridge/convert/toFlowBlocks";
+import { getColumns } from "../layout-bridge/sectionColumns";
 import { layoutDocument } from "../layout-engine";
 import type { ColumnLayout, SectionLayoutConfig } from "../layout-engine";
 import {
@@ -37,6 +41,7 @@ import {
   measureSingleBlockWithoutFloatingZones,
 } from "../layout-engine/measure/measureBlocks";
 import { installCanvasMeasureProvider } from "../layout-engine/measure/measureContainer";
+import { resolveEffectiveParagraphSpacingTree } from "../layout-engine/paragraphSpacing";
 import type {
   FlowBlock,
   FootnoteContent,
@@ -146,6 +151,78 @@ export type LayoutPipelineDeps<THfPMs> = {
   emptyTemplatePreviewEntries: readonly TemplatePreviewEntry[];
 };
 
+type BodyMarginClearanceOptions = {
+  authoredMargins: PageMargins;
+  preparedHeader: HeaderFooterContent | undefined;
+  preparedFooter: HeaderFooterContent | undefined;
+};
+
+function bodyMarginsClearHeaderFooter({
+  authoredMargins,
+  preparedHeader,
+  preparedFooter,
+}: BodyMarginClearanceOptions): PageMargins {
+  const headerBottom = preparedHeader
+    ? (authoredMargins.header ?? 0) + (preparedHeader.marginPushBottom ?? preparedHeader.height)
+    : authoredMargins.top;
+  const footerClearance = preparedFooter
+    ? (authoredMargins.footer ?? 0) + (preparedFooter.marginPushBottom ?? preparedFooter.height)
+    : authoredMargins.bottom;
+  const top = Math.max(authoredMargins.top, headerBottom);
+  const bottom = Math.max(authoredMargins.bottom, footerClearance);
+  if (top === authoredMargins.top && bottom === authoredMargins.bottom) {
+    return authoredMargins;
+  }
+  return { ...authoredMargins, top, bottom };
+}
+
+type SectionHeaderFooterClearanceOptions = {
+  authoredMargins: PageMargins;
+  sectionHeaderFooterRefs: PageHeaderFooterRefs[] | undefined;
+  headerContentByRId: Map<string, HeaderFooterContent> | undefined;
+  footerContentByRId: Map<string, HeaderFooterContent> | undefined;
+};
+
+function bodyBlocksClearSectionHeaderFooter(
+  blocks: FlowBlock[],
+  {
+    authoredMargins,
+    sectionHeaderFooterRefs,
+    headerContentByRId,
+    footerContentByRId,
+  }: SectionHeaderFooterClearanceOptions,
+): FlowBlock[] {
+  if (!sectionHeaderFooterRefs || (!headerContentByRId && !footerContentByRId)) {
+    return blocks;
+  }
+
+  let sectionIndex = 0;
+  let currentAuthoredMargins = authoredMargins;
+  let changed = false;
+  const nextBlocks = blocks.map((block) => {
+    if (block.kind !== "sectionBreak") {
+      return block;
+    }
+
+    currentAuthoredMargins = block.margins ?? currentAuthoredMargins;
+    const refs = sectionHeaderFooterRefs[sectionIndex];
+    sectionIndex += 1;
+    const effectiveMargins = bodyMarginsClearHeaderFooter({
+      authoredMargins: currentAuthoredMargins,
+      preparedHeader: refs?.headerDefault ? headerContentByRId?.get(refs.headerDefault) : undefined,
+      preparedFooter: refs?.footerDefault ? footerContentByRId?.get(refs.footerDefault) : undefined,
+    });
+    if (effectiveMargins === currentAuthoredMargins && block.margins === currentAuthoredMargins) {
+      return block;
+    }
+
+    changed = true;
+    return { ...block, margins: effectiveMargins };
+  });
+
+  return changed ? nextBlocks : blocks;
+}
+
 export function runLayoutPipeline<THfPMs>(
   deps: LayoutPipelineDeps<THfPMs>,
   state: EditorState,
@@ -224,6 +301,24 @@ export function runLayoutPipeline<THfPMs>(
     if (defaultTabStop !== undefined) {
       flowOpts.defaultTabStopTwips = defaultTabStop;
     }
+    if (document?.package.settings?.lineBreakRules) {
+      flowOpts.lineBreakRules = document.package.settings.lineBreakRules;
+    }
+    const documentSettings = document?.package.settings;
+    if (documentSettings?.autoHyphenation === true) {
+      flowOpts.automaticHyphenation = {
+        enabled: true,
+        ...(documentSettings.doNotHyphenateCaps !== undefined
+          ? { doNotHyphenateCaps: documentSettings.doNotHyphenateCaps }
+          : {}),
+        ...(documentSettings.consecutiveHyphenLimit !== undefined
+          ? { consecutiveLineLimit: documentSettings.consecutiveHyphenLimit }
+          : {}),
+        ...(documentSettings.hyphenationZoneTwips !== undefined
+          ? { hyphenationZoneTwips: documentSettings.hyphenationZoneTwips }
+          : {}),
+      };
+    }
     let newBlocks = toFlowBlocks(state.doc, flowOpts);
     // Template fill preview: substitute each matched {{marker}} range
     // with its typed value at the flow-block level so the pages lay out
@@ -250,6 +345,30 @@ export function runLayoutPipeline<THfPMs>(
     const footnoteRefs = collectFootnoteRefs(newBlocks);
     const documentFootnotes = document?.package.footnotes;
     const hasFootnotes = footnoteRefs.length > 0 && documentFootnotes !== undefined;
+
+    // Body note markers carry the raw `w:id` as their run text (the PM doc
+    // stores it that way; the save path serializes from the mark attrs).
+    // Remap them to Word's sequential reference-order numbers here, before
+    // measurement, so the measured widths match the painted digits and the
+    // marker agrees with the footnote-area number built from the same map.
+    const footnoteDisplayNumbers = documentFootnotes
+      ? computeNoteDisplayNumbers(
+          documentFootnotes,
+          footnoteRefs.map((ref) => ref.footnoteId),
+        )
+      : undefined;
+    const documentEndnotes = document?.package.endnotes;
+    const endnoteDisplayNumbers = documentEndnotes
+      ? computeNoteDisplayNumbers(
+          documentEndnotes,
+          collectEndnoteRefs(newBlocks).map((ref) => ref.endnoteId),
+        )
+      : undefined;
+    newBlocks = remapNoteMarkerText(newBlocks, {
+      ...(footnoteDisplayNumbers ? { footnoteNumbers: footnoteDisplayNumbers } : {}),
+      ...(endnoteDisplayNumbers ? { endnoteNumbers: endnoteDisplayNumbers } : {}),
+    });
+    outcome.blocks = newBlocks;
 
     // Step 2.75: Prepare header/footer content for rendering. Headers and
     // footers are positioned independently from the authored body margins,
@@ -285,6 +404,10 @@ export function runLayoutPipeline<THfPMs>(
         ...(_theme !== undefined ? { theme: _theme } : {}),
         measureBlocks: hfMeasureBlocks,
         ...(defaultTabStop !== undefined ? { defaultTabStopTwips: defaultTabStop } : {}),
+        ...(flowOpts.lineBreakRules ? { lineBreakRules: flowOpts.lineBreakRules } : {}),
+        ...(flowOpts.automaticHyphenation
+          ? { automaticHyphenation: flowOpts.automaticHyphenation }
+          : {}),
       };
     };
     const hfOptions = buildHfOptions(hfPageCountEstimate);
@@ -339,23 +462,81 @@ export function runLayoutPipeline<THfPMs>(
       hfMetricsFooter,
       hfOptions,
     );
+    const sectionPropertiesForMargins =
+      document?.package.document.sections?.map((section) => section.properties) ??
+      (sectionProperties ? [sectionProperties] : []);
+    const sectionEvenPageMargins = sectionHeaderFooterRefs?.map((refs, index) => {
+      if (refs.evenAndOddHeaders !== true) {
+        return undefined;
+      }
+      const properties = sectionPropertiesForMargins[index];
+      const authoredMargins = properties ? getMargins(properties) : margins;
+      return bodyMarginsClearHeaderFooter({
+        authoredMargins,
+        preparedHeader: refs.headerEven ? headerContentByRId?.get(refs.headerEven) : undefined,
+        preparedFooter: refs.footerEven ? footerContentByRId?.get(refs.footerEven) : undefined,
+      });
+    });
+
+    newBlocks = bodyBlocksClearSectionHeaderFooter(newBlocks, {
+      authoredMargins: margins,
+      sectionHeaderFooterRefs,
+      headerContentByRId,
+      footerContentByRId,
+    });
+    outcome.blocks = newBlocks;
+
+    const initialBodyMargins = bodyMarginsClearHeaderFooter({
+      authoredMargins: margins,
+      preparedHeader: headerContentForRender,
+      preparedFooter: footerContentForRender,
+    });
 
     recordPhaseDuration("header-footer", phaseStartedAt);
 
-    // Compute per-block widths and band geometry from the authored section
-    // margins. Header/footer paint bounds never redefine the body text area.
+    // Compute per-block widths and band geometry from the effective body
+    // margins after normal in-flow header/footer content has been accounted for.
     phaseStartedAt = performance.now();
     const bodyLayoutConfig: SectionLayoutConfig = {
       pageSize,
-      margins,
+      margins: initialBodyMargins,
     };
     if (columns !== undefined) {
       bodyLayoutConfig.columns = columns;
     }
+    const finalSectionProperties = document?.package.document.sections?.at(-1)?.properties;
+    const finalHeaderRId = sectionHeaderFooterRefs?.at(-1)?.headerDefault;
+    let finalHeaderForLayout = headerContentForRender;
+    if (finalHeaderRId) {
+      finalHeaderForLayout = headerContentByRId?.get(finalHeaderRId);
+    } else if (sectionHeaderFooterRefs !== undefined) {
+      finalHeaderForLayout = undefined;
+    }
+    const finalFooterRId = sectionHeaderFooterRefs?.at(-1)?.footerDefault;
+    let finalFooterForLayout = footerContentForRender;
+    if (finalFooterRId) {
+      finalFooterForLayout = footerContentByRId?.get(finalFooterRId);
+    } else if (sectionHeaderFooterRefs !== undefined) {
+      finalFooterForLayout = undefined;
+    }
+    const finalLayoutConfig: SectionLayoutConfig = finalSectionProperties
+      ? {
+          pageSize: getPageSize(finalSectionProperties),
+          margins: bodyMarginsClearHeaderFooter({
+            authoredMargins: getMargins(finalSectionProperties),
+            preparedHeader: finalHeaderForLayout,
+            preparedFooter: finalFooterForLayout,
+          }),
+        }
+      : bodyLayoutConfig;
+    const finalColumns = getColumns(finalSectionProperties);
+    if (finalColumns !== undefined) {
+      finalLayoutConfig.columns = finalColumns;
+    }
     const blockMeasureInputs = computePerBlockMeasureInputs({
       blocks: newBlocks,
       bodyConfig: bodyLayoutConfig,
-      finalConfig: bodyLayoutConfig,
+      finalConfig: finalLayoutConfig,
     });
     const blockWidths = blockMeasureInputs.widths;
     const previousArtifacts = session.artifacts;
@@ -374,9 +555,17 @@ export function runLayoutPipeline<THfPMs>(
     let newMeasures =
       incrementalResult?.measures ??
       measureBlocks(newBlocks, blockWidths, blockMeasureInputs.marginTops, {
+        pageWidth: blockMeasureInputs.pageWidths,
         pageHeight: blockMeasureInputs.pageHeights,
+        marginLeft: blockMeasureInputs.marginLefts,
+        marginRight: blockMeasureInputs.marginRights,
         marginBottom: blockMeasureInputs.marginBottoms,
       });
+    // Match the historical post-measure suppression timing while keeping the
+    // authored flow tree immutable. Layout, painting, and cached artifacts all
+    // consume the same derived block identities from this point forward.
+    newBlocks = resolveEffectiveParagraphSpacingTree(newBlocks);
+    outcome.blocks = newBlocks;
     pendingArtifacts = {
       blocks: newBlocks,
       blockWidths,
@@ -396,7 +585,7 @@ export function runLayoutPipeline<THfPMs>(
     // `bodyBreakType` does not model; the adapter narrows it away and passes the
     // value through unchanged at runtime. Preserved verbatim from the adapter.
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion
-    const bodyBreakType = sectionProperties?.sectionStart as
+    const bodyBreakType = finalSectionProperties?.sectionStart as
       | "continuous"
       | "nextPage"
       | "evenPage"
@@ -405,23 +594,21 @@ export function runLayoutPipeline<THfPMs>(
     const buildLayoutOpts = (): Parameters<typeof layoutDocument>[2] => {
       const nextLayoutOpts: Parameters<typeof layoutDocument>[2] = {
         pageSize,
-        margins,
+        margins: initialBodyMargins,
         pageGap,
         mirrorMargins,
       };
-      if (hasTitlePg && firstPageHeaderForRender) {
-        const headerDistance = margins.header ?? 0;
-        const headerBottom =
-          headerDistance +
-          (firstPageHeaderForRender.marginPushBottom ?? firstPageHeaderForRender.height);
-        if (headerBottom > margins.top) {
-          nextLayoutOpts.firstPageMargins = { ...margins, top: headerBottom };
-        }
+      if (hasTitlePg) {
+        nextLayoutOpts.firstPageMargins = bodyMarginsClearHeaderFooter({
+          authoredMargins: margins,
+          preparedHeader: firstPageHeaderForRender,
+          preparedFooter: firstPageFooterForRender,
+        });
       }
-      const finalSection = document?.package.document.sections?.at(-1);
-      if (finalSection) {
-        nextLayoutOpts.finalPageSize = getPageSize(finalSection.properties);
-        nextLayoutOpts.finalMargins = getMargins(finalSection.properties);
+      if (finalSectionProperties) {
+        nextLayoutOpts.finalPageSize = finalLayoutConfig.pageSize;
+        nextLayoutOpts.finalMargins = finalLayoutConfig.margins;
+        nextLayoutOpts.finalColumns = finalLayoutConfig.columns ?? { count: 1, gap: 0 };
       }
       if (columns !== undefined) {
         nextLayoutOpts.columns = columns;
@@ -431,6 +618,9 @@ export function runLayoutPipeline<THfPMs>(
       }
       if (sectionHeaderFooterRefs !== undefined) {
         nextLayoutOpts.sectionHeaderFooterRefs = sectionHeaderFooterRefs;
+      }
+      if (sectionEvenPageMargins !== undefined) {
+        nextLayoutOpts.sectionEvenPageMargins = sectionEvenPageMargins;
       }
       return nextLayoutOpts;
     };
@@ -458,6 +648,12 @@ export function runLayoutPipeline<THfPMs>(
           }
           if (defaultTabStop !== undefined) {
             footnoteOptions.defaultTabStopTwips = defaultTabStop;
+          }
+          if (flowOpts.lineBreakRules) {
+            footnoteOptions.lineBreakRules = flowOpts.lineBreakRules;
+          }
+          if (flowOpts.automaticHyphenation) {
+            footnoteOptions.automaticHyphenation = flowOpts.automaticHyphenation;
           }
           return footnoteOptions;
         })(),
@@ -562,7 +758,10 @@ export function runLayoutPipeline<THfPMs>(
           blockWidths,
           blockMeasureInputs.marginTops,
           {
+            pageWidth: blockMeasureInputs.pageWidths,
             pageHeight: blockMeasureInputs.pageHeights,
+            marginLeft: blockMeasureInputs.marginLefts,
+            marginRight: blockMeasureInputs.marginRights,
             marginBottom: blockMeasureInputs.marginBottoms,
           },
           values,

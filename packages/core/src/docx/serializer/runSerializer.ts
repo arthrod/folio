@@ -34,12 +34,13 @@ import type {
   ShapeOutline,
   ImagePosition,
   ImageWrap,
-  Paragraph,
+  BlockContent,
   RunPropertyChange,
 } from "../../types/document";
 import { HIGHLIGHT_COLOR_VALUES } from "../../types/documentEnumValues";
 // oxlint-disable-next-line import/no-cycle -- OOXML model is mutually recursive: shape textboxes hold paragraphs, paragraphs hold runs
 import { serializeParagraph } from "./paragraphSerializer";
+import { serializeTable } from "./tableSerializer";
 import { escapeXml, intAttr } from "./xmlUtils";
 
 // ============================================================================
@@ -217,6 +218,22 @@ export function serializeTextFormatting(formatting: TextFormatting | undefined):
     }
     if (fontAttrs.length > 0) {
       parts.push(`<w:rFonts ${fontAttrs.join(" ")}/>`);
+    }
+  }
+
+  if (formatting.language) {
+    const languageAttrs: string[] = [];
+    if (formatting.language.val) {
+      languageAttrs.push(`w:val="${escapeXml(formatting.language.val)}"`);
+    }
+    if (formatting.language.eastAsia) {
+      languageAttrs.push(`w:eastAsia="${escapeXml(formatting.language.eastAsia)}"`);
+    }
+    if (formatting.language.bidi) {
+      languageAttrs.push(`w:bidi="${escapeXml(formatting.language.bidi)}"`);
+    }
+    if (languageAttrs.length > 0) {
+      parts.push(`<w:lang ${languageAttrs.join(" ")}/>`);
     }
   }
 
@@ -876,8 +893,16 @@ function serializeDrawingContent(content: DrawingContent): string {
 }
 
 /** Serialize text body content for shapes/textboxes */
-function serializeShapeTextBody(paragraphs: Paragraph[]): string {
-  return paragraphs.map((p) => serializeParagraph(p)).join("");
+function serializeShapeTextBody(
+  blocks: Extract<BlockContent, { type: "paragraph" | "table" }>[],
+): string {
+  return blocks
+    .map((block) =>
+      block.type === "paragraph"
+        ? serializeParagraph(block)
+        : serializeTable(block, serializeParagraph),
+    )
+    .join("");
 }
 
 /**
@@ -947,15 +972,27 @@ function serializeShapeContent(content: ShapeContent): string {
       }
     }
 
+    let autoFitXml = "";
+    if (tb.autoFit === "shape") {
+      autoFitXml = "<a:spAutoFit/>";
+    } else if (tb.autoFit === "normal") {
+      autoFitXml = "<a:normAutofit/>";
+    } else if (tb.autoFit === "none") {
+      autoFitXml = "<a:noAutofit/>";
+    }
+    const bodyPrXml = autoFitXml
+      ? `<wps:bodyPr ${bpAttrs.join(" ")}>${autoFitXml}</wps:bodyPr>`
+      : `<wps:bodyPr ${bpAttrs.join(" ")}/>`;
+
     if (isTextBox) {
       textBody = [
         "<wps:txbx><w:txbxContent>",
         serializeShapeTextBody(tb.content),
         "</w:txbxContent></wps:txbx>",
-        `<wps:bodyPr ${bpAttrs.join(" ")}/>`,
+        bodyPrXml,
       ].join("");
     } else {
-      textBody = [`<wps:bodyPr ${bpAttrs.join(" ")}/>`].join("");
+      textBody = bodyPrXml;
     }
   }
 

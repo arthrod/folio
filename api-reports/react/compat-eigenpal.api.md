@@ -26,8 +26,11 @@ import { FolioAIEditApplyResult } from '@stll/folio-core/ai-edits';
 import { FolioAIEditOperation } from '@stll/folio-core/ai-edits';
 import { FolioAIEditSnapshot } from '@stll/folio-core/ai-edits';
 import { FolioCommentAnchor } from '@stll/folio-core/ai-edits';
+import { FolioDocumentNavigationTarget } from '@stll/folio-core/ai-edits';
 import { FolioDocumentOperationBatch } from '@stll/folio-core/server';
 import { FolioDocumentOperationResult } from '@stll/folio-core/server';
+import { FolioDocumentOperationUndoHandle } from '@stll/folio-core/server';
+import { FolioDocumentOperationUndoResult } from '@stll/folio-core/server';
 import { FolioEditor } from '@stll/folio-core/controller/folioEditor';
 import { FolioReviewChange } from '@stll/folio-core/ai-edits';
 import { FolioSelectiveSaveFlags } from '@stll/folio-core/docx/selectiveSaveFlags';
@@ -127,7 +130,8 @@ export type DocxEditorRef = {
         focus?: boolean;
     }) => void; /** Create the block snapshot that an external AI editor should reference. */
     createAIEditSnapshot: () => FolioAIEditSnapshot | null; /** Apply a versioned document-operation batch against a previously created block snapshot. */
-    applyDocumentOperations: (options: DocxEditorApplyDocumentOperationsOptions) => FolioDocumentOperationResult; /** Apply AI-authored operations against a previously created block snapshot. */
+    applyDocumentOperations: (options: DocxEditorApplyDocumentOperationsOptions) => FolioDocumentOperationResult; /** Undo the latest unchanged document-operation batch. */
+    undoDocumentOperations: (undoHandle: FolioDocumentOperationUndoHandle) => FolioDocumentOperationUndoResult; /** Apply AI-authored operations against a previously created block snapshot. */
     applyAIEditOperations: (options: {
         snapshot: FolioAIEditSnapshot;
         operations: FolioAIEditOperation[];
@@ -139,11 +143,13 @@ export type DocxEditorRef = {
     undo: () => boolean;
     redo: () => boolean;
     scrollToAIEditOperation: (revisionIds: number | readonly number[]) => boolean;
-    scrollToBlock: (blockId: string, snapshot?: FolioAIEditSnapshot) => boolean;
+    scrollToBlock: (blockId: string, snapshot?: FolioAIEditSnapshot) => boolean; /** Resolve a stable block or text-range target and reveal it in the editor. */
+    showInDocument: (target: FolioDocumentNavigationTarget, snapshot?: FolioAIEditSnapshot) => boolean;
     getTrackedChanges: () => FolioReviewChange[];
     getCommentAnchors: () => FolioCommentAnchor[];
     getSelectionText: () => string;
-    getPageText: (page: number) => string | null;
+    getPageText: (page: number) => string | null; /** Resolve a stable block or text range to its real 1-based rendered page. */
+    getTargetPage: (target: FolioDocumentNavigationTarget, snapshot?: FolioAIEditSnapshot) => number | null;
     getContentControls: (filter?: ContentControlFilter) => {
         properties: SdtProperties; /** Index in the PM document tree, outer→inner. */
         path: number[];

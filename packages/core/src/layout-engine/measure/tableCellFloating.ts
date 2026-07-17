@@ -1,5 +1,6 @@
 import { emuToPixels } from "../../utils/units";
-import type { TableCell, TableCellMeasure } from "../types";
+import { createTableCellFlowState, placeTableCellBlock } from "./tableCellFlow";
+import type { ImageRun, TableCell, TableCellMeasure } from "../types";
 import { isFloatingImageRun } from "../types";
 import { clampFloatingWrapMargins } from "./clampFloatingWrapMargins";
 import type { FloatingImageZone } from "./floatingZones";
@@ -10,6 +11,11 @@ export type TableCellFloatingImage = {
   height: number;
   alt?: string;
   transform?: string;
+  opacity?: number;
+  cropTop?: number;
+  cropRight?: number;
+  cropBottom?: number;
+  cropLeft?: number;
   x: number;
   y: number;
   side: "left" | "right";
@@ -20,6 +26,60 @@ export type TableCellFloatingImage = {
   wrapText?: "bothSides" | "left" | "right" | "largest";
   pmStart?: number;
   pmEnd?: number;
+};
+
+type TableCellFloatingPosition = Pick<TableCellFloatingImage, "x" | "y" | "side">;
+
+export type ResolveTableCellFloatingPosition = (
+  run: ImageRun,
+  paragraphY: number,
+) => TableCellFloatingPosition;
+
+type ResolveCellScopedPositionOptions = {
+  run: ImageRun;
+  paragraphY: number;
+  contentWidth: number;
+};
+
+const resolveCellScopedPosition = ({
+  run,
+  paragraphY,
+  contentWidth,
+}: ResolveCellScopedPositionOptions): TableCellFloatingPosition => {
+  const position = run.position;
+  let side: "left" | "right" = "left";
+  let x = 0;
+  if (position?.horizontal) {
+    const horizontal = position.horizontal;
+    if (horizontal.align === "right") {
+      side = "right";
+      x = contentWidth - run.width;
+    } else if (horizontal.align === "center") {
+      x = (contentWidth - run.width) / 2;
+    } else if (horizontal.posOffset !== undefined) {
+      x = emuToPixels(horizontal.posOffset);
+      side = x > contentWidth / 2 ? "right" : "left";
+    }
+  } else if (run.cssFloat === "right") {
+    side = "right";
+    x = contentWidth - run.width;
+  }
+
+  let y = paragraphY;
+  if (position?.vertical) {
+    const vertical = position.vertical;
+    if (vertical.posOffset !== undefined) {
+      y = paragraphY + emuToPixels(vertical.posOffset);
+    } else if (vertical.align === "top") {
+      y = 0;
+    }
+  }
+
+  return {
+    side,
+    x,
+    y,
+  };
 };
 
 export function getTableCellContentWidth(
@@ -35,17 +95,19 @@ export function getTableCellFloatingImages(
   cell: TableCell,
   cellMeasure: TableCellMeasure,
   contentWidth: number,
+  resolvePosition?: ResolveTableCellFloatingPosition,
 ): TableCellFloatingImage[] {
   const result: TableCellFloatingImage[] = [];
-  let paragraphY = 0;
+  const flowState = createTableCellFlowState();
 
   for (let blockIndex = 0; blockIndex < cell.blocks.length; blockIndex++) {
     const block = cell.blocks[blockIndex];
-    if (block?.kind !== "paragraph") {
-      const blockMeasure = cellMeasure.blocks[blockIndex];
-      if (blockMeasure?.kind === "table") {
-        paragraphY += blockMeasure.totalHeight;
-      }
+    const blockMeasure = cellMeasure.blocks[blockIndex];
+    if (!block || !blockMeasure) {
+      continue;
+    }
+    const placement = placeTableCellBlock(flowState, block, blockMeasure);
+    if (block.kind !== "paragraph") {
       continue;
     }
 
@@ -54,43 +116,21 @@ export function getTableCellFloatingImages(
         continue;
       }
 
-      const position = run.position;
       const distTop = run.distTop ?? 0;
       const distBottom = run.distBottom ?? 0;
       const distLeft = run.distLeft ?? 12;
       const distRight = run.distRight ?? 12;
+      const verticalOriginY =
+        run.position?.vertical?.relativeTo === "paragraph" ? placement.top : placement.contentTop;
 
-      let side: "left" | "right" = "left";
-      let x = 0;
-      if (position?.horizontal) {
-        const horizontal = position.horizontal;
-        if (horizontal.align === "right") {
-          side = "right";
-          x = contentWidth - run.width;
-        } else if (horizontal.align === "left") {
-          x = 0;
-        } else if (horizontal.align === "center") {
-          x = (contentWidth - run.width) / 2;
-        } else if (horizontal.posOffset !== undefined) {
-          x = emuToPixels(horizontal.posOffset);
-          side = x > contentWidth / 2 ? "right" : "left";
-        }
-      } else if (run.cssFloat === "right") {
-        side = "right";
-        x = contentWidth - run.width;
-      }
-
-      let y = paragraphY;
-      if (position?.vertical) {
-        const vertical = position.vertical;
-        if (vertical.posOffset !== undefined) {
-          y = paragraphY + emuToPixels(vertical.posOffset);
-        } else if (vertical.align === "top") {
-          y = 0;
-        }
-      }
-
-      x = Math.max(0, Math.min(x, contentWidth - run.width));
+      const resolved =
+        run.layoutInCell === false && resolvePosition
+          ? resolvePosition(run, verticalOriginY)
+          : resolveCellScopedPosition({
+              run,
+              paragraphY: verticalOriginY,
+              contentWidth,
+            });
 
       let wrapText: "bothSides" | "left" | "right" | "largest" = "bothSides";
       if (run.cssFloat === "left") {
@@ -105,9 +145,14 @@ export function getTableCellFloatingImages(
         height: run.height,
         ...(run.alt !== undefined ? { alt: run.alt } : {}),
         ...(run.transform !== undefined ? { transform: run.transform } : {}),
-        x,
-        y,
-        side,
+        ...(run.opacity != null ? { opacity: run.opacity } : {}),
+        ...(run.cropTop != null ? { cropTop: run.cropTop } : {}),
+        ...(run.cropRight != null ? { cropRight: run.cropRight } : {}),
+        ...(run.cropBottom != null ? { cropBottom: run.cropBottom } : {}),
+        ...(run.cropLeft != null ? { cropLeft: run.cropLeft } : {}),
+        x: resolved.x,
+        y: resolved.y,
+        side: resolved.side,
         distTop,
         distBottom,
         distLeft,
@@ -116,11 +161,6 @@ export function getTableCellFloatingImages(
         ...(run.pmStart !== undefined ? { pmStart: run.pmStart } : {}),
         ...(run.pmEnd !== undefined ? { pmEnd: run.pmEnd } : {}),
       });
-    }
-
-    const blockMeasure = cellMeasure.blocks[blockIndex];
-    if (blockMeasure?.kind === "paragraph") {
-      paragraphY += blockMeasure.totalHeight;
     }
   }
 

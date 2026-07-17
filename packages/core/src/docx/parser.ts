@@ -38,6 +38,8 @@ import { loadFontsWithMapping } from "../utils/fontLoader";
 import { convertTiffToPngDataUrl, isTiffMimeType } from "../utils/tiffConverter";
 import { parseComments } from "./commentParser";
 import { normalizeCommentReferences } from "./commentReferenceNormalization";
+import { detectDocxConformanceClass } from "./conformance";
+import { parseCoreProperties } from "./corePropertiesParser";
 import { parseDocumentBody, extractAllTemplateVariables } from "./documentParser";
 import { parseFootnotes, parseEndnotes } from "./footnoteParser";
 import { parseHeader, parseFooter } from "./headerFooterParser";
@@ -49,6 +51,7 @@ import {
 } from "./modelValidation";
 import { extractMetafileRaster, isMetafileMimeType } from "./metafileRaster";
 import { parseNumbering } from "./numberingParser";
+import { parseFontTable } from "./fontTableParser";
 import type { NumberingMap } from "./numberingParser";
 import { normalizeNumberingReferences } from "./numberingReferenceNormalization";
 import { parseRelationships, RELATIONSHIP_TYPES, resolveRelativePath } from "./relsParser";
@@ -194,6 +197,7 @@ export async function parseDocx(input: DocxInput, options: ParseOptions = {}): P
     // ========================================================================
     onProgress("Parsing numbering...", 30);
     const numbering = timeStage("numbering", () => parseNumbering(raw.numberingXml));
+    const fontTable = timeStage("fontTable", () => parseFontTable(raw.fontTableXml));
     onProgress("Parsed numbering", 35);
 
     // ========================================================================
@@ -371,18 +375,23 @@ export async function parseDocx(input: DocxInput, options: ParseOptions = {}): P
     // ========================================================================
     onProgress("Assembling document...", 95);
 
+    const properties = timeStage("coreProperties", () => parseCoreProperties(raw.corePropsXml));
+
     const pkg: DocxPackage = {
+      conformanceClass: detectDocxConformanceClass(raw.documentXml),
       document: documentBody,
       settings,
       ...(styleDefinitions !== undefined ? { styles: styleDefinitions } : {}),
       theme,
       numbering: numbering.definitions,
+      ...(fontTable ? { fontTable } : {}),
       ...(headers !== undefined ? { headers } : {}),
       ...(footers !== undefined ? { footers } : {}),
       ...(footnotes !== undefined ? { footnotes } : {}),
       ...(endnotes !== undefined ? { endnotes } : {}),
       relationships: rels,
       media,
+      ...(properties !== undefined ? { properties } : {}),
     };
 
     const document: Document = {

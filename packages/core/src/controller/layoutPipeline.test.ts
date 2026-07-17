@@ -19,10 +19,13 @@ import { EditorState } from "prosemirror-state";
 
 import type { LayoutInstrumentation } from "../layout-engine/layoutInstrumentation";
 import { clearAllCaches } from "../layout-engine/measure/cache";
+import type { FootnoteContent, HeaderFooterContent } from "../layout-engine/types";
 import { resetCanvasContext } from "../layout-engine/measure/measureContainer";
 import { LayoutPainter } from "../layout-painter";
 import { LayoutSelectionGate } from "../paged-layout/LayoutSelectionGate";
+import { twipsToPixels } from "../paged-layout/sectionGeometry";
 import { schema } from "../prosemirror/schema";
+import type { Footnote } from "../types/document";
 import { createEmptyDocument } from "../utils/createDocument";
 import { runLayoutPipeline } from "./layoutPipeline";
 import type { LayoutPipelineDeps } from "./layoutPipeline";
@@ -296,6 +299,71 @@ const makeState = (): EditorState =>
     ]),
   });
 
+const makeTwoPageState = (): EditorState =>
+  EditorState.create({
+    doc: schema.node("doc", null, [
+      schema.node("paragraph", null, [schema.text("Odd page")]),
+      schema.node("pageBreak"),
+      schema.node("paragraph", null, [schema.text("Even page")]),
+    ]),
+  });
+
+const makeSectionedState = (): EditorState =>
+  EditorState.create({
+    doc: schema.node("doc", null, [
+      schema.node(
+        "paragraph",
+        {
+          sectionBreakType: "continuous",
+          _sectionProperties: {
+            sectionStart: "continuous",
+            marginTop: 1080,
+            marginRight: 1080,
+            marginBottom: 1080,
+            marginLeft: 1080,
+            headerDistance: 540,
+            footerDistance: 540,
+          },
+        },
+        [schema.text("First section")],
+      ),
+      schema.node("paragraph", null, [schema.text("Second section")]),
+    ]),
+  });
+
+const makeImplicitSectionBoundaryState = (): EditorState =>
+  EditorState.create({
+    doc: schema.node("doc", null, [
+      schema.node(
+        "paragraph",
+        {
+          _sectionProperties: {},
+        },
+        [schema.text("First section")],
+      ),
+      schema.node("paragraph", null, [schema.text("Second section")]),
+    ]),
+  });
+
+const makeSectionBoundaryDocument = (sectionStart: "continuous" | "nextPage") => {
+  const document = createEmptyDocument();
+  document.package.document.sections = [
+    { properties: {}, content: [] },
+    { properties: { sectionStart }, content: [] },
+  ];
+  return document;
+};
+
+const makePreparedHeaderFooter = (height: number): HeaderFooterContent => ({
+  blocks: [],
+  measures: [],
+  height,
+  visualTop: 0,
+  visualBottom: height,
+  marginPushTop: 0,
+  marginPushBottom: height,
+});
+
 type DepsOverrides = Partial<LayoutPipelineDeps<null>>;
 
 const makeDeps = (
@@ -419,13 +487,93 @@ describe("runLayoutPipeline", () => {
     expect(layoutCompletes).toHaveLength(1);
   });
 
-  test("keeps authored body margins when footer content extends beyond them", () => {
+  test("remaps body note markers to sequential reference-order display numbers", () => {
+    // Non-contiguous, out-of-order footnote ids (5, 2, 9 referenced in that
+    // order) must display 1, 2, 3 in both the body marker and the footnote
+    // area; the positive-id continuationNotice must not shift the numbering.
+    const session = createLayoutSession();
+    const footnoteMark = (id: number, noteType: "footnote" | "endnote") =>
+      schema.mark("footnoteRef", { id: String(id), noteType });
+    const state = EditorState.create({
+      doc: schema.node("doc", null, [
+        schema.node("paragraph", null, [
+          schema.text("Alpha"),
+          schema.text("5", [footnoteMark(5, "footnote")]),
+          schema.text(" beta"),
+          schema.text("2", [footnoteMark(2, "footnote")]),
+          schema.text(" gamma"),
+          schema.text("9", [footnoteMark(9, "footnote")]),
+          schema.text(" delta"),
+          schema.text("8", [footnoteMark(8, "endnote")]),
+        ]),
+      ]),
+    });
+
+    const noteParagraph = (text: string): Footnote["content"] => [
+      { type: "paragraph", content: [{ type: "run", content: [{ type: "text", text }] }] },
+    ];
+    const doc = createEmptyDocument();
+    doc.package.footnotes = [
+      { type: "footnote", id: 1, noteType: "continuationNotice", content: noteParagraph("cont") },
+      { type: "footnote", id: 2, noteType: "normal", content: noteParagraph("two") },
+      { type: "footnote", id: 5, noteType: "normal", content: noteParagraph("five") },
+      { type: "footnote", id: 9, noteType: "normal", content: noteParagraph("nine") },
+    ];
+    doc.package.endnotes = [
+      { type: "endnote", id: 8, noteType: "normal", content: noteParagraph("end") },
+    ];
+
+    let capturedContentMap: Map<number, FootnoteContent> | undefined;
+    const container = fakeDocument.createElement("div");
+    const deps = makeDeps(session, {
+      document: doc,
+      painter: new LayoutPainter(),
+      pagesContainer: asContainer(container),
+      buildFootnoteRenderItems: (_pageMap, contentMap) => {
+        capturedContentMap = contentMap;
+        return new Map();
+      },
+    });
+
+    const outcome = runLayoutPipeline(deps, state);
+
+    const bodyMarkers: { noteId: number; text: string }[] = [];
+    for (const block of outcome.blocks ?? []) {
+      if (block.kind !== "paragraph") {
+        continue;
+      }
+      for (const run of block.runs) {
+        if (run.kind !== "text") {
+          continue;
+        }
+        const noteId = run.footnoteRefId ?? run.endnoteRefId;
+        if (noteId !== undefined) {
+          bodyMarkers.push({ noteId, text: run.text });
+        }
+      }
+    }
+    expect(bodyMarkers).toEqual([
+      { noteId: 5, text: "1" },
+      { noteId: 2, text: "2" },
+      { noteId: 9, text: "3" },
+      { noteId: 8, text: "1" },
+    ]);
+
+    // The footnote area numbering comes from the same map as the body markers.
+    expect(capturedContentMap?.get(5)?.displayNumber).toBe(1);
+    expect(capturedContentMap?.get(2)?.displayNumber).toBe(2);
+    expect(capturedContentMap?.get(9)?.displayNumber).toBe(3);
+    expect(capturedContentMap?.has(1)).toBe(false);
+    expect(layoutErrors).toHaveLength(0);
+  });
+
+  test("moves body content above an overflowing default footer", () => {
     const state = makeState();
-    const baseline = runLayoutPipeline(makeDeps(createLayoutSession()), state);
-    const withTallFooter = runLayoutPipeline(
+    const outcome = runLayoutPipeline(
       makeDeps(createLayoutSession(), {
-        renderHfFromContentOrPm: (_hf, _rId, _hfPMs, _contentWidth, metrics) =>
-          metrics.section === "footer"
+        footerContent: { type: "footer", hdrFtrType: "default", content: [] },
+        renderHfFromContentOrPm: (hf, _rId, _hfPMs, _contentWidth, metrics) =>
+          hf && metrics.section === "footer"
             ? {
                 blocks: [],
                 measures: [],
@@ -440,12 +588,156 @@ describe("runLayoutPipeline", () => {
       state,
     );
 
-    expect(withTallFooter.layout?.pages.map((page) => page.margins)).toEqual(
-      baseline.layout?.pages.map((page) => page.margins),
+    expect(outcome.layout?.pages.at(0)?.margins.bottom).toBe(MARGINS.footer + 120);
+  });
+
+  test("keeps authored body margin when a default footer stays below it", () => {
+    const state = makeState();
+    const outcome = runLayoutPipeline(
+      makeDeps(createLayoutSession(), {
+        footerContent: { type: "footer", hdrFtrType: "default", content: [] },
+        renderHfFromContentOrPm: (hf, _rId, _hfPMs, _contentWidth, metrics) =>
+          hf && metrics.section === "footer"
+            ? {
+                blocks: [],
+                measures: [],
+                height: 20,
+                visualTop: 0,
+                visualBottom: 20,
+                marginPushTop: 0,
+                marginPushBottom: 20,
+              }
+            : undefined,
+      }),
+      state,
     );
-    expect(withTallFooter.layout?.pages.map((page) => page.fragments.map(({ y }) => y))).toEqual(
-      baseline.layout?.pages.map((page) => page.fragments.map(({ y }) => y)),
+
+    expect(outcome.layout?.pages.at(0)?.margins.bottom).toBe(MARGINS.bottom);
+  });
+
+  test("moves body content below an overflowing default header", () => {
+    const state = makeState();
+    const outcome = runLayoutPipeline(
+      makeDeps(createLayoutSession(), {
+        headerContent: { type: "header", hdrFtrType: "default", content: [] },
+        renderHfFromContentOrPm: (hf, _rId, _hfPMs, _contentWidth, metrics) =>
+          hf && metrics.section === "header"
+            ? {
+                blocks: [],
+                measures: [],
+                height: 120,
+                visualTop: 0,
+                visualBottom: 120,
+                marginPushTop: 0,
+                marginPushBottom: 120,
+              }
+            : undefined,
+      }),
+      state,
     );
+
+    expect(outcome.layout?.pages.at(0)?.margins.top).toBe(MARGINS.header + 120);
+    expect(outcome.layout?.pages.at(0)?.fragments.at(0)?.y).toBe(MARGINS.header + 120);
+  });
+
+  test("keeps authored body margin when a default header stays above it", () => {
+    const state = makeState();
+    const outcome = runLayoutPipeline(
+      makeDeps(createLayoutSession(), {
+        headerContent: { type: "header", hdrFtrType: "default", content: [] },
+        renderHfFromContentOrPm: (hf, _rId, _hfPMs, _contentWidth, metrics) =>
+          hf && metrics.section === "header"
+            ? {
+                blocks: [],
+                measures: [],
+                height: 20,
+                visualTop: 0,
+                visualBottom: 20,
+                marginPushTop: 0,
+                marginPushBottom: 20,
+              }
+            : undefined,
+      }),
+      state,
+    );
+
+    expect(outcome.layout?.pages.at(0)?.margins.top).toBe(MARGINS.top);
+    expect(outcome.layout?.pages.at(0)?.fragments.at(0)?.y).toBe(MARGINS.top);
+  });
+
+  test("uses authored margins for a blank even-page header and footer", () => {
+    const content = { type: "header", hdrFtrType: "default", content: [] } as const;
+    const outcome = runLayoutPipeline(
+      makeDeps(createLayoutSession(), {
+        headerContent: content,
+        footerContent: { ...content, type: "footer" },
+        sectionHeaderFooterRefs: [
+          {
+            evenAndOddHeaders: true,
+            headerDefault: "odd-header",
+            footerDefault: "odd-footer",
+          },
+        ],
+        renderHfFromContentOrPm: (hf) => (hf ? makePreparedHeaderFooter(120) : undefined),
+        renderHeaderFooterContentByRId: (_source, _hfPMs, _width, metrics) =>
+          new Map([
+            [
+              metrics.section === "header" ? "odd-header" : "odd-footer",
+              makePreparedHeaderFooter(120),
+            ],
+          ]),
+      }),
+      makeTwoPageState(),
+    );
+
+    expect(outcome.layout?.pages).toHaveLength(2);
+    expect(outcome.layout?.pages[0]?.margins.top).toBe(MARGINS.header + 120);
+    expect(outcome.layout?.pages[0]?.margins.bottom).toBe(MARGINS.footer + 120);
+    expect(outcome.layout?.pages[1]?.margins).toEqual(MARGINS);
+  });
+
+  test("moves a section body between its referenced default header and footer", () => {
+    const state = makeSectionedState();
+    const outcome = runLayoutPipeline(
+      makeDeps(createLayoutSession(), {
+        sectionHeaderFooterRefs: [
+          { headerDefault: "first-header", footerDefault: "first-footer" },
+          { headerDefault: "second-header", footerDefault: "second-footer" },
+        ],
+        renderHeaderFooterContentByRId: (_source, _hfPMs, _contentWidth, metrics) => {
+          if (metrics.section === "header") {
+            return new Map([
+              ["first-header", makePreparedHeaderFooter(120)],
+              ["second-header", makePreparedHeaderFooter(20)],
+            ]);
+          }
+          return new Map([
+            ["first-footer", makePreparedHeaderFooter(120)],
+            ["second-footer", makePreparedHeaderFooter(20)],
+          ]);
+        },
+      }),
+      state,
+    );
+
+    expect(outcome.layout?.pages.at(0)?.margins.top).toBe(MARGINS.header + 120);
+    expect(outcome.layout?.pages.at(0)?.margins.bottom).toBe(MARGINS.footer + 120);
+    expect(outcome.layout?.pages.at(0)?.fragments.at(0)?.y).toBe(MARGINS.header + 120);
+  });
+
+  test("keeps a section's authored margin when its referenced header fits above it", () => {
+    const state = makeSectionedState();
+    const outcome = runLayoutPipeline(
+      makeDeps(createLayoutSession(), {
+        sectionHeaderFooterRefs: [{ headerDefault: "compact-header" }, {}],
+        renderHeaderFooterContentByRId: () =>
+          new Map([["compact-header", makePreparedHeaderFooter(20)]]),
+      }),
+      state,
+    );
+
+    expect(outcome.layout?.pages.at(0)?.margins.top).toBe(MARGINS.top);
+    expect(outcome.layout?.pages.at(0)?.fragments.at(0)?.y).toBe(MARGINS.top);
   });
 
   test("moves only the title-page body below an overflowing first-page header", () => {
@@ -479,6 +771,35 @@ describe("runLayoutPipeline", () => {
     );
   });
 
+  test("moves only the title-page body above an overflowing first-page footer", () => {
+    const state = makeState();
+    const baseline = runLayoutPipeline(makeDeps(createLayoutSession()), state);
+    const withTallFirstFooter = runLayoutPipeline(
+      makeDeps(createLayoutSession(), {
+        sectionProperties: { titlePg: true },
+        firstPageFooterContent: { type: "footer", hdrFtrType: "first", content: [] },
+        renderHfFromContentOrPm: (hf, _rId, _hfPMs, _contentWidth, metrics) =>
+          hf && metrics.section === "footer"
+            ? {
+                blocks: [],
+                measures: [],
+                height: 120,
+                visualTop: 0,
+                visualBottom: 120,
+                marginPushTop: 0,
+                marginPushBottom: 120,
+              }
+            : undefined,
+      }),
+      state,
+    );
+
+    const baselineFirstPage = baseline.layout?.pages.at(0);
+    const pushedFirstPage = withTallFirstFooter.layout?.pages.at(0);
+    expect(pushedFirstPage?.margins.bottom).toBe(MARGINS.footer + 120);
+    expect(pushedFirstPage?.margins.bottom).toBeGreaterThan(baselineFirstPage?.margins.bottom ?? 0);
+  });
+
   test("threads the final section geometry into layout", () => {
     const document = createEmptyDocument();
     document.package.document.sections = [
@@ -498,7 +819,97 @@ describe("runLayoutPipeline", () => {
 
     const outcome = runLayoutPipeline(makeDeps(createLayoutSession(), { document }), makeState());
 
-    expect(outcome.layout?.pages.at(0)?.size).toEqual({ w: 1124, h: 795 });
+    expect(outcome.layout?.pages.at(0)?.size).toEqual({
+      w: twipsToPixels(16_860),
+      h: twipsToPixels(11_920),
+    });
+  });
+
+  test("threads document automatic-hyphenation settings into paragraph layout", () => {
+    const document = createEmptyDocument();
+    document.package.settings = {
+      defaultTabStop: 720,
+      autoHyphenation: true,
+      doNotHyphenateCaps: true,
+      consecutiveHyphenLimit: 2,
+      hyphenationZoneTwips: 720,
+    };
+
+    const outcome = runLayoutPipeline(makeDeps(createLayoutSession(), { document }), makeState());
+    const paragraph = outcome.blocks?.find((block) => block.kind === "paragraph");
+
+    expect(paragraph?.attrs?.automaticHyphenation).toEqual({
+      enabled: true,
+      doNotHyphenateCaps: true,
+      consecutiveLineLimit: 2,
+      hyphenationZoneTwips: 720,
+    });
+  });
+
+  test("uses the final section start mode for an implicit paragraph boundary", () => {
+    const state = makeImplicitSectionBoundaryState();
+    const continuous = runLayoutPipeline(
+      makeDeps(createLayoutSession(), {
+        document: makeSectionBoundaryDocument("continuous"),
+        sectionProperties: {},
+      }),
+      state,
+    );
+    const nextPage = runLayoutPipeline(
+      makeDeps(createLayoutSession(), {
+        document: makeSectionBoundaryDocument("nextPage"),
+        sectionProperties: {},
+      }),
+      state,
+    );
+
+    expect(continuous.layout?.pages).toHaveLength(1);
+    expect(nextPage.layout?.pages).toHaveLength(2);
+  });
+
+  test("uses the referenced final-section footer for body clearance", () => {
+    const document = createEmptyDocument();
+    document.package.document.sections = [
+      {
+        properties: {
+          pageWidth: 12_240,
+          pageHeight: 15_840,
+          marginTop: 1_080,
+          marginRight: 1_080,
+          marginBottom: 1_440,
+          marginLeft: 1_080,
+          footerDistance: 720,
+        },
+        content: [],
+      },
+    ];
+
+    const outcome = runLayoutPipeline(
+      makeDeps(createLayoutSession(), {
+        document,
+        sectionHeaderFooterRefs: [{ footerDefault: "final-footer" }],
+        renderHeaderFooterContentByRId: (_source, _hfPMs, _contentWidth, metrics) =>
+          metrics.section === "footer"
+            ? new Map([
+                [
+                  "final-footer",
+                  {
+                    blocks: [],
+                    measures: [],
+                    height: 120,
+                    visualTop: 0,
+                    visualBottom: 120,
+                    marginPushTop: 0,
+                    marginPushBottom: 120,
+                  },
+                ],
+              ])
+            : undefined,
+      }),
+      makeState(),
+    );
+
+    expect(outcome.layout?.pages.at(0)?.margins.bottom).toBe(168);
   });
 
   test("discards the outcome and leaves the session unmutated when the paint phase throws", () => {

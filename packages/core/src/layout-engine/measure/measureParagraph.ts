@@ -29,6 +29,7 @@ import type {
   ParagraphSpacing,
 } from "../types";
 import { isFloatingImageRun } from "../types";
+import { resolveEffectiveLineBreakPolicy } from "./effectiveLineBreakPolicy";
 import {
   getFloatingAvailableWidth,
   getFloatingMargins,
@@ -36,10 +37,19 @@ import {
   type FloatingLineSegmentZone,
 } from "./floatingZones";
 import { getListMarkerInlineWidth } from "./listMarkerWidth";
-import { buildRunFontStyle, ptToPx } from "./measureHelpers";
+import { buildRunFontStyle, ptToPx, twipsToPx } from "./measureHelpers";
 import { getFontMetrics, measureRun, measureTextWidth } from "./measureProvider";
 import type { FontMetrics, FontStyle } from "./measureTypes";
-import { findWordBreaks, isBreakChar } from "./lineBreaks";
+import {
+  findGraphemeBreaks,
+  findHyphenationBreaks,
+  findWordBreaks,
+  isHangingPunctuation,
+  isBreakChar,
+} from "./lineBreaks";
+import { MAX_HYPHENATION_WORD_LENGTH } from "./lineBreakProvider";
+import type { LineBreakPolicy } from "./lineBreakProvider";
+import { countCompressibleSpaces } from "./textMeasurementPolicy";
 
 export { clampFloatingWrapMargins } from "./clampFloatingWrapMargins";
 export type { FloatingImageZone } from "./floatingZones";
@@ -53,8 +63,11 @@ const DEFAULT_LINE_HEIGHT_MULTIPLIER = 1; // OOXML spec default: single spacing 
 // Prevents premature line breaks due to measurement rounding
 const WIDTH_TOLERANCE = 0.5;
 const JUSTIFY_SHRINK_TOLERANCE_RATIO = 0.016;
+const JUSTIFY_SPACE_CONTRACTION_RATIO = 0.075;
+const JUSTIFY_LIST_MARKER_SPACE_CONTRACTION_RATIO = 0.195;
+const JUSTIFY_LIST_CONTINUATION_SPACE_CONTRACTION_RATIO = 0.23;
+const JUSTIFY_INSET_LIST_SHRINK_TOLERANCE_RATIO = 0.015;
 const JUSTIFY_LITERAL_TAB_CONTINUATION_SHRINK_TOLERANCE_RATIO = 0.017;
-const JUSTIFY_PROSE_SHRINK_TOLERANCE_RATIO = 0.025;
 const JUSTIFY_HANGING_TAB_SHRINK_TOLERANCE_RATIO = 0.021;
 const DEFAULT_LIST_HANGING_INDENT_PX = 24;
 const ALL_CAPS_RATIO_THRESHOLD = 0.8;
@@ -68,20 +81,24 @@ function findMaxFittingLength(
   style: FontStyle,
   maxWidth: number,
   forceMin: boolean = false,
+  policy?: LineBreakPolicy,
 ): number {
-  let lo = 1;
-  let hi = text.length;
+  const boundaries = findGraphemeBreaks(text, policy);
+  let lo = 0;
+  let hi = boundaries.length - 1;
   let best = 0;
   while (lo <= hi) {
     const mid = Math.floor((lo + hi) / 2);
-    if (measureTextWidth(text.slice(0, mid), style) <= maxWidth) {
-      best = mid;
+    // SAFETY: lo/hi are bounded by boundaries.length.
+    const boundary = boundaries[mid]!;
+    if (measureTextWidth(text.slice(0, boundary), style) <= maxWidth) {
+      best = boundary;
       lo = mid + 1;
     } else {
       hi = mid - 1;
     }
   }
-  return forceMin && best === 0 ? 1 : best;
+  return forceMin && best === 0 ? (boundaries.at(0) ?? 0) : best;
 }
 
 /**
@@ -117,14 +134,14 @@ type LineState = {
   width: number;
   /** Width of collapsible ASCII whitespace at the current line tail. */
   trailingWhitespaceWidth: number;
-  /** Spaces Word may compress while justifying this line. */
-  regularSpaceCount: number;
-  /** Fixed-width spaces excluded from the line's justification budget. */
-  nonBreakingSpaceCount: number;
+  /** Spaces the layout may compress while justifying this line. */
+  regularSpaceWidth: number;
   maxFontSize: number;
   maxFontMetrics: FontMetrics | null;
   /** Maximum inline image height in pixels (already in px, not points) */
   maxImageHeightPx: number;
+  /** Maximum exact-height embedded-object preview on the line. */
+  maxExactImageHeightPx: number;
   /** Maximum inline math height in pixels (already in px, not points) */
   maxMathHeightPx: number;
   availableWidth: number;
@@ -134,7 +151,18 @@ type LineState = {
   rightOffset: number;
   /** Optional split segment zones from centered floating exclusions */
   segmentZones?: FloatingLineSegmentZone[];
+  discretionaryHyphen?: { runIndex: number };
 };
+
+function exceedsHyphenationZone(line: LineState, zoneTwips: number): boolean {
+  if (line.width <= 0) {
+    return true;
+  }
+
+  const visibleWidth = Math.max(0, line.width - line.trailingWhitespaceWidth);
+  const unusedWidth = Math.max(0, line.availableWidth - visibleWidth);
+  return unusedWidth > twipsToPx(zoneTwips) + WIDTH_TOLERANCE;
+}
 
 /**
  * Extract FontStyle from a run that carries RunFormatting (text, tab, or
@@ -420,6 +448,9 @@ function isEmptyTextRun(run: TextRun): boolean {
  * preceding a floating image.
  */
 function isBlockLayoutImageRun(run: ImageRun): boolean {
+  if (isFloatingImageRun(run)) {
+    return false;
+  }
   return run.wrapType === "topAndBottom" || run.displayMode === "block";
 }
 
@@ -556,50 +587,94 @@ function uppercaseLetterRatio(text: string): number {
   return letters === 0 ? 0 : uppercase / letters;
 }
 
-function justifyShrinkToleranceRatio(
+type JustifyFitStrategy =
+  | { type: "rounding" }
+  | { type: "space"; ratio: number }
+  | { type: "width"; ratio: number };
+
+type JustificationProfile = {
+  hasTabRuns: boolean;
+  uppercaseRatio: number;
+};
+
+function resolveJustifyFitStrategy(
   block: ParagraphBlock,
   isFirstLine: boolean,
-  regularSpaceCount: number,
-  nonBreakingSpaceCount: number,
-): number {
+  profile: JustificationProfile,
+): JustifyFitStrategy {
+  if (isShallowFullHangingListContinuation(block, isFirstLine)) {
+    return { type: "rounding" };
+  }
+
   if (block.attrs?.listMarker !== undefined) {
-    // Word keeps its conservative list allowance for the standard 360-twip
-    // hanging slot. Custom, wider slots use the tabbed allowance on their
-    // marker line and prose compression on continuations, reduced by fixed
-    // non-breaking spaces on the current line.
     const hanging = block.attrs.indent?.hanging ?? 0;
-    if (hanging <= DEFAULT_LIST_HANGING_INDENT_PX) {
-      return JUSTIFY_SHRINK_TOLERANCE_RATIO;
-    }
     if (isFirstLine) {
-      return JUSTIFY_HANGING_TAB_SHRINK_TOLERANCE_RATIO;
+      return hanging <= DEFAULT_LIST_HANGING_INDENT_PX
+        ? { type: "space", ratio: JUSTIFY_LIST_MARKER_SPACE_CONTRACTION_RATIO }
+        : { type: "width", ratio: JUSTIFY_HANGING_TAB_SHRINK_TOLERANCE_RATIO };
     }
-    const totalSpaces = regularSpaceCount + nonBreakingSpaceCount;
-    if (totalSpaces === 0) {
-      return JUSTIFY_PROSE_SHRINK_TOLERANCE_RATIO;
+    const left = block.attrs.indent?.left ?? 0;
+    if (hanging > 0 && left > hanging) {
+      return { type: "width", ratio: JUSTIFY_INSET_LIST_SHRINK_TOLERANCE_RATIO };
     }
-    return Math.max(
-      JUSTIFY_SHRINK_TOLERANCE_RATIO,
-      JUSTIFY_PROSE_SHRINK_TOLERANCE_RATIO * (regularSpaceCount / totalSpaces),
-    );
+    return { type: "space", ratio: JUSTIFY_LIST_CONTINUATION_SPACE_CONTRACTION_RATIO };
   }
+
   const hasTabStops = (block.attrs?.tabs?.length ?? 0) > 0;
-  const hasTabRuns = block.runs.some(isTabRun);
-  if (!isFirstLine && hasTabRuns && !hasTabStops) {
-    return JUSTIFY_LITERAL_TAB_CONTINUATION_SHRINK_TOLERANCE_RATIO;
+  if (isFirstLine && profile.hasTabRuns && (block.attrs?.indent?.hanging ?? 0) > 0) {
+    return { type: "width", ratio: JUSTIFY_SHRINK_TOLERANCE_RATIO };
   }
-  if ((isFirstLine || hasTabStops) && (hasTabStops || hasTabRuns)) {
-    return (block.attrs?.indent?.firstLine ?? 0) === 0
-      ? JUSTIFY_HANGING_TAB_SHRINK_TOLERANCE_RATIO
-      : JUSTIFY_SHRINK_TOLERANCE_RATIO;
+  if (!isFirstLine && profile.hasTabRuns && !hasTabStops) {
+    return { type: "width", ratio: JUSTIFY_LITERAL_TAB_CONTINUATION_SHRINK_TOLERANCE_RATIO };
   }
+  if (profile.hasTabRuns && (isFirstLine || hasTabStops)) {
+    return {
+      type: "width",
+      ratio:
+        (block.attrs?.indent?.firstLine ?? 0) === 0
+          ? JUSTIFY_HANGING_TAB_SHRINK_TOLERANCE_RATIO
+          : JUSTIFY_SHRINK_TOLERANCE_RATIO,
+    };
+  }
+  if (profile.uppercaseRatio > ALL_CAPS_RATIO_THRESHOLD) {
+    return { type: "width", ratio: JUSTIFY_SHRINK_TOLERANCE_RATIO };
+  }
+  return { type: "space", ratio: JUSTIFY_SPACE_CONTRACTION_RATIO };
+}
 
-  const text = block.runs.map((run) => (isTextRun(run) ? (run.text ?? "") : "")).join("");
-  if (uppercaseLetterRatio(text) > ALL_CAPS_RATIO_THRESHOLD) {
-    return JUSTIFY_SHRINK_TOLERANCE_RATIO;
-  }
+function compressibleSpaceWidth(text: string, style: FontStyle): number {
+  const count = countCompressibleSpaces(text);
+  return count === 0 ? 0 : count * measureTextWidth(" ", style);
+}
 
-  return JUSTIFY_PROSE_SHRINK_TOLERANCE_RATIO;
+function justifyFitTolerance(
+  line: LineState,
+  strategy: JustifyFitStrategy,
+  candidateSpaceWidth: number,
+): number {
+  if (strategy.type === "rounding") {
+    return WIDTH_TOLERANCE;
+  }
+  if (strategy.type === "width") {
+    return Math.max(WIDTH_TOLERANCE, line.availableWidth * strategy.ratio);
+  }
+  return Math.max(WIDTH_TOLERANCE, (line.regularSpaceWidth + candidateSpaceWidth) * strategy.ratio);
+}
+
+function isShallowFullHangingListContinuation(
+  block: ParagraphBlock,
+  isFirstLine: boolean,
+): boolean {
+  if (isFirstLine || block.attrs?.listMarker === undefined) {
+    return false;
+  }
+  const hanging = block.attrs.indent?.hanging ?? 0;
+  const left = block.attrs.indent?.left ?? 0;
+  return (
+    hanging > 0 &&
+    hanging < DEFAULT_LIST_HANGING_INDENT_PX &&
+    Math.abs(left - hanging) <= WIDTH_TOLERANCE
+  );
 }
 
 function trimTrailingSpacesAndTabs(text: string): string {
@@ -614,12 +689,31 @@ function trimTrailingSpacesAndTabs(text: string): string {
   return text.slice(0, end);
 }
 
+function trailingHangingPunctuationWidth(
+  text: string,
+  style: FontStyle,
+  policy: LineBreakPolicy,
+  enabled: boolean,
+): number {
+  if (!enabled || text.length === 0) {
+    return 0;
+  }
+  const boundaries = findGraphemeBreaks(text, policy);
+  const lastStart = boundaries.at(-2) ?? 0;
+  const lastGrapheme = text.slice(lastStart);
+  if (!isHangingPunctuation(lastGrapheme, policy)) {
+    return 0;
+  }
+  return measureTextWidth(lastGrapheme, style);
+}
+
 /**
  * Width of the unbreakable text glued to the end of each run.
  * A run boundary is not itself a wrap opportunity: adjacent note markers and
  * format-only word splits must wrap as one cluster.
  */
-function computeTrailingGlueWidths(runs: Run[]): number[] {
+function computeTrailingGlueWidths(block: ParagraphBlock): number[] {
+  const runs = block.runs;
   const widths = Array.from({ length: runs.length }, () => 0);
   for (let index = runs.length - 1; index >= 0; index--) {
     const nextRun = runs[index + 1];
@@ -632,25 +726,212 @@ function computeTrailingGlueWidths(runs: Run[]): number[] {
       widths[index] = widths[index + 1] ?? 0;
       continue;
     }
-    if (isSpaceOrTab(text[0])) {
+    if (isSpaceOrTab(text.at(0))) {
       continue;
     }
 
     const style = runToFontStyle(nextRun);
-    const breaks = findWordBreaks(text);
-    if (breaks.length === 0) {
-      widths[index] = measureTextWidth(text, style) + (widths[index + 1] ?? 0);
+    const breaks = findWordBreaks(
+      text,
+      resolveEffectiveLineBreakPolicy({ attrs: block.attrs, run: nextRun }).provider,
+    );
+    const firstBreak = breaks.at(0);
+    const leading =
+      firstBreak === undefined ? text : trimTrailingSpacesAndTabs(text.slice(0, firstBreak));
+    widths[index] =
+      measureTextWidth(leading, style) + (firstBreak === undefined ? (widths[index + 1] ?? 0) : 0);
+  }
+  return widths;
+}
+
+function computeProtectedCrossRunGlueWidths(block: ParagraphBlock): number[] {
+  const widths = Array.from({ length: block.runs.length }, () => 0);
+  for (let index = 0; index < block.runs.length; index++) {
+    const run = block.runs[index];
+    if (!run || !isTextRun(run)) {
+      continue;
+    }
+    const trailing = /(\S+)(\s*)$/u.exec(run.text ?? "");
+    const token = trailing?.[1];
+    const policy = resolveEffectiveLineBreakPolicy({ attrs: block.attrs, run }).provider;
+    if (!token || token.length !== 1 || !policy.locale?.toLocaleLowerCase().startsWith("cs")) {
       continue;
     }
 
-    const firstBreak = breaks[0];
-    if (firstBreak === undefined) {
+    let separator = trailing[2] ?? "";
+    let glueWidth = separator.length > 0 ? measureTextWidth(separator, runToFontStyle(run)) : 0;
+    let followingWord = "";
+    let unseparatedFollowingText = false;
+    for (let nextIndex = index + 1; nextIndex < block.runs.length; nextIndex++) {
+      const nextRun = block.runs[nextIndex];
+      if (!nextRun || !isTextRun(nextRun)) {
+        break;
+      }
+      const text = nextRun.text ?? "";
+      let consumed = "";
+      for (const char of text) {
+        const isWhitespace = /\s/u.test(char);
+        if (followingWord.length > 0 && isWhitespace) {
+          break;
+        }
+        if (separator.length === 0 && !isWhitespace) {
+          unseparatedFollowingText = true;
+          break;
+        }
+        consumed += char;
+        if (isWhitespace) {
+          separator += char;
+        } else {
+          followingWord += char;
+        }
+      }
+      if (consumed.length > 0) {
+        glueWidth += measureTextWidth(consumed, runToFontStyle(nextRun));
+      }
+      if (unseparatedFollowingText) {
+        break;
+      }
+      if (followingWord.length > 0 && consumed.length < text.length) {
+        break;
+      }
+    }
+    if (unseparatedFollowingText || separator.length === 0 || followingWord.length === 0) {
       continue;
     }
-    const leading = trimTrailingSpacesAndTabs(text.slice(0, firstBreak));
-    widths[index] = measureTextWidth(leading, style);
+
+    const boundary = token.length + separator.length;
+    const probe = token + separator + followingWord;
+    const breaks = findWordBreaks(probe, policy);
+    if (!breaks.includes(boundary)) {
+      widths[index] = glueWidth;
+    }
   }
   return widths;
+}
+
+type CrossRunWordSegment = {
+  runIndex: number;
+  startChar: number;
+  text: string;
+  run: TextRun;
+  style: FontStyle;
+};
+
+type CrossRunWord = {
+  text: string;
+  width: number;
+  breaks: number[];
+  segments: CrossRunWordSegment[];
+};
+
+type CollectCrossRunWordOptions = {
+  block: ParagraphBlock;
+  startRunIndex: number;
+  startChar: number;
+};
+
+/** Collect one lexical word continued through adjacent formatting runs. */
+function collectCrossRunWord({
+  block,
+  startRunIndex,
+  startChar,
+}: CollectCrossRunWordOptions): CrossRunWord | undefined {
+  const segments: CrossRunWordSegment[] = [];
+  let text = "";
+  let width = 0;
+
+  for (let runIndex = startRunIndex; runIndex < block.runs.length; runIndex++) {
+    const run = block.runs[runIndex];
+    if (!run || !isTextRun(run)) {
+      break;
+    }
+
+    const start = runIndex === startRunIndex ? startChar : 0;
+    const remainder = run.text.slice(start);
+    if (remainder.length === 0) {
+      continue;
+    }
+    if (runIndex !== startRunIndex && isSpaceOrTab(remainder[0])) {
+      break;
+    }
+
+    const remainingBudget = MAX_HYPHENATION_WORD_LENGTH - text.length;
+    const boundedRemainder = remainder.slice(0, remainingBudget + 1);
+    const firstBreak = findWordBreaks(
+      boundedRemainder,
+      resolveEffectiveLineBreakPolicy({ attrs: block.attrs, run }).provider,
+    ).at(0);
+    const segmentText = trimTrailingSpacesAndTabs(
+      firstBreak === undefined ? boundedRemainder : boundedRemainder.slice(0, firstBreak),
+    );
+    if (segmentText.length === 0) {
+      break;
+    }
+    if (segmentText.length > remainingBudget) {
+      return undefined;
+    }
+
+    const style = runToFontStyle(run);
+    segments.push({ runIndex, startChar: start, text: segmentText, run, style });
+    text += segmentText;
+    width += measureTextWidth(segmentText, style);
+
+    if (firstBreak !== undefined) {
+      break;
+    }
+  }
+
+  if (segments.length < 2) {
+    return undefined;
+  }
+  const firstRun = segments[0]?.run;
+  if (!firstRun) {
+    return undefined;
+  }
+  return {
+    text,
+    width,
+    breaks: findHyphenationBreaks(
+      text,
+      resolveEffectiveLineBreakPolicy({ attrs: block.attrs, run: firstRun }).provider,
+    ),
+    segments,
+  };
+}
+
+type CrossRunPrefix = {
+  width: number;
+  endRunIndex: number;
+  endChar: number;
+  hyphenStyle: FontStyle;
+  segments: CrossRunWordSegment[];
+};
+
+function measureCrossRunPrefix(
+  word: CrossRunWord,
+  breakOffset: number,
+): CrossRunPrefix | undefined {
+  let width = 0;
+  let remaining = breakOffset;
+  const measuredSegments: CrossRunWordSegment[] = [];
+  for (const segment of word.segments) {
+    const length = Math.min(remaining, segment.text.length);
+    if (length > 0) {
+      width += measureTextWidth(segment.text.slice(0, length), segment.style);
+      measuredSegments.push(segment);
+    }
+    if (remaining <= segment.text.length) {
+      return {
+        width,
+        endRunIndex: segment.runIndex,
+        endChar: segment.startChar + remaining,
+        hyphenStyle: segment.style,
+        segments: measuredSegments,
+      };
+    }
+    remaining -= segment.text.length;
+  }
+  return undefined;
 }
 
 /**
@@ -731,6 +1012,18 @@ export function measureParagraph(
   const attrs = block.attrs;
   const spacing = attrs?.spacing;
   const isJustifiedParagraph = attrs?.alignment === "justify";
+  const justificationProfile: JustificationProfile = {
+    hasTabRuns: isJustifiedParagraph && runs.some(isTabRun),
+    uppercaseRatio: isJustifiedParagraph
+      ? uppercaseLetterRatio(runs.map((run) => (isTextRun(run) ? (run.text ?? "") : "")).join(""))
+      : 0,
+  };
+  const firstLineJustifyFitStrategy = resolveJustifyFitStrategy(block, true, justificationProfile);
+  const continuationJustifyFitStrategy = resolveJustifyFitStrategy(
+    block,
+    false,
+    justificationProfile,
+  );
 
   // Floating image support
   const floatingZones = options?.floatingZones;
@@ -821,6 +1114,7 @@ export function measureParagraph(
   );
 
   const lines: MeasuredLine[] = [];
+  let consecutiveHyphenatedLines = 0;
 
   // Handle empty paragraph
   if (runs.length === 0) {
@@ -846,6 +1140,13 @@ export function measureParagraph(
     const emptyFontSize = attrs?.defaultFontSize ?? DEFAULT_FONT_SIZE;
     const emptyFontFamily = attrs?.defaultFontFamily ?? DEFAULT_FONT_FAMILY;
     const emptyMetrics = calculateEmptyParagraphMetrics(emptyFontSize, spacing, emptyFontFamily);
+    // Reference layout reserves a second line box for a story-leading empty top-level
+    // outline paragraph. Keep it as one logical/caret line while expanding
+    // the line's advance; later and ordinary empty paragraphs stay at the
+    // normal single-line height.
+    const outlineLineHeight = attrs?.reserveEmptyOutlineHeight
+      ? emptyMetrics.lineHeight * 2
+      : emptyMetrics.lineHeight;
     lines.push({
       fromRun: 0,
       fromChar: 0,
@@ -853,9 +1154,10 @@ export function measureParagraph(
       toChar: 0,
       width: 0,
       ...emptyMetrics,
+      lineHeight: outlineLineHeight,
     });
 
-    let totalHeight = emptyMetrics.lineHeight;
+    let totalHeight = outlineLineHeight;
     if (spacing?.before) {
       totalHeight += spacing.before;
     }
@@ -906,7 +1208,8 @@ export function measureParagraph(
     };
   }
 
-  const trailingGlueWidths = computeTrailingGlueWidths(runs);
+  const trailingGlueWidths = computeTrailingGlueWidths(block);
+  const protectedCrossRunGlueWidths = computeProtectedCrossRunGlueWidths(block);
 
   // Initialize line state
   let currentLine: LineState = {
@@ -916,11 +1219,11 @@ export function measureParagraph(
     toChar: 0,
     width: 0,
     trailingWhitespaceWidth: 0,
-    regularSpaceCount: 0,
-    nonBreakingSpaceCount: 0,
+    regularSpaceWidth: 0,
     maxFontSize: DEFAULT_FONT_SIZE,
     maxFontMetrics: null,
     maxImageHeightPx: 0,
+    maxExactImageHeightPx: 0,
     maxMathHeightPx: 0,
     availableWidth: firstLineWidth,
     leftOffset: firstLineFloatingMargins.leftMargin,
@@ -931,27 +1234,40 @@ export function measureParagraph(
   };
 
   const calculateLineTypography = (line: LineState): LineTypography => {
-    const typography = calculateTypographyMetrics(line.maxFontSize, spacing, line.maxFontMetrics);
+    const paragraphFontSize = attrs?.defaultFontSize ?? DEFAULT_FONT_SIZE;
+    const paragraphFontFamily = attrs?.defaultFontFamily ?? DEFAULT_FONT_FAMILY;
+    const fontSize = line.maxFontMetrics ? line.maxFontSize : paragraphFontSize;
+    const metrics =
+      line.maxFontMetrics ??
+      getFontMetrics({
+        fontSize: paragraphFontSize,
+        fontFamily: paragraphFontFamily,
+      });
+    const typography = calculateTypographyMetrics(fontSize, spacing, metrics);
 
     // If an inline image or stacked equation is taller than the text-based
-    // line height, the line grows to fit it. Word seats these inline objects
+    // line height, the line grows to fit it. The reference layout seats these inline objects
     // as tall glyphs on the text baseline.
     const finalTypography = { ...typography };
     const inlineObjectHeight = Math.max(line.maxImageHeightPx, line.maxMathHeightPx);
     if (inlineObjectHeight > finalTypography.lineHeight) {
       const objectHeight = inlineObjectHeight;
       const buffer = finalTypography.descent;
-      // `fromRun === toRun` with a tall inline object present means the line
-      // holds exactly that one object (no flowing text/tabs). Must stay paired
-      // with the painter's image-only `runsForLine.length === 1 && isImageRun(...)`
-      // test in renderLine — the two pick paired line-height + alignment
-      // strategies and disagreeing reintroduces the floating-label bug.
-      if (line.fromRun === line.toRun) {
-        // Object alone on the line: grow to the object height plus the
-        // parent font's descent on BOTH sides so the row has visible
-        // breathing room above and below it.
-        finalTypography.lineHeight = objectHeight + buffer * 2;
-        finalTypography.ascent = objectHeight + buffer;
+      // An image-only line uses the authored image footprint directly. There
+      // is no text baseline that needs font descent above or below the image;
+      // adding one silently grows large diagrams and can change pagination.
+      // Keep this paired with the painter's image-only flex alignment.
+      const soleRun = line.fromRun === line.toRun ? runs[line.fromRun] : undefined;
+      if (line.maxExactImageHeightPx >= objectHeight) {
+        finalTypography.lineHeight = objectHeight;
+        finalTypography.ascent = objectHeight;
+        finalTypography.descent = 0;
+        return finalTypography;
+      }
+      if (soleRun && isImageRun(soleRun)) {
+        finalTypography.lineHeight = objectHeight;
+        finalTypography.ascent = objectHeight;
+        finalTypography.descent = 0;
       } else {
         // Object flowing with text/tabs (e.g. a logo + label header line):
         // the full object height sits above the baseline and only the text
@@ -1010,6 +1326,9 @@ export function measureParagraph(
       toChar: currentLine.toChar,
       width: Math.max(0, currentLine.width - currentLine.trailingWhitespaceWidth),
       ...finalTypography,
+      ...(currentLine.discretionaryHyphen
+        ? { discretionaryHyphen: currentLine.discretionaryHyphen }
+        : {}),
     };
 
     // Only add offsets if they're non-zero (for floating images)
@@ -1028,6 +1347,9 @@ export function measureParagraph(
     }
 
     lines.push(line);
+    consecutiveHyphenatedLines = currentLine.discretionaryHyphen
+      ? consecutiveHyphenatedLines + 1
+      : 0;
 
     // Update cumulative height for next line's floating zone calculation
     cumulativeHeight += finalTypography.lineHeight;
@@ -1060,11 +1382,11 @@ export function measureParagraph(
       toChar: charIndex,
       width: 0,
       trailingWhitespaceWidth: 0,
-      regularSpaceCount: 0,
-      nonBreakingSpaceCount: 0,
+      regularSpaceWidth: 0,
       maxFontSize: DEFAULT_FONT_SIZE,
       maxFontMetrics: null,
       maxImageHeightPx: 0,
+      maxExactImageHeightPx: 0,
       maxMathHeightPx: 0,
       availableWidth: adjustedWidth,
       leftOffset: floatingMargins.leftMargin,
@@ -1102,8 +1424,13 @@ export function measureParagraph(
     }
   };
 
+  let crossRunResume: { runIndex: number; charIndex: number } | undefined;
+
   // Process each run
   for (let runIndex = 0; runIndex < runs.length; runIndex++) {
+    if (crossRunResume && runIndex < crossRunResume.runIndex) {
+      continue;
+    }
     // SAFETY: runIndex is bounded by runs.length
     const run = runs[runIndex]!;
 
@@ -1155,6 +1482,10 @@ export function measureParagraph(
         decimalPrefixWidth,
       });
       let tabWidth = tabResult.width;
+      const landsOnLeftIndent =
+        tabResult.alignment === "start" &&
+        indentLeft > 0 &&
+        Math.abs(contentX + tabWidth - indentLeft) <= WIDTH_TOLERANCE;
 
       const lineRightEdgeX =
         indentLeft +
@@ -1162,6 +1493,7 @@ export function measureParagraph(
         currentLine.availableWidth +
         currentLine.leftOffset;
       if (
+        !landsOnLeftIndent &&
         !hasFollowingTabOnLine(runs, runIndex) &&
         canClampTabToRightEdge(
           tabResult.alignment,
@@ -1191,25 +1523,10 @@ export function measureParagraph(
 
     if (isImageRun(run)) {
       const wrapType = run.wrapType;
-      // Match the painter's `isFloatingImageRun` classification —
-      // including `behind` / `inFront` (wrapNone). These images are
-      // anchored at absolute coordinates and the painter lifts them
-      // out of the paragraph flow, so the measurer must also skip
-      // them: otherwise the line reserves the image's inline width
-      // and height while the painter renders it as an overlay,
-      // leaving phantom gaps in the body text (Codex PR #258 review).
-      // Drop the `run.position` precondition too — wrapNone images
-      // can be authored without an explicit `<wp:positionH>` and
-      // still shouldn't contribute to inline metrics.
-      const isFloating =
-        run.displayMode === "float" ||
-        wrapType === "square" ||
-        wrapType === "tight" ||
-        wrapType === "through" ||
-        wrapType === "behind" ||
-        wrapType === "inFront";
-
-      if (isFloating) {
+      // Keep measurement aligned with the shared anchored-image predicate.
+      // These images paint in a page layer and must not reserve inline width
+      // or height at their host run.
+      if (isFloatingImageRun(run)) {
         currentLine.toRun = runIndex;
         currentLine.toChar = 1;
         continue;
@@ -1284,6 +1601,9 @@ export function measureParagraph(
       if (imageFootprintPx > currentLine.maxImageHeightPx) {
         currentLine.maxImageHeightPx = imageFootprintPx;
       }
+      if (run.exactLineHeight === true && imageFootprintPx > currentLine.maxExactImageHeightPx) {
+        currentLine.maxExactImageHeightPx = imageFootprintPx;
+      }
 
       currentLine.width += imageWidth;
       currentLine.trailingWhitespaceWidth = 0;
@@ -1303,15 +1623,24 @@ export function measureParagraph(
       updateMaxFont(style);
 
       const fieldWidth = measureTextWidth(fallback, style);
+      const fieldSpaceWidth = compressibleSpaceWidth(fallback, style);
+      const fieldTolerance = isJustifiedParagraph
+        ? justifyFitTolerance(
+            currentLine,
+            lines.length === 0 ? firstLineJustifyFitStrategy : continuationJustifyFitStrategy,
+            fieldSpaceWidth,
+          )
+        : WIDTH_TOLERANCE;
       if (
         currentLine.width > 0 &&
-        currentLine.width + fieldWidth > currentLine.availableWidth + WIDTH_TOLERANCE
+        currentLine.width + fieldWidth > currentLine.availableWidth + fieldTolerance
       ) {
         startNewLine(runIndex, 0);
         updateMaxFont(style);
       }
 
       currentLine.width += fieldWidth;
+      currentLine.regularSpaceWidth += fieldSpaceWidth;
       currentLine.trailingWhitespaceWidth = 0;
       currentLine.toRun = runIndex;
       currentLine.toChar = 1;
@@ -1332,7 +1661,8 @@ export function measureParagraph(
         ...(run.italic !== undefined ? { italic: run.italic } : {}),
       };
       updateMaxFont(style);
-      const mathWidth = measureTextWidth(run.plainText || "[equation]", style);
+      const mathText = run.plainText || "[equation]";
+      const mathWidth = measureTextWidth(mathText, style);
       const mathFootprintPx = estimateMathFootprintPx(run);
       if (
         currentLine.width > 0 &&
@@ -1355,6 +1685,11 @@ export function measureParagraph(
       const textRun = run as TextRun;
       const text = textRun.text;
       const style = runToFontStyle(textRun);
+      const effectiveLineBreakPolicy = resolveEffectiveLineBreakPolicy({
+        attrs: block.attrs,
+        run: textRun,
+      });
+      const breakPolicy = effectiveLineBreakPolicy.provider;
       // Line height comes from the CJK-aware style; width measurement below
       // keeps `style` so wrapping is unchanged.
       const lineHeightStyle = cjkLineHeightStyle(textRun, style);
@@ -1369,10 +1704,16 @@ export function measureParagraph(
       }
 
       // Find word break points for wrapping
-      const wordBreaks = findWordBreaks(text);
+      const wordBreaks = findWordBreaks(text, breakPolicy);
 
       // Process text word by word
-      let charIndex = 0;
+      let charIndex = crossRunResume?.runIndex === runIndex ? crossRunResume.charIndex : 0;
+      if (crossRunResume?.runIndex === runIndex) {
+        crossRunResume = undefined;
+      }
+      let activeHyphenationWord:
+        | { start: number; end: number; text: string; breaks: number[] }
+        | undefined;
 
       while (charIndex < text.length) {
         // Find next word boundary
@@ -1392,26 +1733,133 @@ export function measureParagraph(
         const measuredWord = trimTrailingSpacesAndTabs(word);
         const wordWidth = measureTextWidth(measuredWord, style);
         const fullWordWidth = measureTextWidth(word, style);
-        const regularSpaces = measuredWord.split(" ").length - 1;
-        const nonBreakingSpaces = measuredWord.split("\u00a0").length - 1;
+        const hangingPunctuationWidth = trailingHangingPunctuationWidth(
+          measuredWord,
+          style,
+          breakPolicy,
+          effectiveLineBreakPolicy.hangingPunctuation,
+        );
+        const isFirstLine = lines.length === 0;
+        const regularSpaceWidth = compressibleSpaceWidth(measuredWord, style);
         const widthTolerance = isJustifiedParagraph
-          ? Math.max(
-              WIDTH_TOLERANCE,
-              currentLine.availableWidth *
-                justifyShrinkToleranceRatio(
-                  block,
-                  lines.length === 0,
-                  currentLine.regularSpaceCount + regularSpaces,
-                  currentLine.nonBreakingSpaceCount + nonBreakingSpaces,
-                ),
+          ? justifyFitTolerance(
+              currentLine,
+              isFirstLine ? firstLineJustifyFitStrategy : continuationJustifyFitStrategy,
+              regularSpaceWidth,
             )
           : WIDTH_TOLERANCE;
 
-        // If the word itself is longer than a line, hard-break by characters.
+        const automaticHyphenation = effectiveLineBreakPolicy.automaticHyphenation;
+        const mayHyphenateLine =
+          automaticHyphenation.type === "enabled" &&
+          (automaticHyphenation.consecutiveLineLimit === 0 ||
+            consecutiveHyphenatedLines < automaticHyphenation.consecutiveLineLimit) &&
+          exceedsHyphenationZone(currentLine, automaticHyphenation.hyphenationZoneTwips);
+        const isRunTail = nextBreak === text.length;
+        const crossRunWord =
+          mayHyphenateLine && isRunTail && word.length > 0 && !isBreakChar(word.at(-1))
+            ? collectCrossRunWord({ block, startRunIndex: runIndex, startChar: charIndex })
+            : undefined;
+        if (
+          mayHyphenateLine &&
+          crossRunWord === undefined &&
+          measuredWord.length > 0 &&
+          (activeHyphenationWord === undefined ||
+            charIndex < activeHyphenationWord.start ||
+            charIndex >= activeHyphenationWord.end)
+        ) {
+          const fullWordEnd = charIndex + measuredWord.length;
+          const fullWordText = text.slice(charIndex, fullWordEnd);
+          activeHyphenationWord = {
+            start: charIndex,
+            end: fullWordEnd,
+            text: fullWordText,
+            breaks: findHyphenationBreaks(fullWordText, breakPolicy),
+          };
+        }
+
+        const overflowsCurrentLine =
+          wordWidth > 0 &&
+          currentLine.width + wordWidth > currentLine.availableWidth + widthTolerance;
+        if (mayHyphenateLine && overflowsCurrentLine && activeHyphenationWord) {
+          const consumed = charIndex - activeHyphenationWord.start;
+          const spaceLeft = currentLine.availableWidth - currentLine.width + widthTolerance;
+          const hyphenWidth = measureTextWidth("-", style);
+          let fittingBreak: number | undefined;
+          for (const breakOffset of activeHyphenationWord.breaks) {
+            if (breakOffset <= consumed || breakOffset >= activeHyphenationWord.text.length) {
+              continue;
+            }
+            const prefix = activeHyphenationWord.text.slice(consumed, breakOffset);
+            if (measureTextWidth(prefix, style) + hyphenWidth <= spaceLeft) {
+              fittingBreak = breakOffset;
+            }
+          }
+          if (fittingBreak !== undefined) {
+            const absoluteBreak = activeHyphenationWord.start + fittingBreak;
+            const prefix = text.slice(charIndex, absoluteBreak);
+            currentLine.width += measureTextWidth(prefix, style) + hyphenWidth;
+            currentLine.trailingWhitespaceWidth = 0;
+            currentLine.toRun = runIndex;
+            currentLine.toChar = absoluteBreak;
+            currentLine.discretionaryHyphen = { runIndex };
+            startNewLine(runIndex, absoluteBreak);
+            updateMaxFont(lineHeightStyle);
+            charIndex = absoluteBreak;
+            continue;
+          }
+        }
+
+        if (
+          crossRunWord &&
+          currentLine.width + crossRunWord.width > currentLine.availableWidth + widthTolerance
+        ) {
+          const spaceLeft = currentLine.availableWidth - currentLine.width + widthTolerance;
+          let fittingPrefix: CrossRunPrefix | undefined;
+          for (let breakIndex = crossRunWord.breaks.length - 1; breakIndex >= 0; breakIndex -= 1) {
+            const breakOffset = crossRunWord.breaks[breakIndex];
+            if (breakOffset === undefined) {
+              continue;
+            }
+            if (breakOffset <= 0 || breakOffset >= crossRunWord.text.length) {
+              continue;
+            }
+            const prefix = measureCrossRunPrefix(crossRunWord, breakOffset);
+            if (prefix && prefix.width + measureTextWidth("-", prefix.hyphenStyle) <= spaceLeft) {
+              fittingPrefix = prefix;
+              break;
+            }
+          }
+          if (fittingPrefix) {
+            for (const segment of fittingPrefix.segments) {
+              updateMaxFont(cjkLineHeightStyle(segment.run, segment.style));
+            }
+            currentLine.width +=
+              fittingPrefix.width + measureTextWidth("-", fittingPrefix.hyphenStyle);
+            currentLine.trailingWhitespaceWidth = 0;
+            currentLine.toRun = fittingPrefix.endRunIndex;
+            currentLine.toChar = fittingPrefix.endChar;
+            currentLine.discretionaryHyphen = { runIndex: fittingPrefix.endRunIndex };
+            startNewLine(fittingPrefix.endRunIndex, fittingPrefix.endChar);
+            if (fittingPrefix.endRunIndex === runIndex) {
+              updateMaxFont(lineHeightStyle);
+              charIndex = fittingPrefix.endChar;
+              continue;
+            }
+            crossRunResume = {
+              runIndex: fittingPrefix.endRunIndex,
+              charIndex: fittingPrefix.endChar,
+            };
+            charIndex = text.length;
+            continue;
+          }
+        }
+
+        // If the word itself is longer than a line, hard-break by grapheme.
         // Use substring measurement (not char-by-char accumulation) to preserve
         // kerning accuracy. Char-by-char accumulation overestimates width by
         // ~1-2px per line due to lost kerning, causing extra wraps in narrow cells.
-        if (wordWidth > currentLine.availableWidth + widthTolerance) {
+        if (wordWidth - hangingPunctuationWidth > currentLine.availableWidth + widthTolerance) {
           // Long word that needs hard-breaking. DON'T start a new line first —
           // fill the remaining space on the current line with as many characters
           // as possible. This prevents wasting a full line when a small run
@@ -1421,16 +1869,21 @@ export function measureParagraph(
           while (chunkStart < measuredWord.length) {
             const spaceLeft = currentLine.availableWidth - currentLine.width + WIDTH_TOLERANCE;
             const remaining = measuredWord.slice(chunkStart);
-            let bestEnd = findMaxFittingLength(remaining, style, spaceLeft);
+            let bestEnd = findMaxFittingLength(
+              remaining,
+              style,
+              spaceLeft,
+              currentLine.width === 0,
+              breakPolicy,
+            );
 
-            // Nothing fits → start a new line and retry (or force 1 char on empty line)
+            // Nothing fits beside existing content: start a new line and retry.
+            // On an empty line findMaxFittingLength forces one whole grapheme,
+            // even if that grapheme itself is wider than the line.
             if (bestEnd === 0) {
-              if (currentLine.width > 0) {
-                startNewLine(runIndex, charIndex + chunkStart);
-                updateMaxFont(lineHeightStyle);
-                continue;
-              }
-              bestEnd = 1;
+              startNewLine(runIndex, charIndex + chunkStart);
+              updateMaxFont(lineHeightStyle);
+              continue;
             }
 
             const chunkEnd = chunkStart + bestEnd;
@@ -1440,8 +1893,7 @@ export function measureParagraph(
             currentLine.width += chunkWidth;
             currentLine.trailingWhitespaceWidth =
               chunkWidth - measureTextWidth(trimTrailingSpacesAndTabs(chunk), style);
-            currentLine.regularSpaceCount += chunk.split(" ").length - 1;
-            currentLine.nonBreakingSpaceCount += chunk.split("\u00a0").length - 1;
+            currentLine.regularSpaceWidth += compressibleSpaceWidth(chunk, style);
             currentLine.toRun = runIndex;
             currentLine.toChar = charIndex + chunkEnd;
 
@@ -1455,8 +1907,7 @@ export function measureParagraph(
           const trailingWhitespaceWidth = fullWordWidth - wordWidth;
           currentLine.width += trailingWhitespaceWidth;
           currentLine.trailingWhitespaceWidth = trailingWhitespaceWidth;
-          currentLine.regularSpaceCount += word.split(" ").length - 1;
-          currentLine.nonBreakingSpaceCount += word.split("\u00a0").length - 1;
+          currentLine.regularSpaceWidth += compressibleSpaceWidth(word, style);
           currentLine.toChar = nextBreak;
 
           charIndex = nextBreak;
@@ -1467,20 +1918,26 @@ export function measureParagraph(
         // run and the next run starts without whitespace, include that glued
         // width in the wrap decision so a note marker or format-only word
         // split is not stranded on the next line (eigenpal/docx-editor#991).
-        const isRunTail = nextBreak === text.length;
+        const wordTail = word.at(-1);
+        const protectedGlueWidth = protectedCrossRunGlueWidths[runIndex] ?? 0;
         const rawGlueWidth =
-          // eslint-disable-next-line unicorn/prefer-at -- hot path: direct index avoids .at() overhead.
-          isRunTail && word.length > 0 && !isBreakChar(word[word.length - 1])
-            ? (trailingGlueWidths[runIndex] ?? 0)
+          isRunTail && wordTail !== undefined && (!isBreakChar(wordTail) || protectedGlueWidth > 0)
+            ? Math.max(trailingGlueWidths[runIndex] ?? 0, protectedGlueWidth)
             : 0;
         const glueWidth =
           rawGlueWidth > 0 &&
           wordWidth + rawGlueWidth <= getPostWrapAvailableWidth() + widthTolerance
             ? rawGlueWidth
             : 0;
+        const hangingAllowance = glueWidth === 0 ? hangingPunctuationWidth : 0;
+        // Let collapsible whitespace remain at the previous line's tail until
+        // visible content decides whether to wrap. Starting a line from an
+        // overflowed space creates whitespace-only soft-wrap lines.
         if (
+          wordWidth > 0 &&
           currentLine.width > 0 &&
-          currentLine.width + wordWidth + glueWidth > currentLine.availableWidth + widthTolerance
+          currentLine.width + wordWidth + glueWidth >
+            currentLine.availableWidth + widthTolerance + hangingAllowance
         ) {
           // Word doesn't fit, start new line
           startNewLine(runIndex, charIndex);
@@ -1490,9 +1947,14 @@ export function measureParagraph(
 
         // Add word to current line
         currentLine.width += fullWordWidth;
-        currentLine.trailingWhitespaceWidth = fullWordWidth - wordWidth;
-        currentLine.regularSpaceCount += word.split(" ").length - 1;
-        currentLine.nonBreakingSpaceCount += word.split("\u00a0").length - 1;
+        const wordTrailingWhitespaceWidth = fullWordWidth - wordWidth;
+        // `findWordBreaks` yields each ASCII space separately, so consecutive
+        // trailing segments must accumulate until visible content follows.
+        currentLine.trailingWhitespaceWidth =
+          wordWidth === 0
+            ? currentLine.trailingWhitespaceWidth + wordTrailingWhitespaceWidth
+            : wordTrailingWhitespaceWidth;
+        currentLine.regularSpaceWidth += compressibleSpaceWidth(word, style);
         currentLine.toRun = runIndex;
         currentLine.toChar = nextBreak;
 

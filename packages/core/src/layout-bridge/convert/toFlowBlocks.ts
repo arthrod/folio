@@ -20,8 +20,8 @@ import type {
   ImageBlock,
   TextBoxBlock,
   PageBreakBlock,
+  ColumnBreakBlock,
   SectionBreakBlock,
-  ColumnLayout,
   Run,
   TextRun,
   TabRun,
@@ -34,7 +34,9 @@ import type {
   FloatingTablePosition,
 } from "../../layout-engine/types";
 import { setTextBoxGroupId } from "../../layout-engine/textBoxGroup";
+import { setParagraphFrame } from "../../layout-engine/paragraphFrame";
 import { DEFAULT_TEXTBOX_MARGINS, DEFAULT_TEXTBOX_WIDTH } from "../../layout-engine/types";
+import { getColumns } from "../sectionColumns";
 import {
   expectBlockSdtAttrs,
   expectCharacterSpacingMarkAttrs,
@@ -42,8 +44,10 @@ import {
   expectEmphasisMarkAttrs,
   expectFieldAttrs,
   expectFontFamilyMarkAttrs,
+  expectLanguageMarkAttrs,
   expectFontSizeMarkAttrs,
   expectFootnoteRefMarkAttrs,
+  expectHardBreakAttrs,
   expectHighlightMarkAttrs,
   expectHyperlinkMarkAttrs,
   expectImageAttrs,
@@ -85,6 +89,7 @@ import {
   halfPointsToPixels,
   halfPointsToPoints,
 } from "../../utils/units";
+import { groupParagraphFrames } from "./paragraphFrames";
 
 /**
  * Options for the conversion.
@@ -124,6 +129,14 @@ export type ToFlowBlocksOptions = {
    * Defaults to the OOXML 720-twip value when absent.
    */
   defaultTabStopTwips?: number;
+  /** Document-wide custom Word line-breaking settings. */
+  lineBreakRules?: {
+    noLineBreaksBefore?: { language?: string; characters: string };
+    noLineBreaksAfter?: { language?: string; characters: string };
+    useLegacyEthiopicAmharicRules?: boolean;
+  };
+  /** Document-wide automatic hyphenation policy. */
+  automaticHyphenation?: NonNullable<ParagraphAttrs["automaticHyphenation"]>;
 };
 
 const DEFAULT_FONT = "Calibri";
@@ -505,6 +518,16 @@ function extractRunFormatting(marks: readonly Mark[], theme?: Theme | null): Run
         break;
       }
 
+      case "language": {
+        const attrs = expectLanguageMarkAttrs(mark);
+        formatting.language = {
+          ...(attrs.val ? { val: attrs.val } : {}),
+          ...(attrs.eastAsia ? { eastAsia: attrs.eastAsia } : {}),
+          ...(attrs.bidi ? { bidi: attrs.bidi } : {}),
+        };
+        break;
+      }
+
       case "characterSpacing": {
         const attrs = expectCharacterSpacingMarkAttrs(mark);
         if (attrs.spacing !== undefined) {
@@ -743,6 +766,9 @@ function paragraphRunDefaults(pmAttrs: PMParagraphAttrs, theme?: Theme | null): 
   if (defaultTextFormatting.fontFamily?.eastAsia) {
     result.eastAsiaFontFamily = defaultTextFormatting.fontFamily.eastAsia;
   }
+  if (defaultTextFormatting.language) {
+    result.language = { ...defaultTextFormatting.language };
+  }
   if (defaultTextFormatting.fontSize !== undefined) {
     result.fontSize = defaultTextFormatting.fontSize / 2;
   }
@@ -870,6 +896,9 @@ function buildImageRun(
   if (attrs.distRight !== undefined) {
     run.distRight = attrs.distRight;
   }
+  if (attrs._docxObjectPreview === true) {
+    run.exactLineHeight = true;
+  }
   // eigenpal #424: pass crop fractions through to the painter so it can
   // emit CSS clip-path. PM defaults are `null`; treat null as "not set".
   if (attrs.cropTop != null) {
@@ -886,6 +915,9 @@ function buildImageRun(
   }
   if (attrs.position !== undefined) {
     run.position = attrs.position;
+  }
+  if (attrs.layoutInCell !== undefined) {
+    run.layoutInCell = attrs.layoutInCell;
   }
   if (trackedChange?.isInsertion) {
     run.isInsertion = true;
@@ -1198,6 +1230,15 @@ function readListMarkerSuffix(value: unknown): PMParagraphAttrs["listMarkerSuffi
   return undefined;
 }
 
+function readListMarkerAlignment(
+  value: unknown,
+): PMParagraphAttrs["listMarkerAlignment"] | undefined {
+  if (value === "left" || value === "center" || value === "right") {
+    return value;
+  }
+  return undefined;
+}
+
 function toPreviousListAttrs(previousFormatting: Record<string, unknown>): PMParagraphAttrs {
   const attrs: PMParagraphAttrs = {};
   const numPr = previousFormatting["numPr"];
@@ -1261,6 +1302,16 @@ function toPreviousListAttrs(previousFormatting: Record<string, unknown>): PMPar
   const listMarkerFontSize = previousFormatting["listMarkerFontSize"];
   if (typeof listMarkerFontSize === "number") {
     attrs.listMarkerFontSize = listMarkerFontSize;
+  }
+
+  const listMarkerBold = previousFormatting["listMarkerBold"];
+  if (typeof listMarkerBold === "boolean") {
+    attrs.listMarkerBold = listMarkerBold;
+  }
+
+  const listMarkerAlignment = readListMarkerAlignment(previousFormatting["listMarkerAlignment"]);
+  if (listMarkerAlignment) {
+    attrs.listMarkerAlignment = listMarkerAlignment;
   }
 
   const listMarkerSuffix = readListMarkerSuffix(previousFormatting["listMarkerSuffix"]);
@@ -1340,6 +1391,12 @@ function applyDeletedListMarkerAttrs(
   if (previousListAttrs.listMarkerFontSize) {
     attrs.listMarkerFontSize = previousListAttrs.listMarkerFontSize;
   }
+  if (previousListAttrs.listMarkerBold !== undefined) {
+    attrs.listMarkerBold = previousListAttrs.listMarkerBold;
+  }
+  if (previousListAttrs.listMarkerAlignment) {
+    attrs.listMarkerAlignment = previousListAttrs.listMarkerAlignment;
+  }
   if (previousListAttrs.listMarkerSuffix) {
     attrs.listMarkerSuffix = previousListAttrs.listMarkerSuffix;
   }
@@ -1375,8 +1432,12 @@ function convertParagraphAttrs(
     // default to no alignment set (inherits from style or defaults to left)
   }
 
+  if (typeof pmAttrs.outlineLevel === "number") {
+    attrs.outlineLevel = pmAttrs.outlineLevel;
+  }
+
   // Spacing. HTML-origin auto spacing (w:beforeAutospacing/afterAutospacing)
-  // renders Word's ~14px auto gap, overriding the imported before/after (which
+  // renders Word's 14pt auto gap, overriding the imported before/after (which
   // Word writes as `0`) — surface it here so pagination matches the rendered
   // margins (eigenpal/docx-editor#823). But only while the effective spacing
   // still matches the import baseline; any later command or style change that
@@ -1404,12 +1465,16 @@ function convertParagraphAttrs(
     } else if (typeof spaceAfter === "number") {
       attrs.spacing.after = twipsToPixels(spaceAfter);
     }
-    // Propagate the `spacingExplicit` flag the PM schema carries — empty
-    // paragraphs inherit zero spacing unless the side was set inline (Word
-    // fidelity, eigenpal #402). Auto spacing counts as explicit: an imported
-    // empty paragraph whose only spacing is `w:beforeAutospacing`/
-    // `afterAutospacing` must keep the ~14px gap rather than collapse to zero
-    // (eigenpal/docx-editor#823).
+    if (autoBefore || autoAfter) {
+      attrs.automaticSpacing = {
+        ...(autoBefore ? { before: true } : {}),
+        ...(autoAfter ? { after: true } : {}),
+      };
+    }
+    // Preserve spacing sides whose source Word renders on an empty paragraph:
+    // direct formatting, document defaults, the implicit default paragraph
+    // style, and automatic spacing. Layout consumes the combined provenance;
+    // the authored PM attributes remain source-specific for serialization.
     const pmSpacingExplicit = pmAttrs.spacingExplicit as
       | { before?: boolean; after?: boolean }
       | null
@@ -1418,11 +1483,25 @@ function convertParagraphAttrs(
       | { before?: boolean; after?: boolean }
       | null
       | undefined;
+    const spacingFromImplicitDefaultStyle = pmAttrs.spacingFromImplicitDefaultStyle as
+      | { before?: boolean; after?: boolean }
+      | null
+      | undefined;
     const explicit: { before?: boolean; after?: boolean } = {};
-    if (autoBefore || pmSpacingExplicit?.before || spacingFromDocDefaults?.before) {
+    if (
+      autoBefore ||
+      pmSpacingExplicit?.before ||
+      spacingFromDocDefaults?.before ||
+      spacingFromImplicitDefaultStyle?.before
+    ) {
       explicit.before = true;
     }
-    if (autoAfter || pmSpacingExplicit?.after || spacingFromDocDefaults?.after) {
+    if (
+      autoAfter ||
+      pmSpacingExplicit?.after ||
+      spacingFromDocDefaults?.after ||
+      spacingFromImplicitDefaultStyle?.after
+    ) {
       explicit.after = true;
     }
     if (explicit.before !== undefined || explicit.after !== undefined) {
@@ -1449,8 +1528,11 @@ function convertParagraphAttrs(
   let indentFirstLine =
     typeof pmAttrs.indentFirstLine === "number" ? pmAttrs.indentFirstLine : undefined;
   let hangingIndent = pmAttrs.hangingIndent;
-  if (pmAttrs.numPr?.numId && indentLeft === undefined) {
+  if (pmAttrs.numPr?.numId && indentLeft === undefined && indentFirstLine === undefined) {
     // Fallback: calculate indentation based on level
+    // An authored first-line or hanging position is already a complete list
+    // marker anchor. Adding a synthetic left indent would shift that anchor a
+    // second time, while tab stops still resolve from the paragraph margin.
     // Each level indents 0.5 inch (720 twips) more
     const level = pmAttrs.numPr.ilvl ?? 0;
     // Base indentation: 0.5 inch (720 twips) per level
@@ -1565,6 +1647,15 @@ function convertParagraphAttrs(
   // Page break control
   if (pmAttrs.pageBreakBefore) {
     attrs.pageBreakBefore = true;
+  }
+  if (pmAttrs.kinsoku !== undefined && pmAttrs.kinsoku !== null) {
+    attrs.kinsoku = pmAttrs.kinsoku;
+  }
+  if (pmAttrs.overflowPunctuation !== undefined && pmAttrs.overflowPunctuation !== null) {
+    attrs.overflowPunctuation = pmAttrs.overflowPunctuation;
+  }
+  if (pmAttrs.suppressAutoHyphens !== undefined && pmAttrs.suppressAutoHyphens !== null) {
+    attrs.suppressAutoHyphens = pmAttrs.suppressAutoHyphens;
   }
   if (pmAttrs.renderedPageBreakBefore) {
     attrs.renderedPageBreakBefore = true;
@@ -1698,6 +1789,12 @@ function convertParagraphAttrs(
   if (pmAttrs.listMarkerFontSize) {
     attrs.listMarkerFontSize = pmAttrs.listMarkerFontSize;
   }
+  if (pmAttrs.listMarkerBold !== null && pmAttrs.listMarkerBold !== undefined) {
+    attrs.listMarkerBold = pmAttrs.listMarkerBold;
+  }
+  if (pmAttrs.listMarkerAlignment) {
+    attrs.listMarkerAlignment = pmAttrs.listMarkerAlignment;
+  }
   if (pmAttrs.listMarkerSuffix) {
     attrs.listMarkerSuffix = pmAttrs.listMarkerSuffix;
   }
@@ -1722,7 +1819,6 @@ function convertParagraphAttrs(
   if (defaultTabStopTwips !== undefined) {
     attrs.defaultTabStopTwips = defaultTabStopTwips;
   }
-
   // Default font for empty paragraph measurement (from style's rPr / pPr/rPr)
   const dtf = pmAttrs.defaultTextFormatting as
     | { fontSize?: number; fontFamily?: { ascii?: string; hAnsi?: string } }
@@ -1790,9 +1886,29 @@ function convertParagraph(
     options.originalListAbstractCounters,
     options.originalListSeenNumIds,
   );
+  if (options.lineBreakRules) {
+    attrs.lineBreakRules = options.lineBreakRules;
+  }
+  if (options.automaticHyphenation) {
+    attrs.automaticHyphenation = options.automaticHyphenation;
+  }
   const defaultTextFormatting = pmAttrs.defaultTextFormatting as TextFormatting | undefined;
   if (runs.length === 0) {
+    const hasDirectParagraphFormatting =
+      pmAttrs._originalFormatting &&
+      Object.entries(pmAttrs._originalFormatting).some(
+        ([key, value]) => key !== "runProperties" && value !== undefined && value !== null,
+      );
+    if (hasDirectParagraphFormatting) {
+      attrs.hasDirectParagraphFormatting = true;
+    }
     const paragraphMarkFormatting = pmAttrs._originalFormatting?.runProperties;
+    if (
+      paragraphMarkFormatting &&
+      Object.values(paragraphMarkFormatting).some((value) => value !== undefined && value !== null)
+    ) {
+      attrs.hasDirectParagraphMarkFormatting = true;
+    }
     if (paragraphMarkFormatting?.fontSize !== undefined) {
       attrs.defaultFontSize = paragraphMarkFormatting.fontSize / 2;
     }
@@ -1808,10 +1924,22 @@ function convertParagraph(
       attrs.listMarkerHidden = true;
     }
   }
+  const hasVisibleParagraphPayload =
+    (attrs.listMarker !== undefined && !attrs.listMarkerHidden) ||
+    attrs.borders?.top !== undefined ||
+    attrs.borders?.bottom !== undefined ||
+    attrs.borders?.left !== undefined ||
+    attrs.borders?.right !== undefined ||
+    attrs.borders?.between !== undefined ||
+    attrs.borders?.bar !== undefined ||
+    attrs.shading !== undefined;
+  if (runs.length === 0 && pmAttrs._pageBreakCarrier === true && !hasVisibleParagraphPayload) {
+    attrs.suppressEmptyParagraphHeight = true;
+  }
 
   const bookmarkNames = pmAttrs.bookmarks?.map((b) => b.name);
 
-  return {
+  const block: ParagraphBlock = {
     kind: "paragraph",
     id: nextBlockId(),
     runs,
@@ -1821,6 +1949,106 @@ function convertParagraph(
     pmStart: startPos,
     pmEnd: startPos + node.nodeSize,
   };
+  const frame = pmAttrs._originalFormatting?.frame;
+  if (frame !== undefined && frame.dropCap !== "drop" && frame.dropCap !== "margin") {
+    setParagraphFrame(block, {
+      ...(frame.width !== undefined ? { width: twipsToPixels(frame.width) } : {}),
+      ...(frame.height !== undefined ? { height: twipsToPixels(frame.height) } : {}),
+      ...(frame.hSpace !== undefined ? { hSpace: twipsToPixels(frame.hSpace) } : {}),
+      ...(frame.vSpace !== undefined ? { vSpace: twipsToPixels(frame.vSpace) } : {}),
+      ...(frame.hAnchor !== undefined ? { hAnchor: frame.hAnchor } : {}),
+      ...(frame.vAnchor !== undefined ? { vAnchor: frame.vAnchor } : {}),
+      ...(frame.x !== undefined ? { x: twipsToPixels(frame.x) } : {}),
+      ...(frame.y !== undefined ? { y: twipsToPixels(frame.y) } : {}),
+      ...(frame.xAlign !== undefined ? { xAlign: frame.xAlign } : {}),
+      ...(frame.yAlign !== undefined ? { yAlign: frame.yAlign } : {}),
+      ...(frame.wrap !== undefined ? { wrap: frame.wrap } : {}),
+    });
+  }
+  return block;
+}
+
+/**
+ * Word keeps terminal empty body paragraphs after a final table as editable
+ * anchors, but they do not create a page of their own. Preserve every block
+ * and PM range while collapsing only the contiguous, run-free suffix; empty
+ * paragraphs elsewhere still retain their normal line height.
+ */
+function isPaintlessTerminalParagraph(block: FlowBlock | undefined): block is ParagraphBlock {
+  if (block?.kind !== "paragraph" || block.runs.length !== 0) {
+    return false;
+  }
+
+  const attrs = block.attrs;
+  return !(
+    (attrs?.listMarker !== undefined && !attrs.listMarkerHidden) ||
+    attrs?.borders?.top ||
+    attrs?.borders?.bottom ||
+    attrs?.borders?.left ||
+    attrs?.borders?.right ||
+    attrs?.borders?.between ||
+    attrs?.borders?.bar ||
+    attrs?.shading ||
+    attrs?.spacingExplicit?.before ||
+    attrs?.spacingExplicit?.after ||
+    attrs?.pageBreakBefore ||
+    attrs?.renderedPageBreakBefore
+  );
+}
+
+function suppressTerminalEmptyParagraphsAfterTable(blocks: FlowBlock[]): void {
+  let suffixStart = blocks.length;
+  while (suffixStart > 0 && isPaintlessTerminalParagraph(blocks[suffixStart - 1])) {
+    suffixStart -= 1;
+  }
+
+  if (
+    suffixStart === blocks.length ||
+    suffixStart === 0 ||
+    blocks[suffixStart - 1]?.kind !== "table"
+  ) {
+    return;
+  }
+
+  for (let index = suffixStart; index < blocks.length; index += 1) {
+    const block = blocks[index];
+    if (isPaintlessTerminalParagraph(block)) {
+      block.attrs = { ...block.attrs, suppressEmptyParagraphHeight: true };
+    }
+  }
+}
+
+function suppressFinalParagraphInRepeatedEmptySuffix(blocks: FlowBlock[]): void {
+  let suffixStart = blocks.length;
+  while (suffixStart > 0 && isPaintlessTerminalParagraph(blocks[suffixStart - 1])) {
+    suffixStart -= 1;
+  }
+
+  if (
+    suffixStart === 0 ||
+    blocks.length - suffixStart < 2 ||
+    blocks[suffixStart - 1]?.kind === "table"
+  ) {
+    return;
+  }
+
+  const finalBlock = blocks.at(-1);
+  if (isPaintlessTerminalParagraph(finalBlock)) {
+    finalBlock.attrs = { ...finalBlock.attrs, suppressEmptyParagraphHeight: true };
+  }
+}
+
+function reserveLeadingEmptyOutlineHeight(blocks: FlowBlock[]): void {
+  const firstBlock = blocks.at(0);
+  if (
+    firstBlock?.kind !== "paragraph" ||
+    firstBlock.runs.length !== 0 ||
+    firstBlock.attrs?.outlineLevel !== 0
+  ) {
+    return;
+  }
+
+  firstBlock.attrs = { ...firstBlock.attrs, reserveEmptyOutlineHeight: true };
 }
 
 /**
@@ -1828,9 +2056,7 @@ function convertParagraph(
  * OOXML stores border widths in eighths of a point.
  */
 function borderWidthToPixels(eighthsOfPoint: number): number {
-  // 1 point = 1.333 pixels at 96 DPI
-  // eighths of a point: divide by 8 first
-  return Math.max(1, Math.round((eighthsOfPoint / 8) * 1.333));
+  return pointsToPixels(eighthsOfPoint / 8);
 }
 
 // OOXML border style → CSS border-style mapping
@@ -1875,7 +2101,7 @@ export function convertBorderSpecToLayout(
   }
   const result: BorderStyle = {
     style: OOXML_TO_CSS_BORDER[border.style] || "solid",
-    width: borderWidthToPixels(border.size ?? 0),
+    width: border.size === undefined ? 1 : borderWidthToPixels(border.size),
     color: border.color
       ? resolveColor(border.color as Parameters<typeof resolveColor>[0], theme)
       : "#000000",
@@ -1919,7 +2145,21 @@ function extractCellBorders(
   for (const side of sides) {
     const border = borders[side];
     const converted = border ? convertBorderSpecToLayout(border, theme) : undefined;
-    result[side] = converted ?? { width: 0, style: "none" };
+    if (!converted) {
+      result[side] = { width: 0, style: "none" };
+      continue;
+    }
+
+    result[side] = border?.size === 0 ? { ...converted, width: 0 } : converted;
+  }
+
+  const diagonalSides = ["topLeftToBottomRight", "topRightToBottomLeft"] as const;
+  for (const side of diagonalSides) {
+    const border = borders[side];
+    const converted = border ? convertBorderSpecToLayout(border, theme) : undefined;
+    if (converted) {
+      result[side] = converted;
+    }
   }
 
   return Object.keys(result).length > 0 ? result : undefined;
@@ -1949,17 +2189,20 @@ function convertTableCell(
       blocks.push(block);
     } else if (child.type.name === "table") {
       blocks.push(convertTable(child, offset, options));
+    } else if (child.type.name === "textBox") {
+      blocks.push(convertTextBoxNode(child, offset, options));
     }
     offset += child.nodeSize;
   });
 
-  // A structurally empty paragraph appended after real cell content is the
-  // cell-end marker in Word's layout model, not another visible blank line.
-  // Keep the paragraph as a zero-height anchor for editing/positions. A cell
-  // whose only paragraph is empty still needs Word's normal empty-line floor.
+  // A table cell whose final block is a nested table needs a trailing paragraph
+  // as its editable cell-end marker. Keep that marker as a zero-height anchor.
+  // Empty paragraphs after ordinary prose are authored content and retain their
+  // normal line height.
   const trailingBlock = blocks.at(-1);
+  const precedingBlock = blocks.at(-2);
   if (
-    blocks.length > 1 &&
+    precedingBlock?.kind === "table" &&
     trailingBlock?.kind === "paragraph" &&
     trailingBlock.runs.every((run) => run.kind === "text" && run.text.length === 0)
   ) {
@@ -1996,7 +2239,7 @@ function convertTableCell(
 
   const cell: TableCell = {
     id: nextBlockId(),
-    blocks,
+    blocks: groupParagraphFrames(blocks, nextBlockId),
     colSpan: attrs.colspan,
     rowSpan: attrs.rowspan,
     padding,
@@ -2006,6 +2249,9 @@ function convertTableCell(
   }
   if (attrs.verticalAlign) {
     cell.verticalAlign = attrs.verticalAlign;
+  }
+  if (attrs.textDirection) {
+    cell.textDirection = attrs.textDirection;
   }
   if (attrs.backgroundColor) {
     cell.background = `#${attrs.backgroundColor}`;
@@ -2050,6 +2296,12 @@ function convertTableRow(
     id: nextBlockId(),
     cells,
   };
+  if (attrs._originalFormatting?.gridBefore) {
+    row.gridBefore = attrs._originalFormatting.gridBefore;
+  }
+  if (attrs._originalFormatting?.gridAfter) {
+    row.gridAfter = attrs._originalFormatting.gridAfter;
+  }
   if (attrs.height) {
     row.height = twipsToPixels(attrs.height);
   }
@@ -2058,6 +2310,9 @@ function convertTableRow(
   }
   if (attrs.isHeader) {
     row.isHeader = attrs.isHeader;
+  }
+  if (attrs._originalFormatting?.cantSplit) {
+    row.cantSplit = true;
   }
   if (attrs.hidden) {
     row.hidden = attrs.hidden;
@@ -2108,11 +2363,20 @@ function convertTable(node: PMNode, startPos: number, options: ToFlowBlocksOptio
   // toggle it — so reading the preserved formatting is sufficient
   // (eigenpal/docx-editor#940).
   const originalFormatting = attrs._originalFormatting as
-    | { indent?: { value: number; type: string }; bidi?: boolean }
+    | {
+        indent?: { value: number; type: string };
+        bidi?: boolean;
+        layout?: "fixed" | "autofit";
+      }
     | undefined;
+  const resolvedIndent = attrs._resolvedIndent as
+    | { value: number; type: string }
+    | null
+    | undefined;
+  const effectiveIndent = resolvedIndent ?? originalFormatting?.indent;
   const indentPx =
-    originalFormatting?.indent?.value && originalFormatting.indent.type === "dxa"
-      ? twipsToPixels(originalFormatting.indent.value)
+    effectiveIndent?.value !== undefined && effectiveIndent?.type === "dxa"
+      ? twipsToPixels(effectiveIndent.value)
       : undefined;
 
   const floating = attrs.floating as
@@ -2181,6 +2445,9 @@ function convertTable(node: PMNode, startPos: number, options: ToFlowBlocksOptio
   }
   if (widthType !== undefined) {
     tableBlock.widthType = widthType;
+  }
+  if (originalFormatting?.layout !== undefined) {
+    tableBlock.layout = originalFormatting.layout;
   }
   if (justification) {
     tableBlock.justification = justification;
@@ -2277,14 +2544,18 @@ function convertTextBoxNode(
   opts: ToFlowBlocksOptions,
 ): TextBoxBlock {
   const attrs = expectTextBoxAttrs(node);
-  const contentBlocks: ParagraphBlock[] = [];
+  const contentBlocks: (ParagraphBlock | TableBlock)[] = [];
 
-  // Convert child paragraphs inside the text box
+  // Convert child blocks inside the text box
   // oxlint-disable-next-line unicorn/no-array-for-each -- ProseMirror Node.forEach
   node.forEach((child, offset) => {
+    const childPos = startPos + 1 + offset;
     if (child.type.name === "paragraph") {
-      const block = convertParagraph(child, startPos + 1 + offset, opts);
-      contentBlocks.push(block);
+      contentBlocks.push(convertParagraph(child, childPos, opts));
+      return;
+    }
+    if (child.type.name === "table") {
+      contentBlocks.push(convertTable(child, childPos, opts));
     }
   });
 
@@ -2304,6 +2575,9 @@ function convertTextBoxNode(
   };
   if (attrs.height !== undefined) {
     textBox.height = attrs.height;
+  }
+  if (attrs.autoFit !== undefined) {
+    textBox.autoFit = attrs.autoFit;
   }
   if (attrs.fillColor !== undefined) {
     textBox.fillColor = attrs.fillColor;
@@ -2511,14 +2785,51 @@ export function toFlowBlocks(doc: PMNode, options: ToFlowBlocksOptions = {}): Fl
 
     switch (node.type.name) {
       case "paragraph": {
-        const block = convertParagraph(node, pos, opts);
         const pmAttrs = expectParagraphAttrs(node);
+        const secProps = pmAttrs._sectionProperties as SectionProperties | undefined;
+        const hasSectionBreak =
+          secProps !== undefined ||
+          (pmAttrs.sectionBreakType !== null && pmAttrs.sectionBreakType !== undefined);
+        const hasListFormatting =
+          (pmAttrs.numPr !== null && pmAttrs.numPr !== undefined) ||
+          (pmAttrs.listMarker !== null && pmAttrs.listMarker !== undefined);
+        const firstChild = node.firstChild;
+        const startsWithColumnBreak =
+          firstChild?.type.name === "hardBreak" &&
+          expectHardBreakAttrs(firstChild).breakType === "column";
+        const isStandaloneColumnBreak = node.childCount === 1 && startsWithColumnBreak;
 
-        trackedPush(block);
+        if (isStandaloneColumnBreak) {
+          const columnBreak: ColumnBreakBlock = {
+            kind: "columnBreak",
+            id: nextBlockId(),
+            pmStart: pos,
+            pmEnd: pos + node.nodeSize,
+          };
+          trackedPush(columnBreak);
+        } else if (startsWithColumnBreak && firstChild) {
+          const columnBreak: ColumnBreakBlock = {
+            kind: "columnBreak",
+            id: nextBlockId(),
+            pmStart: pos + 1,
+            pmEnd: pos + 1 + firstChild.nodeSize,
+          };
+          trackedPush(columnBreak);
+
+          const paragraph = convertParagraph(node, pos, opts);
+          if (paragraph.runs.at(0)?.kind === "lineBreak") {
+            paragraph.runs.shift();
+          }
+          trackedPush(paragraph);
+        } else if (node.content.size > 0 || hasListFormatting || !hasSectionBreak) {
+          // An empty paragraph carrying w:sectPr is Word's structural section
+          // marker; it does not paint an additional blank line. Text-bearing
+          // section-ending paragraphs still participate in normal layout.
+          trackedPush(convertParagraph(node, pos, opts));
+        }
 
         // Emit section break block if this paragraph ends a section
-        const secProps = pmAttrs._sectionProperties as SectionProperties | undefined;
-        if (secProps || pmAttrs.sectionBreakType) {
+        if (hasSectionBreak) {
           const sectionBreak: SectionBreakBlock = {
             kind: "sectionBreak",
             id: nextBlockId(),
@@ -2563,17 +2874,9 @@ export function toFlowBlocks(doc: PMNode, options: ToFlowBlocksOptions = {}): Fl
               }
             }
             // Populate columns
-            const colCount = secProps.columnCount ?? 1;
-            if (colCount > 1) {
-              const cols: ColumnLayout = {
-                count: colCount,
-                gap: twipsToPixels(secProps.columnSpace ?? 720),
-                equalWidth: secProps.equalWidth ?? true,
-              };
-              if (secProps.separator !== undefined) {
-                cols.separator = secProps.separator;
-              }
-              sectionBreak.columns = cols;
+            const columns = getColumns(secProps);
+            if (columns) {
+              sectionBreak.columns = columns;
             }
           }
 
@@ -2616,7 +2919,10 @@ export function toFlowBlocks(doc: PMNode, options: ToFlowBlocksOptions = {}): Fl
     visit(node, offset + nodeOffset);
   });
 
-  return mergeRunInParagraphs(blocks);
+  reserveLeadingEmptyOutlineHeight(blocks);
+  suppressTerminalEmptyParagraphsAfterTable(blocks);
+  suppressFinalParagraphInRepeatedEmptySuffix(blocks);
+  return groupParagraphFrames(mergeRunInParagraphs(blocks), nextBlockId);
 }
 
 /**

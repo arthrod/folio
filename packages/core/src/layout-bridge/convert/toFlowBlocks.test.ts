@@ -1,14 +1,246 @@
 import { describe, expect, test } from "bun:test";
 
+import { getTextBoxGroupId } from "../../layout-engine/textBoxGroup";
 import { schema } from "../../prosemirror/schema";
 import { AUTO_PARAGRAPH_SPACING_PX } from "../../utils/units";
 import { toFlowBlocks } from "./toFlowBlocks";
 
 describe("toFlowBlocks paragraph formatting", () => {
+  test("retains paragraph suppression and stamps the document hyphenation policy", () => {
+    const paragraph = toFlowBlocks(
+      schema.node("doc", null, [
+        schema.node("paragraph", { suppressAutoHyphens: true }, [schema.text("Hyphenation")]),
+      ]),
+      {
+        automaticHyphenation: {
+          enabled: true,
+          doNotHyphenateCaps: true,
+          consecutiveLineLimit: 2,
+        },
+      },
+    ).at(0);
+
+    expect(paragraph).toMatchObject({
+      kind: "paragraph",
+      attrs: {
+        suppressAutoHyphens: true,
+        automaticHyphenation: {
+          enabled: true,
+          doNotHyphenateCaps: true,
+          consecutiveLineLimit: 2,
+        },
+      },
+    });
+  });
+
+  test("does not add a default list indent to an authored first-line position", () => {
+    const paragraph = toFlowBlocks(
+      schema.node("doc", null, [
+        schema.node(
+          "paragraph",
+          {
+            numPr: { numId: 1, ilvl: 0 },
+            listMarker: "%1)",
+            indentFirstLine: 780,
+            tabs: [{ position: 1200, alignment: "left" }],
+          },
+          [schema.text("First item")],
+        ),
+      ]),
+    ).at(0);
+
+    expect(paragraph?.attrs?.indent).toEqual({ firstLine: 52 });
+  });
+
+  test("keeps the default indent for a list without authored positioning", () => {
+    const paragraph = toFlowBlocks(
+      schema.node("doc", null, [
+        schema.node("paragraph", { numPr: { numId: 1, ilvl: 1 }, listMarker: "%1.%2." }, [
+          schema.text("Nested item"),
+        ]),
+      ]),
+    ).at(0);
+
+    expect(paragraph?.attrs?.indent).toEqual({ left: 96, hanging: 24 });
+  });
+
+  test("keeps an explicit list-marker bold override", () => {
+    const paragraph = toFlowBlocks(
+      schema.node("doc", null, [
+        schema.node(
+          "paragraph",
+          { numPr: { numId: 1, ilvl: 0 }, listMarker: "%1.", listMarkerBold: false },
+          [schema.text("List item")],
+        ),
+      ]),
+    ).at(0);
+
+    expect(paragraph?.attrs?.listMarkerBold).toBe(false);
+  });
+
+  test("preserves native frame wrap spacing on the positioned container", () => {
+    const frame = {
+      width: 3600,
+      height: 1440,
+      hSpace: 144,
+      vSpace: 72,
+      hAnchor: "page" as const,
+      vAnchor: "text" as const,
+      x: 720,
+      y: 144,
+      wrap: "around" as const,
+    };
+    const blocks = toFlowBlocks(
+      schema.node("doc", null, [
+        schema.node("paragraph", { _originalFormatting: { frame } }, [schema.text("First")]),
+        schema.node("paragraph", { _originalFormatting: { frame } }, [schema.text("Second")]),
+        schema.node("paragraph", null, [schema.text("Body")]),
+      ]),
+    );
+
+    expect(blocks.map((block) => block.kind)).toEqual(["textBox", "paragraph"]);
+    expect(blocks.at(0)).toMatchObject({
+      kind: "textBox",
+      width: 240,
+      height: 96,
+      displayMode: "float",
+      wrapType: "square",
+      position: {
+        horizontal: { relativeTo: "page", posOffset: 457200 },
+        vertical: { relativeTo: "paragraph", posOffset: 91440 },
+      },
+      content: [{ kind: "paragraph" }, { kind: "paragraph" }],
+    });
+    const textBox = blocks.at(0);
+    expect(textBox?.kind).toBe("textBox");
+    if (textBox?.kind !== "textBox") {
+      return;
+    }
+    expect(textBox.distTop).toBeCloseTo(4.8);
+    expect(textBox.distBottom).toBeCloseTo(4.8);
+    expect(textBox.distLeft).toBeCloseTo(9.6);
+    expect(textBox.distRight).toBeCloseTo(9.6);
+  });
+
+  test("preserves tables in text box source order and position space", () => {
+    const first = schema.node("paragraph", null, [schema.text("Before")]);
+    const table = schema.node("table", null, [
+      schema.node("tableRow", null, [
+        schema.node("tableCell", null, [schema.node("paragraph", null, [schema.text("Cell")])]),
+      ]),
+    ]);
+    const last = schema.node("paragraph", null, [schema.text("After")]);
+    const doc = schema.node("doc", null, [
+      schema.node("textBox", { width: 240 }, [first, table, last]),
+    ]);
+
+    const textBox = toFlowBlocks(doc).at(0);
+    if (textBox?.kind !== "textBox") {
+      throw new Error("Expected text box block");
+    }
+
+    expect(textBox.content.map((block) => block.kind)).toEqual(["paragraph", "table", "paragraph"]);
+    expect(textBox.content.map((block) => block.pmStart)).toEqual([
+      1,
+      1 + first.nodeSize,
+      1 + first.nodeSize + table.nodeSize,
+    ]);
+    expect(textBox.content.at(1)).toMatchObject({
+      kind: "table",
+      rows: [{ cells: [{ blocks: [{ kind: "paragraph" }] }] }],
+    });
+  });
+
+  test("keeps drop-cap frames in normal paragraph flow", () => {
+    const blocks = toFlowBlocks(
+      schema.node("doc", null, [
+        schema.node(
+          "paragraph",
+          { _originalFormatting: { frame: { dropCap: "drop", lines: 3 } } },
+          [schema.text("Opening paragraph")],
+        ),
+      ]),
+    );
+
+    expect(blocks.map((block) => block.kind)).toEqual(["paragraph"]);
+  });
+
+  test("does not paint an empty structural section-break paragraph", () => {
+    const doc = schema.node("doc", null, [
+      schema.node("paragraph", { sectionBreakType: "continuous" }),
+      schema.node("paragraph", null, [schema.text("Next section")]),
+    ]);
+
+    const blocks = toFlowBlocks(doc);
+
+    expect(blocks.map((block) => block.kind)).toEqual(["sectionBreak", "paragraph"]);
+  });
+
+  test("paints text in a paragraph that also ends a section", () => {
+    const doc = schema.node("doc", null, [
+      schema.node("paragraph", { sectionBreakType: "continuous" }, [
+        schema.text("Section ending text"),
+      ]),
+      schema.node("paragraph", null, [schema.text("Next section")]),
+    ]);
+
+    const blocks = toFlowBlocks(doc);
+
+    expect(blocks.map((block) => block.kind)).toEqual(["paragraph", "sectionBreak", "paragraph"]);
+  });
+
+  test("paints an empty list item that also ends a section", () => {
+    const doc = schema.node("doc", null, [
+      schema.node("paragraph", {
+        sectionBreakType: "continuous",
+        numPr: { numId: 1, ilvl: 0 },
+        listMarker: "1.",
+      }),
+      schema.node("paragraph", null, [schema.text("Next section")]),
+    ]);
+
+    const blocks = toFlowBlocks(doc);
+
+    expect(blocks.map((block) => block.kind)).toEqual(["paragraph", "sectionBreak", "paragraph"]);
+  });
+
+  test("emits a structural break for a standalone column break paragraph", () => {
+    const doc = schema.node("doc", null, [
+      schema.node("paragraph", null, [schema.text("First column")]),
+      schema.node("paragraph", null, [schema.node("hardBreak", { breakType: "column" })]),
+      schema.node("paragraph", null, [schema.text("Second column")]),
+    ]);
+
+    const blocks = toFlowBlocks(doc);
+
+    expect(blocks.map((block) => block.kind)).toEqual(["paragraph", "columnBreak", "paragraph"]);
+    expect(blocks.at(1)).toMatchObject({ kind: "columnBreak", pmStart: 14, pmEnd: 17 });
+  });
+
+  test("emits a structural break before text after a leading column break", () => {
+    const doc = schema.node("doc", null, [
+      schema.node("paragraph", null, [schema.text("First column")]),
+      schema.node("paragraph", null, [
+        schema.node("hardBreak", { breakType: "column" }),
+        schema.text("Second column"),
+      ]),
+    ]);
+
+    const blocks = toFlowBlocks(doc);
+
+    expect(blocks.map((block) => block.kind)).toEqual(["paragraph", "columnBreak", "paragraph"]);
+    expect(blocks.at(1)).toMatchObject({ kind: "columnBreak", pmStart: 15, pmEnd: 16 });
+    expect(blocks.at(2)).toMatchObject({
+      kind: "paragraph",
+      runs: [{ kind: "text", text: "Second column" }],
+    });
+  });
+
   test("empty paragraph measurement uses direct paragraph-mark font metrics", () => {
     const doc = schema.node("doc", null, [
       schema.node("paragraph", {
         styleId: "Heading6",
+        outlineLevel: 0,
         defaultTextFormatting: { fontSize: 22, fontFamily: { ascii: "Calibri" } },
         _originalFormatting: {
           styleId: "Heading6",
@@ -22,6 +254,77 @@ describe("toFlowBlocks paragraph formatting", () => {
     expect(paragraph?.kind).toBe("paragraph");
     expect(paragraph?.attrs?.defaultFontSize).toBe(1);
     expect(paragraph?.attrs?.defaultFontFamily).toBe("Arial");
+    expect(paragraph?.attrs?.outlineLevel).toBe(0);
+    expect(paragraph?.attrs?.reserveEmptyOutlineHeight).toBe(true);
+  });
+
+  test("does not reserve extra outline height away from the start of the story", () => {
+    const blocks = toFlowBlocks(
+      schema.node("doc", null, [
+        schema.node("paragraph", null, [schema.text("content")]),
+        schema.node("paragraph", { outlineLevel: 0 }),
+      ]),
+    );
+
+    expect(blocks.at(1)?.attrs?.outlineLevel).toBe(0);
+    expect(blocks.at(1)?.attrs?.reserveEmptyOutlineHeight).toBeUndefined();
+  });
+
+  test("ignores a null outline attribute at the layout boundary", () => {
+    const paragraph = toFlowBlocks(
+      schema.node("doc", null, [schema.node("paragraph", { outlineLevel: null })]),
+    ).at(0);
+
+    expect(paragraph?.attrs?.outlineLevel).toBeUndefined();
+    expect(paragraph?.attrs?.reserveEmptyOutlineHeight).toBeUndefined();
+  });
+
+  test("marks direct formatting on an empty paragraph for spacing layout", () => {
+    const doc = schema.node("doc", null, [
+      schema.node("paragraph", {
+        spaceAfter: 200,
+        _originalFormatting: { indentLeft: 720 },
+      }),
+    ]);
+
+    const paragraph = toFlowBlocks(doc).at(0);
+
+    expect(paragraph?.kind).toBe("paragraph");
+    expect(paragraph?.attrs?.hasDirectParagraphFormatting).toBe(true);
+  });
+
+  test("does not mark a bare empty paragraph as directly formatted", () => {
+    const doc = schema.node("doc", null, [schema.node("paragraph")]);
+
+    const paragraph = toFlowBlocks(doc).at(0);
+
+    expect(paragraph?.kind).toBe("paragraph");
+    expect(paragraph?.attrs?.hasDirectParagraphFormatting).toBeUndefined();
+  });
+
+  test("tracks paragraph-mark character styling separately from paragraph formatting", () => {
+    const doc = schema.node("doc", null, [
+      schema.node("paragraph", {
+        _originalFormatting: { runProperties: { fontSize: 24 } },
+      }),
+    ]);
+
+    const paragraph = toFlowBlocks(doc).at(0);
+
+    expect(paragraph?.kind).toBe("paragraph");
+    expect(paragraph?.attrs?.hasDirectParagraphFormatting).toBeUndefined();
+    expect(paragraph?.attrs?.hasDirectParagraphMarkFormatting).toBe(true);
+  });
+
+  test("does not mark an empty paragraph-mark property bag as directly formatted", () => {
+    const doc = schema.node("doc", null, [
+      schema.node("paragraph", { _originalFormatting: { runProperties: {} } }),
+    ]);
+
+    const paragraph = toFlowBlocks(doc).at(0);
+
+    expect(paragraph?.kind).toBe("paragraph");
+    expect(paragraph?.attrs?.hasDirectParagraphMarkFormatting).toBeUndefined();
   });
 
   test("preserves Word rendered-page-break hints for layout", () => {
@@ -55,6 +358,86 @@ describe("toFlowBlocks paragraph formatting", () => {
     expect(para?.kind).toBe("paragraph");
     if (para?.kind === "paragraph") {
       expect(para.paraId).toBe("1A2B3C4D");
+    }
+  });
+
+  test("groups consecutive page-anchored frame paragraphs into one positioned container", () => {
+    const frame = {
+      width: 1440,
+      height: 720,
+      hAnchor: "page" as const,
+      vAnchor: "page" as const,
+      x: 720,
+      y: 1440,
+      wrap: "around" as const,
+    };
+    const doc = schema.node("doc", null, [
+      schema.node("paragraph", { _originalFormatting: { frame } }, [schema.text("first")]),
+      schema.node("paragraph", { _originalFormatting: { frame } }, [schema.text("second")]),
+      schema.node("paragraph", null, [schema.text("body")]),
+    ]);
+
+    const blocks = toFlowBlocks(doc);
+
+    expect(blocks.map((block) => block.kind)).toEqual(["textBox", "paragraph"]);
+    const framed = blocks.at(0);
+    if (framed?.kind !== "textBox") {
+      throw new Error("Expected grouped paragraph frame");
+    }
+    expect(framed).toMatchObject({
+      width: 96,
+      height: 48,
+      margins: { top: 0, right: 0, bottom: 0, left: 0 },
+      displayMode: "float",
+      wrapType: "square",
+      position: {
+        horizontal: { relativeTo: "page", posOffset: 457_200 },
+        vertical: { relativeTo: "page", posOffset: 914_400 },
+      },
+    });
+    expect(
+      framed.content.map((contentBlock) =>
+        contentBlock.kind === "paragraph" ? contentBlock.runs.at(0) : undefined,
+      ),
+    ).toMatchObject([
+      { kind: "text", text: "first" },
+      { kind: "text", text: "second" },
+    ]);
+  });
+
+  test("keeps page-anchored frames in one wrap set across an empty anchor paragraph", () => {
+    const frame = {
+      width: 1440,
+      height: 720,
+      hAnchor: "page" as const,
+      vAnchor: "page" as const,
+      x: 720,
+      y: 1440,
+      wrap: "around" as const,
+    };
+    const doc = schema.node("doc", null, [
+      schema.node("paragraph", { _originalFormatting: { frame } }, [schema.text("left")]),
+      schema.node("paragraph", { paragraphStyle: "Anchor" }),
+      schema.node("paragraph", { _originalFormatting: { frame: { ...frame, x: 2880 } } }, [
+        schema.text("right"),
+      ]),
+      schema.node("paragraph", null, [schema.text("body")]),
+    ]);
+
+    const blocks = toFlowBlocks(doc);
+    const left = blocks.at(0);
+    const right = blocks.at(2);
+
+    expect(blocks.map((block) => block.kind)).toEqual([
+      "textBox",
+      "paragraph",
+      "textBox",
+      "paragraph",
+    ]);
+    expect(left?.kind).toBe("textBox");
+    expect(right?.kind).toBe("textBox");
+    if (left?.kind === "textBox" && right?.kind === "textBox") {
+      expect(getTextBoxGroupId(right)).toBe(getTextBoxGroupId(left));
     }
   });
 
@@ -127,10 +510,10 @@ describe("toFlowBlocks paragraph formatting", () => {
     expect(paragraph?.attrs?.indent).toBeUndefined();
   });
 
-  test("surfaces auto spacing (beforeAutospacing/afterAutospacing) as ~14px for pagination", () => {
+  test("surfaces auto spacing (beforeAutospacing/afterAutospacing) as 14pt for pagination", () => {
     // eigenpal/docx-editor#823: the paged layout reads spacing from the flow
     // block, so auto spacing must override the imported before/after (Word
-    // writes `0`) and render the ~14px auto gap while still unedited.
+    // writes `0`) and render the 14pt auto gap while still unedited.
     const doc = schema.node("doc", null, [
       schema.node(
         "paragraph",
@@ -154,6 +537,7 @@ describe("toFlowBlocks paragraph formatting", () => {
     expect(paragraph?.kind).toBe("paragraph");
     expect(paragraph?.attrs?.spacing?.before).toBe(AUTO_PARAGRAPH_SPACING_PX);
     expect(paragraph?.attrs?.spacing?.after).toBe(AUTO_PARAGRAPH_SPACING_PX);
+    expect(paragraph?.attrs?.automaticSpacing).toEqual({ before: true, after: true });
   });
 
   test("an explicit spacing edit overrides imported auto-spacing (#823)", () => {
@@ -176,7 +560,8 @@ describe("toFlowBlocks paragraph formatting", () => {
 
     const paragraph = toFlowBlocks(doc).at(0);
 
-    expect(paragraph?.attrs?.spacing?.before).toBe(16); // 240 twips, not the 14px auto gap
+    expect(paragraph?.attrs?.spacing?.before).toBe(16); // 240 twips, not the 14pt auto gap
+    expect(paragraph?.attrs?.automaticSpacing).toBeUndefined();
   });
 
   test("auto spacing still applies when a style supplies spacing the import lacked (#823)", () => {
@@ -238,7 +623,7 @@ describe("toFlowBlocks paragraph formatting", () => {
 
   test("keeps auto spacing on an empty paragraph by marking it explicit (#823)", () => {
     // An imported empty paragraph whose only spacing is auto-spacing must keep
-    // the ~14px gap; without `spacingExplicit` the empty-paragraph collapse
+    // the 14pt gap; without `spacingExplicit` the empty-paragraph collapse
     // rule in the layout engine would suppress it.
     const doc = schema.node("doc", null, [
       schema.node(
@@ -279,6 +664,26 @@ describe("toFlowBlocks paragraph formatting", () => {
     expect(paragraph?.attrs?.spacingExplicit?.after).toBe(true);
   });
 
+  test("keeps implicit default-style spacing on an empty paragraph", () => {
+    const doc = schema.node("doc", null, [
+      schema.node(
+        "paragraph",
+        {
+          spaceBefore: 120,
+          spaceAfter: 160,
+          spacingFromImplicitDefaultStyle: { before: true, after: true },
+        },
+        [],
+      ),
+    ]);
+
+    const paragraph = toFlowBlocks(doc).at(0);
+
+    expect(paragraph?.attrs?.spacing?.before).toBe(120 / 15);
+    expect(paragraph?.attrs?.spacing?.after).toBe(160 / 15);
+    expect(paragraph?.attrs?.spacingExplicit).toEqual({ before: true, after: true });
+  });
+
   test("suppresses empty hidden list paragraphs and their markers", () => {
     const doc = schema.node("doc", null, [
       schema.node(
@@ -296,6 +701,28 @@ describe("toFlowBlocks paragraph formatting", () => {
 
     expect(paragraph?.attrs?.suppressEmptyParagraphHeight).toBe(true);
     expect(paragraph?.attrs?.listMarkerHidden).toBe(true);
+  });
+
+  test("suppresses a paintless imported page-break carrier", () => {
+    const doc = schema.node("doc", null, [
+      schema.node("paragraph", { _pageBreakCarrier: true, spaceBefore: 360 }),
+    ]);
+
+    const paragraph = toFlowBlocks(doc).at(0);
+
+    expect(paragraph?.attrs?.suppressEmptyParagraphHeight).toBe(true);
+  });
+
+  test("keeps authored empty paragraphs and visible break-carrier markers", () => {
+    const doc = schema.node("doc", null, [
+      schema.node("paragraph", { spaceBefore: 360 }),
+      schema.node("paragraph", { _pageBreakCarrier: true, listMarker: "1." }),
+    ]);
+
+    const blocks = toFlowBlocks(doc);
+
+    expect(blocks.at(0)?.attrs?.suppressEmptyParagraphHeight).toBeUndefined();
+    expect(blocks.at(1)?.attrs?.suppressEmptyParagraphHeight).toBeUndefined();
   });
 
   test("preserves explicit automatic line spacing", () => {
@@ -597,6 +1024,46 @@ describe("toFlowBlocks TOC hyperlink style strip", () => {
 });
 
 describe("toFlowBlocks table cell formatting", () => {
+  test("preserves a zero-size styled cell border as a layout-free hairline", () => {
+    const hairline = { style: "single", size: 0, color: { rgb: "000000" } };
+    const doc = schema.node("doc", null, [
+      schema.node("table", null, [
+        schema.node("tableRow", null, [
+          schema.node("tableCell", { borders: { top: hairline } }, [
+            schema.node("paragraph", null, [schema.text("content")]),
+          ]),
+        ]),
+      ]),
+    ]);
+
+    const table = toFlowBlocks(doc).at(0);
+    if (table?.kind !== "table") {
+      throw new Error("Expected table block");
+    }
+
+    expect(table.rows.at(0)?.cells.at(0)?.borders?.top).toMatchObject({
+      width: 0,
+      style: "solid",
+    });
+  });
+
+  test("carries cantSplit row formatting into layout blocks", () => {
+    const doc = schema.node("doc", null, [
+      schema.node("table", null, [
+        schema.node("tableRow", { _originalFormatting: { cantSplit: true } }, [
+          schema.node("tableCell", null, [schema.node("paragraph")]),
+        ]),
+      ]),
+    ]);
+
+    const table = toFlowBlocks(doc).at(0);
+    if (table?.kind !== "table") {
+      throw new Error("Expected table block");
+    }
+
+    expect(table.rows.at(0)?.cantSplit).toBe(true);
+  });
+
   // Regression eigenpal #424 gap 14: the parser captured w:noWrap and the PM
   // schema carried it, but convertTableCell dropped the field, so cells like
   // case numbers / citations wrapped where Word kept them on one line.
@@ -628,7 +1095,28 @@ describe("toFlowBlocks table cell formatting", () => {
     expect(row.cells.at(1)?.noWrap).toBeUndefined();
   });
 
-  test("suppresses a trailing empty paragraph after real cell content", () => {
+  test("threads the cell text direction into the engine TableCell", () => {
+    const doc = schema.node("doc", null, [
+      schema.node("table", null, [
+        schema.node("tableRow", null, [
+          schema.node("tableCell", { textDirection: "btLr" }, [
+            schema.node("paragraph", null, [schema.text("Rotated cell")]),
+          ]),
+          schema.node("tableCell", null, [schema.node("paragraph")]),
+        ]),
+      ]),
+    ]);
+
+    const table = toFlowBlocks(doc).at(0);
+    if (table?.kind !== "table") {
+      throw new Error("Expected table block");
+    }
+
+    expect(table.rows.at(0)?.cells.at(0)?.textDirection).toBe("btLr");
+    expect(table.rows.at(0)?.cells.at(1)?.textDirection).toBeUndefined();
+  });
+
+  test("keeps an authored trailing empty paragraph after prose cell content", () => {
     const doc = schema.node("doc", null, [
       schema.node("table", null, [
         schema.node("tableRow", null, [
@@ -647,8 +1135,133 @@ describe("toFlowBlocks table cell formatting", () => {
     }
 
     const cells = table.rows.at(0)?.cells;
-    expect(cells?.at(0)?.blocks.at(-1)?.attrs?.suppressEmptyParagraphHeight).toBe(true);
+    expect(cells?.at(0)?.blocks.at(-1)?.attrs?.suppressEmptyParagraphHeight).toBeUndefined();
     expect(cells?.at(1)?.blocks.at(0)?.attrs?.suppressEmptyParagraphHeight).toBeUndefined();
+  });
+
+  test("suppresses the required trailing paragraph after a nested table", () => {
+    const nestedTable = schema.node("table", null, [
+      schema.node("tableRow", null, [
+        schema.node("tableCell", null, [schema.node("paragraph", null, [schema.text("nested")])]),
+      ]),
+    ]);
+    const doc = schema.node("doc", null, [
+      schema.node("table", null, [
+        schema.node("tableRow", null, [
+          schema.node("tableCell", null, [nestedTable, schema.node("paragraph")]),
+        ]),
+      ]),
+    ]);
+
+    const table = toFlowBlocks(doc).at(0);
+    if (table?.kind !== "table") {
+      throw new Error("Expected table block");
+    }
+
+    expect(table.rows.at(0)?.cells.at(0)?.blocks.at(-1)?.attrs?.suppressEmptyParagraphHeight).toBe(
+      true,
+    );
+  });
+
+  test("suppresses a terminal run of empty body paragraphs after a final table", () => {
+    const doc = schema.node("doc", null, [
+      schema.node("table", null, [
+        schema.node("tableRow", null, [
+          schema.node("tableCell", null, [
+            schema.node("paragraph", null, [schema.text("content")]),
+          ]),
+        ]),
+      ]),
+      schema.node("paragraph", { tabs: [{ position: 360, alignment: "left" }] }),
+      schema.node("paragraph", {
+        _originalFormatting: { runProperties: { italic: true } },
+      }),
+    ]);
+
+    const blocks = toFlowBlocks(doc);
+
+    expect(blocks.map((block) => block.kind)).toEqual(["table", "paragraph", "paragraph"]);
+    expect(
+      blocks
+        .slice(1)
+        .map((block) =>
+          block.kind === "paragraph" ? block.attrs?.suppressEmptyParagraphHeight : undefined,
+        ),
+    ).toEqual([true, true]);
+  });
+
+  test("keeps terminal empty paragraph height when the preceding block is prose", () => {
+    const blocks = toFlowBlocks(
+      schema.node("doc", null, [
+        schema.node("paragraph", null, [schema.text("content")]),
+        schema.node("paragraph"),
+      ]),
+    );
+
+    expect(blocks.at(-1)?.attrs?.suppressEmptyParagraphHeight).toBeUndefined();
+  });
+
+  test("keeps one line before the final marker in a repeated terminal empty run", () => {
+    const blocks = toFlowBlocks(
+      schema.node("doc", null, [
+        schema.node("paragraph", null, [schema.text("content")]),
+        schema.node("paragraph"),
+        schema.node("paragraph"),
+      ]),
+    );
+
+    expect(
+      blocks
+        .slice(-2)
+        .map((block) =>
+          block.kind === "paragraph" ? block.attrs?.suppressEmptyParagraphHeight : undefined,
+        ),
+    ).toEqual([undefined, true]);
+  });
+
+  test("keeps terminal empty paragraph height when the document contains only empty paragraphs", () => {
+    const blocks = toFlowBlocks(
+      schema.node("doc", null, [schema.node("paragraph"), schema.node("paragraph")]),
+    );
+
+    expect(blocks.map((block) => block.attrs?.suppressEmptyParagraphHeight)).toEqual([
+      undefined,
+      undefined,
+    ]);
+  });
+
+  test("keeps a visible empty list item after a final table", () => {
+    const blocks = toFlowBlocks(
+      schema.node("doc", null, [
+        schema.node("table", null, [
+          schema.node("tableRow", null, [
+            schema.node("tableCell", null, [schema.node("paragraph")]),
+          ]),
+        ]),
+        schema.node("paragraph", {
+          numPr: { numId: 1, ilvl: 0 },
+          listMarker: "1.",
+        }),
+      ]),
+    );
+
+    expect(blocks.at(-1)?.attrs?.suppressEmptyParagraphHeight).toBeUndefined();
+  });
+
+  test("keeps empty paragraphs between a table and later body content", () => {
+    const blocks = toFlowBlocks(
+      schema.node("doc", null, [
+        schema.node("table", null, [
+          schema.node("tableRow", null, [
+            schema.node("tableCell", null, [schema.node("paragraph")]),
+          ]),
+        ]),
+        schema.node("paragraph"),
+        schema.node("paragraph", null, [schema.text("later content")]),
+      ]),
+    );
+
+    expect(blocks.at(1)?.attrs?.suppressEmptyParagraphHeight).toBeUndefined();
   });
 });
 
@@ -1173,7 +1786,12 @@ describe("toFlowBlocks list numbering", () => {
     if (textBox?.kind !== "textBox") {
       throw new Error("Expected textBox block");
     }
-    expect(textBox.content.at(0)?.attrs?.listMarker).toBe("2.");
+    const contentBlock = textBox.content.at(0);
+    expect(contentBlock?.kind).toBe("paragraph");
+    if (contentBlock?.kind !== "paragraph") {
+      throw new Error("Expected paragraph in text box");
+    }
+    expect(contentBlock.attrs?.listMarker).toBe("2.");
   });
 
   test("carries anchored text-box position into flow blocks", () => {
@@ -1333,5 +1951,51 @@ describe("toFlowBlocks image attribute normalization", () => {
       throw new Error("Expected image run");
     }
     expect(imageRun.opacity).toBe(0.5);
+  });
+
+  test("preserves authored table-cell anchor scope on image runs", () => {
+    const doc = schema.node("doc", null, [
+      schema.node("paragraph", null, [
+        schema.nodes.image.create({
+          src: "media/image.png",
+          width: 100,
+          height: 100,
+          wrapType: "square",
+          displayMode: "float",
+          layoutInCell: false,
+        }),
+      ]),
+    ]);
+
+    const paragraph = toFlowBlocks(doc).at(0);
+    if (paragraph?.kind !== "paragraph") {
+      throw new Error("Expected paragraph block");
+    }
+    const imageRun = paragraph.runs.find((run) => run.kind === "image");
+
+    expect(imageRun?.layoutInCell).toBe(false);
+  });
+
+  test("marks embedded-object previews for exact line-height measurement", () => {
+    const doc = schema.node("doc", null, [
+      schema.node("paragraph", null, [
+        schema.nodes.image.create({
+          src: "media/preview.png",
+          width: 20,
+          height: 18,
+          _docxObjectPreview: true,
+        }),
+      ]),
+    ]);
+
+    const paragraph = toFlowBlocks(doc).at(0);
+    if (paragraph?.kind !== "paragraph") {
+      throw new Error("Expected paragraph block");
+    }
+
+    expect(paragraph.runs.at(0)).toMatchObject({
+      kind: "image",
+      exactLineHeight: true,
+    });
   });
 });

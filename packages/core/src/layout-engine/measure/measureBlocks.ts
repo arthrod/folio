@@ -1,7 +1,18 @@
 import { recordMeasureBlock, recordMeasureBlockError } from "../layoutInstrumentation";
-import { bandTopContentY, isPageFrameRelativeAnchor } from "../textBoxFlow";
+import { isParagraphFrameTextBox } from "../paragraphFrame";
+import {
+  createTableCellFlowState,
+  finishTableCellFlow,
+  placeTableCellBlock,
+} from "./tableCellFlow";
+import { bandFragmentX, bandTopContentY, isPageFrameRelativeAnchor } from "../textBoxFlow";
 import { getTextBoxGroupId } from "../textBoxGroup";
-import { DEFAULT_TEXTBOX_MARGINS, floatingTextBoxReservesBand } from "../types";
+import {
+  DEFAULT_TEXTBOX_MARGINS,
+  floatingTextBoxReservesBand,
+  floatingTextBoxWrapsText,
+  tableColumnsArePinned,
+} from "../types";
 import type {
   FlowBlock,
   ImageBlock,
@@ -10,7 +21,6 @@ import type {
   ParagraphBlock,
   ParagraphMeasure,
   TableBlock,
-  TableCell,
   TableCellMeasure,
   TableMeasure,
   TextBoxBlock,
@@ -19,6 +29,12 @@ import type {
 import { getCachedParagraphMeasure, setCachedParagraphMeasure } from "./cache";
 import { findClearLineY, measureParagraph, MIN_WRAP_SEGMENT_WIDTH } from "./measureParagraph";
 import type { FloatingImageZone } from "./measureParagraph";
+import {
+  buildTableCellGrid,
+  getFirstAvailableColumn,
+  getTableCellVerticalBorderHeight,
+} from "./tableCellGrid";
+import { layoutTextBoxContent } from "./textBoxParagraphLayout";
 
 /**
  * Pseudo-infinite measurement width (px) used for `w:noWrap` table cells so
@@ -41,7 +57,7 @@ const NO_WRAP_MEASURE_WIDTH = 1_000_000;
  * around a background letterhead or a foreground overlay (Codex
  * PR #258 review).
  */
-function isFloatingImageRun(run: ImageRun): boolean {
+function isSideWrappingImageRun(run: ImageRun): boolean {
   const wrapType = run.wrapType;
   const displayMode = run.displayMode;
 
@@ -93,80 +109,6 @@ function resolveTableWidthPx(
   return undefined;
 }
 
-function isInlineFlowImageRun(run: ImageRun): boolean {
-  if (run.displayMode === "float") {
-    return false;
-  }
-
-  if (
-    run.wrapType === "square" ||
-    run.wrapType === "tight" ||
-    run.wrapType === "through" ||
-    run.wrapType === "behind" ||
-    run.wrapType === "inFront"
-  ) {
-    return false;
-  }
-
-  if (run.displayMode === "block" || run.wrapType === "topAndBottom") {
-    return false;
-  }
-
-  return true;
-}
-
-export function measureTableCellBlockVisualHeight(block: FlowBlock, blockMeasure: Measure): number {
-  if (block.kind !== "paragraph" || blockMeasure.kind !== "paragraph") {
-    if ("totalHeight" in blockMeasure) {
-      return blockMeasure.totalHeight;
-    }
-    if ("height" in blockMeasure) {
-      return blockMeasure.height;
-    }
-    return 0;
-  }
-
-  const paragraphBlock = block;
-  const paragraphMeasure = blockMeasure;
-  const nonEmptyRuns = paragraphBlock.runs.filter(
-    (run) => run.kind !== "text" || run.text.replace(/\u00a0/gu, " ").trim().length > 0,
-  );
-  if (paragraphMeasure.lines.length !== 1 || nonEmptyRuns.length === 0) {
-    return paragraphMeasure.totalHeight;
-  }
-
-  const inlineImageRuns: ImageRun[] = [];
-  for (const run of nonEmptyRuns) {
-    if (run.kind !== "image" || !isInlineFlowImageRun(run)) {
-      return paragraphMeasure.totalHeight;
-    }
-    inlineImageRuns.push(run);
-  }
-
-  let maxImageHeight = 0;
-  for (const run of inlineImageRuns) {
-    maxImageHeight = Math.max(maxImageHeight, run.height);
-  }
-  if (inlineImageRuns.length === 1) {
-    const spacingBefore = paragraphBlock.attrs?.spacing?.before ?? 0;
-    const spacingAfter = paragraphBlock.attrs?.spacing?.after ?? 0;
-    return spacingBefore + maxImageHeight + spacingAfter;
-  }
-  const spacingBefore = paragraphBlock.attrs?.spacing?.before ?? 0;
-  const spacingAfter = paragraphBlock.attrs?.spacing?.after ?? 0;
-
-  return spacingBefore + maxImageHeight + spacingAfter;
-}
-
-function getTableCellVerticalBorderHeight(
-  cell: TableCell | undefined,
-  isFirstRow: boolean,
-): number {
-  const top = isFirstRow ? (cell?.borders?.top?.width ?? 0) : 0;
-  const bottom = cell?.borders?.bottom?.width ?? 0;
-  return top + bottom;
-}
-
 export function measureTableBlock(
   tableBlock: TableBlock,
   contentWidth: number,
@@ -191,57 +133,30 @@ export function measureTableBlock(
     columnWidths = Array.from({ length: colCount }, () => equalWidth);
   } else if (columnWidths.length > 0 && explicitWidthPx) {
     const totalWidth = columnWidths.reduce((sum, w) => sum + w, 0);
-    if (totalWidth > 0 && Math.abs(totalWidth - explicitWidthPx) > 1) {
+    // `w:tblW` is a preferred width under autofit. When the imported grid is
+    // already wider, Word preserves that grid instead of scaling it down.
+    const preserveExpandedGrid =
+      tableBlock.layout !== "fixed" &&
+      (tableBlock.widthType === undefined || tableBlock.widthType === "dxa") &&
+      totalWidth - explicitWidthPx > 1;
+    if (!preserveExpandedGrid && totalWidth > 0 && Math.abs(totalWidth - explicitWidthPx) > 1) {
       const scale = explicitWidthPx / totalWidth;
       columnWidths = columnWidths.map((w) => w * scale);
     }
   }
 
-  // Build a map of columns occupied by spanning cells from previous rows.
-  // Without this, cells in rows with vertical merges get the wrong column width.
-  const occupiedColumnsPerRow = new Map<number, Set<number>>();
-  for (let rowIdx = 0; rowIdx < tableBlock.rows.length; rowIdx++) {
-    const row = tableBlock.rows[rowIdx];
-    if (!row) {
-      continue;
-    }
-    let colIdx = 0;
-    const occupied = occupiedColumnsPerRow.get(rowIdx) ?? new Set<number>();
-    while (occupied.has(colIdx)) {
-      colIdx++;
-    }
+  const cellGrid = buildTableCellGrid(tableBlock.rows, columnWidths.length);
 
-    for (const cell of row.cells) {
-      const colSpan = cell.colSpan ?? 1;
-      const rowSpan = cell.rowSpan ?? 1;
-
-      if (rowSpan > 1) {
-        for (let r = rowIdx + 1; r < rowIdx + rowSpan; r++) {
-          if (!occupiedColumnsPerRow.has(r)) {
-            occupiedColumnsPerRow.set(r, new Set());
-          }
-          const occSet = occupiedColumnsPerRow.get(r)!;
-          for (let c = 0; c < colSpan; c++) {
-            occSet.add(colIdx + c);
-          }
-        }
-      }
-
-      colIdx += colSpan;
-      while (occupied.has(colIdx)) {
-        colIdx++;
-      }
-    }
-  }
+  // When the columns are pinned (fixed layout or a fully-consumed explicit
+  // width), Word cannot widen a column to satisfy `w:noWrap`, so overflowing
+  // content wraps. Only an auto-width table honors `w:noWrap` by keeping the
+  // cell on one line. The painter reads the same predicate for `white-space`.
+  const columnsPinned = tableColumnsArePinned(tableBlock);
 
   // Calculate cell widths based on colSpan and columnWidths,
   // skipping columns occupied by spanning cells from previous rows.
   const rows = tableBlock.rows.map((row, rowIdx) => {
-    let columnIndex = 0;
-    const occupied = occupiedColumnsPerRow.get(rowIdx) ?? new Set<number>();
-    while (occupied.has(columnIndex)) {
-      columnIndex++;
-    }
+    let columnIndex = getFirstAvailableColumn(cellGrid, rowIdx, row.gridBefore ?? 0);
 
     return {
       cells: row.cells.map((cell) => {
@@ -255,22 +170,19 @@ export function measureTableBlock(
         if (cellWidth === 0) {
           cellWidth = cell.width ?? 100;
         }
-        columnIndex += colSpan;
-        while (occupied.has(columnIndex)) {
-          columnIndex++;
-        }
+        columnIndex = getFirstAvailableColumn(cellGrid, rowIdx, columnIndex + colSpan);
 
         const padLeft = cell.padding?.left ?? DEFAULT_CELL_PADDING_X;
         const padRight = cell.padding?.right ?? DEFAULT_CELL_PADDING_X;
         const cellContentWidth = Math.max(1, cellWidth - padLeft - padRight);
-        // `w:noWrap` (§17.4.30): measure cell paragraphs against an effectively
-        // unbounded width so the line breaker never splits a single Word line
-        // into multiple MeasuredLines. The painter still constrains the cell
-        // box to `cellWidth`; `white-space: nowrap` keeps inline content on
-        // one line, and `overflow-x` lets it extend past the column. Without
-        // this, `renderTable.ts`'s nowrap style only prevents inline wrapping
-        // and the precomputed line splits would still render as stacked rows.
-        const measureWidth = cell.noWrap ? NO_WRAP_MEASURE_WIDTH : cellContentWidth;
+        // `w:noWrap` (§17.4.30): in an auto-width table Word honors it by
+        // widening the column, so measure against an effectively unbounded
+        // width and the line breaker keeps the cell on one MeasuredLine (the
+        // painter pairs this with `white-space: nowrap`). When the columns are
+        // pinned Word cannot widen, so overflowing content wraps: measure at the
+        // real content width like an ordinary cell.
+        const keepSingleLine = cell.noWrap === true && !columnsPinned;
+        const measureWidth = keepSingleLine ? NO_WRAP_MEASURE_WIDTH : cellContentWidth;
         const cellMeasure: TableCellMeasure = {
           blocks: cell.blocks.map((b) =>
             measureBlock(b, measureWidth, undefined, undefined, fieldValues),
@@ -311,25 +223,30 @@ export function measureTableBlock(
     // stays content + padding (the painter lays cell content out within it); the
     // border only contributes to the row total here.
     let maxCellHeightWithBorders = 0;
+    let maxCellInsets = 0;
     for (let cellIdx = 0; cellIdx < row.cells.length; cellIdx++) {
       const cell = row.cells[cellIdx]!; // SAFETY: cellIdx < row.cells.length
       const sourceCell = sourceRowCells?.[cellIdx];
       cell.height = 0;
+      const flowState = createTableCellFlowState();
       for (let blockIdx = 0; blockIdx < cell.blocks.length; blockIdx++) {
         const sourceBlock = sourceCell?.blocks[blockIdx];
         const blockMeasure = cell.blocks[blockIdx];
         if (!sourceBlock || !blockMeasure) {
           continue;
         }
-        cell.height += measureTableCellBlockVisualHeight(sourceBlock, blockMeasure);
+        placeTableCellBlock(flowState, sourceBlock, blockMeasure);
       }
+      cell.height = finishTableCellFlow(flowState);
       const padTop = sourceCell?.padding?.top ?? DEFAULT_CELL_PADDING_Y;
       const padBottom = sourceCell?.padding?.bottom ?? DEFAULT_CELL_PADDING_Y;
       cell.height += padTop + padBottom;
-      maxCellHeightWithBorders = Math.max(
-        maxCellHeightWithBorders,
-        cell.height + getTableCellVerticalBorderHeight(sourceCell, rowIdx === 0),
-      );
+      if ((sourceCell?.rowSpan ?? 1) > 1) {
+        continue;
+      }
+      const borderHeight = getTableCellVerticalBorderHeight(cellGrid, sourceCell, rowIdx);
+      maxCellHeightWithBorders = Math.max(maxCellHeightWithBorders, cell.height + borderHeight);
+      maxCellInsets = Math.max(maxCellInsets, padTop + padBottom + borderHeight);
     }
 
     // Apply heightRule from the source row
@@ -339,12 +256,50 @@ export function measureTableBlock(
     if (explicitHeight && heightRule === "exact") {
       row.height = explicitHeight;
     } else if (explicitHeight) {
-      // Both 'atLeast' and 'auto' (OOXML default) treat the value as minimum height.
-      // ECMA-376 §17.4.81: when hRule is absent or "auto", val is the minimum row height.
-      row.height = Math.max(maxCellHeightWithBorders, explicitHeight);
+      // Compatibility layouts treat both 'atLeast' and auto-with-val as a
+      // content floor; cell padding and horizontal borders remain outside it.
+      row.height = Math.max(maxCellHeightWithBorders, explicitHeight + maxCellInsets);
     } else {
       // No explicit height — use content height directly.
       row.height = maxCellHeightWithBorders;
+    }
+  }
+
+  // A vertically merged cell occupies the combined height of all rows it
+  // spans. Its content must constrain that combined area, not inflate the
+  // first row independently. Apply any remaining deficit to the last
+  // non-exact row in the span after every row has its own base height.
+  for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
+    const sourceRow = tableBlock.rows[rowIdx];
+    const measuredRow = rows[rowIdx];
+    if (!sourceRow || !measuredRow) {
+      continue;
+    }
+    for (let cellIdx = 0; cellIdx < sourceRow.cells.length; cellIdx++) {
+      const sourceCell = sourceRow.cells[cellIdx];
+      const measuredCell = measuredRow.cells[cellIdx];
+      const rowSpan = sourceCell?.rowSpan ?? 1;
+      if (!sourceCell || !measuredCell || rowSpan <= 1) {
+        continue;
+      }
+      const spanEnd = Math.min(rows.length, rowIdx + rowSpan);
+      let combinedHeight = 0;
+      for (let spannedRowIdx = rowIdx; spannedRowIdx < spanEnd; spannedRowIdx++) {
+        combinedHeight += rows[spannedRowIdx]?.height ?? 0;
+      }
+      const requiredHeight =
+        measuredCell.height + getTableCellVerticalBorderHeight(cellGrid, sourceCell, rowIdx);
+      const deficit = requiredHeight - combinedHeight;
+      if (deficit <= 0) {
+        continue;
+      }
+      for (let spannedRowIdx = spanEnd - 1; spannedRowIdx >= rowIdx; spannedRowIdx--) {
+        if (tableBlock.rows[spannedRowIdx]?.heightRule === "exact") {
+          continue;
+        }
+        rows[spannedRowIdx]!.height += deficit;
+        break;
+      }
     }
   }
 
@@ -388,28 +343,82 @@ function perBlockNumberValue(
   return value;
 }
 
+type TextBoxWrapSideOptions = {
+  box: TextBoxBlock;
+  contentX: number;
+  boxWidth: number;
+  contentWidth: number;
+};
+
+function textBoxWrapSide({
+  box,
+  contentX,
+  boxWidth,
+  contentWidth,
+}: TextBoxWrapSideOptions): "left" | "right" {
+  if (box.wrapText === "left") {
+    return "left";
+  }
+  if (box.wrapText === "right") {
+    return "right";
+  }
+
+  const leftSpace = contentX;
+  const rightSpace = contentWidth - contentX - boxWidth;
+  if (box.wrapText === "largest") {
+    return leftSpace >= rightSpace ? "left" : "right";
+  }
+  return contentX + boxWidth / 2 < contentWidth / 2 ? "right" : "left";
+}
+
 // Page geometry the band extraction needs to resolve page/margin-pinned
 // topAndBottom anchors (bottom-strip frames, centered/bottom align). Per-block
 // because sections can vary page size and margins. eigenpal #694.
 type BandPageGeometry = {
+  pageWidth?: number | number[];
   pageHeight: number | number[];
+  marginLeft?: number | number[];
+  marginRight?: number | number[];
   marginBottom: number | number[];
 };
 
 function extractFloatingZones(
   blocks: FlowBlock[],
-  contentWidth: number,
+  contentWidth: number | number[],
   marginTop: number | number[] = 0,
   pageGeometry?: BandPageGeometry,
 ): FloatingZoneWithAnchor[] {
   const zones: FloatingZoneWithAnchor[] = [];
+  const defaultContentWidth = Array.isArray(contentWidth) ? (contentWidth[0] ?? 0) : contentWidth;
   const textBoxGroupAnchors = new Map<string, number>();
+  const paragraphFrameGroupSizes = new Map<string, number>();
+  for (const block of blocks) {
+    if (block.kind !== "textBox" || !isParagraphFrameTextBox(block)) {
+      continue;
+    }
+    const groupId = getTextBoxGroupId(block);
+    if (groupId !== undefined) {
+      paragraphFrameGroupSizes.set(groupId, (paragraphFrameGroupSizes.get(groupId) ?? 0) + 1);
+    }
+  }
   const defaultMarginTop = Array.isArray(marginTop) ? (marginTop[0] ?? 0) : marginTop;
+  const pageWidthInput = pageGeometry?.pageWidth ?? defaultContentWidth;
   const pageHeightInput = pageGeometry?.pageHeight ?? 0;
+  const marginLeftInput = pageGeometry?.marginLeft ?? 0;
+  const marginRightInput = pageGeometry?.marginRight ?? 0;
   const marginBottomInput = pageGeometry?.marginBottom ?? 0;
+  const defaultPageWidth = Array.isArray(pageWidthInput)
+    ? (pageWidthInput[0] ?? defaultContentWidth)
+    : pageWidthInput;
   const defaultPageHeight = Array.isArray(pageHeightInput)
     ? (pageHeightInput[0] ?? 0)
     : pageHeightInput;
+  const defaultMarginLeft = Array.isArray(marginLeftInput)
+    ? (marginLeftInput[0] ?? 0)
+    : marginLeftInput;
+  const defaultMarginRight = Array.isArray(marginRightInput)
+    ? (marginRightInput[0] ?? 0)
+    : marginRightInput;
   const defaultMarginBottom = Array.isArray(marginBottomInput)
     ? (marginBottomInput[0] ?? 0)
     : marginBottomInput;
@@ -428,7 +437,8 @@ function extractFloatingZones(
       }
       const imgRun = run as ImageRun;
 
-      if (!isFloatingImageRun(imgRun)) {
+      const positionedBand = imgRun.wrapType === "topAndBottom" && imgRun.position !== undefined;
+      if (!isSideWrappingImageRun(imgRun) && !positionedBand) {
         continue;
       }
 
@@ -439,6 +449,33 @@ function extractFloatingZones(
       const distBottom = imgRun.distBottom ?? 0;
       const distLeft = imgRun.distLeft ?? 12;
       const distRight = imgRun.distRight ?? 12;
+
+      if (positionedBand && position !== undefined) {
+        const vertical = position.vertical;
+        const blockMarginTop = perBlockNumberValue(marginTop, blockIndex, defaultMarginTop);
+        const pageFrameRelative = isPageFrameRelativeAnchor(vertical?.relativeTo);
+        const rawTop = pageFrameRelative
+          ? bandTopContentY(vertical, {
+              pageHeight: perBlockNumberValue(pageHeightInput, blockIndex, defaultPageHeight),
+              marginTop: blockMarginTop,
+              marginBottom: perBlockNumberValue(marginBottomInput, blockIndex, defaultMarginBottom),
+              boxHeight: imgRun.height,
+            })
+          : emuToPixels(vertical?.posOffset ?? 0);
+        const bottomY = rawTop + imgRun.height + distBottom;
+        if (bottomY > 0) {
+          zones.push({
+            leftMargin: 0,
+            rightMargin: 0,
+            topY: Math.max(0, rawTop - distTop),
+            bottomY,
+            anchorBlockIndex: blockIndex,
+            ...(pageFrameRelative ? { isMarginRelative: true } : {}),
+            fullWidthBlock: true,
+          });
+        }
+        continue;
+      }
 
       if (position?.vertical) {
         const v = position.vertical;
@@ -467,10 +504,10 @@ function extractFloatingZones(
           rightMargin = imgRun.width + distLeft;
         } else if (h.posOffset !== undefined) {
           const x = emuToPixels(h.posOffset);
-          if (x < contentWidth / 2) {
+          if (x < defaultContentWidth / 2) {
             leftMargin = x + imgRun.width + distRight;
           } else {
-            rightMargin = contentWidth - x + distLeft;
+            rightMargin = defaultContentWidth - x + distLeft;
           }
         }
       } else if (imgRun.cssFloat === "left") {
@@ -508,7 +545,7 @@ function extractFloatingZones(
       continue;
     }
 
-    const tableMeasure = measureTableBlock(tableBlock, contentWidth);
+    const tableMeasure = measureTableBlock(tableBlock, defaultContentWidth);
     const tableWidth = tableMeasure.totalWidth;
     const tableHeight = tableMeasure.totalHeight;
 
@@ -528,20 +565,20 @@ function extractFloatingZones(
       if (floating.tblpXSpec === "left" || floating.tblpXSpec === "inside") {
         x = 0;
       } else if (floating.tblpXSpec === "right" || floating.tblpXSpec === "outside") {
-        x = contentWidth - tableWidth;
+        x = defaultContentWidth - tableWidth;
       } else {
-        x = (contentWidth - tableWidth) / 2;
+        x = (defaultContentWidth - tableWidth) / 2;
       }
     } else if (tableBlock.justification === "center") {
-      x = (contentWidth - tableWidth) / 2;
+      x = (defaultContentWidth - tableWidth) / 2;
     } else if (tableBlock.justification === "right") {
-      x = contentWidth - tableWidth;
+      x = defaultContentWidth - tableWidth;
     }
 
-    if (x < contentWidth / 2) {
+    if (x < defaultContentWidth / 2) {
       leftMargin = x + tableWidth + distRight;
     } else {
-      rightMargin = contentWidth - x + distLeft;
+      rightMargin = defaultContentWidth - x + distLeft;
     }
 
     const topY = floating.tblpY ?? 0;
@@ -553,6 +590,90 @@ function extractFloatingZones(
       topY: topY - distTop,
       bottomY: bottomY + distBottom,
       anchorBlockIndex: blockIndex,
+    });
+  }
+
+  // Positioned side-wrapped text boxes carve the same horizontal exclusion
+  // during pagination that the painter applies during its final re-measure.
+  // Without this pre-scan, paragraphs paint around the box but retain their
+  // original page assignment, so a page-anchored frame can overlap later body
+  // content or create a false extra page.
+  for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
+    const block = blocks[blockIndex]!; // SAFETY: blockIndex < blocks.length
+    if (block.kind !== "textBox") {
+      continue;
+    }
+    const tb = block as TextBoxBlock;
+    if (!floatingTextBoxWrapsText(tb) || tb.position === undefined) {
+      continue;
+    }
+
+    const measure = measureTextBoxBlock(tb);
+    const blockMarginTop = perBlockNumberValue(marginTop, blockIndex, defaultMarginTop);
+    const blockMarginLeft = perBlockNumberValue(marginLeftInput, blockIndex, defaultMarginLeft);
+    const blockMarginRight = perBlockNumberValue(marginRightInput, blockIndex, defaultMarginRight);
+    const blockPageWidth = perBlockNumberValue(pageWidthInput, blockIndex, defaultPageWidth);
+    const blockContentWidth = perBlockNumberValue(contentWidth, blockIndex, defaultContentWidth);
+    const vertical = tb.position.vertical;
+    const pageFrameRelative = isPageFrameRelativeAnchor(vertical?.relativeTo);
+    const topY = pageFrameRelative
+      ? bandTopContentY(vertical, {
+          pageHeight: perBlockNumberValue(pageHeightInput, blockIndex, defaultPageHeight),
+          marginTop: blockMarginTop,
+          marginBottom: perBlockNumberValue(marginBottomInput, blockIndex, defaultMarginBottom),
+          boxHeight: measure.height,
+        })
+      : emuToPixels(vertical?.posOffset ?? 0);
+    const groupId = getTextBoxGroupId(tb);
+    const anchorBlockIndex = groupId
+      ? (textBoxGroupAnchors.get(groupId) ?? blockIndex)
+      : blockIndex;
+    if (groupId && !textBoxGroupAnchors.has(groupId)) {
+      textBoxGroupAnchors.set(groupId, blockIndex);
+    }
+    if (
+      isParagraphFrameTextBox(tb) &&
+      groupId !== undefined &&
+      (paragraphFrameGroupSizes.get(groupId) ?? 0) > 1
+    ) {
+      zones.push({
+        leftMargin: 0,
+        rightMargin: 0,
+        topY: 0,
+        bottomY: topY + measure.height + (tb.distBottom ?? 0),
+        anchorBlockIndex,
+        ...(pageFrameRelative ? { isMarginRelative: true } : {}),
+        fullWidthBlock: true,
+      });
+      continue;
+    }
+
+    const horizontal = tb.position.horizontal;
+    const pageX = horizontal
+      ? bandFragmentX(horizontal, {
+          pageWidth: blockPageWidth,
+          marginLeft: blockMarginLeft,
+          marginRight: blockMarginRight,
+          boxWidth: measure.width,
+        })
+      : blockMarginLeft;
+    const contentX = pageX - blockMarginLeft;
+    const wrapSide = textBoxWrapSide({
+      box: tb,
+      contentX,
+      boxWidth: measure.width,
+      contentWidth: blockContentWidth,
+    });
+    const leftMargin = wrapSide === "right" ? contentX + measure.width + (tb.distRight ?? 12) : 0;
+    const rightMargin =
+      wrapSide === "left" ? blockContentWidth - contentX + (tb.distLeft ?? 12) : 0;
+    zones.push({
+      leftMargin: Math.max(0, leftMargin),
+      rightMargin: Math.max(0, rightMargin),
+      topY: topY - (tb.distTop ?? 0),
+      bottomY: topY + measure.height + (tb.distBottom ?? 0),
+      anchorBlockIndex,
+      ...(pageFrameRelative ? { isMarginRelative: true } : {}),
     });
   }
 
@@ -701,11 +822,18 @@ export function measureTextBoxBlock(
 ): TextBoxMeasure {
   const margins = tb.margins ?? DEFAULT_TEXTBOX_MARGINS;
   const innerWidth = tb.width - margins.left - margins.right;
-  const innerMeasures = tb.content.map((p) =>
-    measureParagraph(p, innerWidth, fieldValues ? { fieldValues } : undefined),
-  );
-  const contentHeight = innerMeasures.reduce((sum, m) => sum + m.totalHeight, 0);
-  const totalHeight = tb.height ?? contentHeight + margins.top + margins.bottom;
+  const innerMeasures = tb.content.map((block) => {
+    if (block.kind === "table") {
+      return measureTableBlock(block, innerWidth, fieldValues);
+    }
+    return measureParagraph(block, innerWidth, fieldValues ? { fieldValues } : undefined);
+  });
+  const contentHeight = layoutTextBoxContent(tb.content, innerMeasures).totalHeight;
+  const contentBoxHeight = contentHeight + margins.top + margins.bottom;
+  const totalHeight =
+    tb.autoFit === "shape"
+      ? Math.max(tb.height ?? 0, contentBoxHeight)
+      : (tb.height ?? contentBoxHeight);
   return {
     kind: "textBox",
     width: tb.width,
@@ -744,7 +872,7 @@ export function measureBlocks(
   // Pre-extract floating image exclusion zones with anchor block indices
   const floatingZonesWithAnchors = extractFloatingZones(
     blocks,
-    defaultWidth,
+    contentWidth,
     marginTop,
     pageGeometry,
   );
@@ -846,19 +974,29 @@ export function measureBlocks(
         : contentWidth;
       const measure = measureBlock(block, blockWidth, zones, cumulativeY, fieldValues);
 
-      // Paragraphs clear a full-width band internally (findClearLineY inside
-      // measureParagraph). An in-flow table or inline image does not, so reserve
-      // a leading skip here that layout applies before the block, pushing it
-      // below the band rather than under it. eigenpal #694.
-      const bandZones = zones?.filter((zone) => zone.fullWidthBlock);
+      // Paragraphs clear floating exclusions internally (findClearLineY inside
+      // measureParagraph). An in-flow table cannot reflow its cells around a
+      // side exclusion, so require room for the whole table. Block images keep
+      // the existing full-width-band behavior.
+      const clearingZones =
+        measure.kind === "table" ? zones : zones?.filter((zone) => zone.fullWidthBlock);
       if (
-        bandZones?.length &&
+        clearingZones?.length &&
         (measure.kind === "image" || (measure.kind === "table" && !(block as TableBlock).floating))
       ) {
         const blockHeight = measure.kind === "image" ? measure.height : measure.totalHeight;
+        const requiredWidth =
+          measure.kind === "table"
+            ? Math.min(blockWidth, measure.totalWidth)
+            : MIN_WRAP_SEGMENT_WIDTH;
         const skip =
-          findClearLineY(cumulativeY, blockHeight, bandZones, blockWidth, MIN_WRAP_SEGMENT_WIDTH) -
-          cumulativeY;
+          findClearLineY(
+            cumulativeY,
+            blockHeight,
+            clearingZones,
+            blockWidth,
+            Math.max(MIN_WRAP_SEGMENT_WIDTH, requiredWidth),
+          ) - cumulativeY;
         if (skip > 0) {
           measure.bandSkipBefore = skip;
           cumulativeY += skip;

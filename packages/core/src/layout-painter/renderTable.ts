@@ -14,18 +14,38 @@ import {
   getTableCellContentWidth,
   getTableCellFloatingImages,
 } from "../layout-engine/measure/tableCellFloating";
+import {
+  createTableCellFlowState,
+  finishTableCellFlow,
+  placeTableCellBlock,
+} from "../layout-engine/measure/tableCellFlow";
 import type {
   TableFragment,
   TableBlock,
   TableMeasure,
   TableCell,
+  CellBorderSpec,
   TableCellMeasure,
   ParagraphBlock,
   ParagraphMeasure,
   ParagraphFragment,
+  TextBoxBlock,
+  TextBoxMeasure,
+  TextBoxFragment,
 } from "../layout-engine/types";
+import {
+  getTableRowLeadingWidth,
+  isFloatingImageRun,
+  isFloatingTextBoxBlock,
+  tableColumnsArePinned,
+} from "../layout-engine/types";
+import { emuToPixels } from "../utils/units";
+import { resolveAnchoredImagePosition, type PageGeometry } from "./anchoredImagePosition";
+import { borderStrokeToCss, resolveCssBorderStroke } from "./borderStroke";
 import { getAutomaticTextColorForBackground } from "./documentColors";
+import { applyImageVisualAttrs, hasImageCrop, hasImageVisualAttrs } from "./renderImage";
 import { renderParagraphFragment } from "./renderParagraph";
+import { renderTextBoxFragment } from "./renderTextBox";
 import type { RenderContext } from "./renderUtils";
 
 /**
@@ -42,36 +62,85 @@ export const TABLE_CLASS_NAMES = {
   tableEdgeHandleRight: "layout-table-edge-handle-right",
 };
 
+const CELL_DIAGONAL_BORDER_CLASS = "layout-table-cell-diagonal-border";
+
 /**
  * Options for rendering a table fragment
  */
 export type RenderTableFragmentOptions = {
   document?: Document;
+  pageGeometry?: PageGeometry;
+};
+
+type PageContentPosition = {
+  geometry: PageGeometry;
+  x: number;
+  y: number;
 };
 
 /**
  * Render cell content (paragraphs and nested tables)
  */
-function renderCellContent(
-  cell: TableCell,
-  cellMeasure: TableCellMeasure,
-  context: RenderContext,
-  doc: Document,
-): HTMLElement {
+type RenderedCellContent = {
+  content: HTMLElement;
+  floatingLayers: HTMLElement[];
+};
+
+type RenderCellContentOptions = {
+  cell: TableCell;
+  cellMeasure: TableCellMeasure;
+  context: RenderContext;
+  doc: Document;
+  contentWidthOverride?: number;
+  pageContentPosition?: PageContentPosition;
+};
+
+type CellContentClip = {
+  top: number;
+  bottom: number;
+};
+
+function renderCellContent({
+  cell,
+  cellMeasure,
+  context,
+  doc,
+  contentWidthOverride,
+  pageContentPosition,
+}: RenderCellContentOptions): RenderedCellContent {
   const contentEl = doc.createElement("div");
   contentEl.className = TABLE_CLASS_NAMES.cellContent;
   contentEl.style.position = "relative";
   // Content width must account for cell padding since the cell uses border-box sizing.
   // Without this, content is wider than the available area, causing centering and
   // clipping issues (especially for nested tables).
-  const contentWidth = getTableCellContentWidth(cell, cellMeasure);
+  const contentWidth = contentWidthOverride ?? getTableCellContentWidth(cell, cellMeasure);
   contentEl.style.width = `${contentWidth}px`;
 
   // Extract floating images from cell paragraphs
-  const cellFloatingImages = getTableCellFloatingImages(cell, cellMeasure, contentWidth);
+  const cellFloatingImages = getTableCellFloatingImages(
+    cell,
+    cellMeasure,
+    contentWidth,
+    pageContentPosition
+      ? (run, paragraphY) => {
+          const position = resolveAnchoredImagePosition(
+            run,
+            pageContentPosition.y + paragraphY,
+            pageContentPosition.geometry,
+          );
+          return {
+            x: position.x - pageContentPosition.x,
+            y: position.y - pageContentPosition.y,
+            side: position.side,
+          };
+        }
+      : undefined,
+  );
 
   // Build floating zones for measurement and render floating layer
   const floatingZones = buildTableCellFloatingZones(cellFloatingImages, contentWidth);
+  const floatingLayers: HTMLElement[] = [];
   if (cellFloatingImages.length > 0) {
     // Render floating image layer within the cell
     const floatingLayer = doc.createElement("div");
@@ -83,7 +152,7 @@ function renderCellContent(
     floatingLayer.style.height = "100%";
     floatingLayer.style.pointerEvents = "none";
     floatingLayer.style.zIndex = "10";
-    floatingLayer.style.overflow = "hidden";
+    floatingLayer.style.overflow = "visible";
 
     for (const img of cellFloatingImages) {
       const imgContainer = doc.createElement("div");
@@ -104,20 +173,32 @@ function renderCellContent(
       imgEl.style.width = `${img.width}px`;
       imgEl.style.height = `${img.height}px`;
       imgEl.style.display = "block";
+      imgEl.style.maxWidth = "none";
+      imgEl.style.maxHeight = "none";
       if (img.alt) {
         imgEl.alt = img.alt;
       }
       if (img.transform) {
         imgEl.style.transform = img.transform;
       }
+      if (hasImageVisualAttrs(img)) {
+        if (hasImageCrop(img)) {
+          imgContainer.style.width = `${img.width}px`;
+          imgContainer.style.height = `${img.height}px`;
+          imgContainer.style.overflow = "hidden";
+        }
+        applyImageVisualAttrs(imgEl, img);
+      }
       imgContainer.append(imgEl);
       floatingLayer.append(imgContainer);
     }
 
-    contentEl.append(floatingLayer);
+    floatingLayers.push(floatingLayer);
   }
 
-  let cumulativeY = 0;
+  const flowState = createTableCellFlowState();
+  let anchorParagraphY = 0;
+  let floatingTextBoxesLayer: HTMLElement | undefined;
   for (let i = 0; i < cell.blocks.length; i++) {
     const block = cell.blocks[i];
     const measure = cellMeasure.blocks[i];
@@ -126,13 +207,16 @@ function renderCellContent(
       const paragraphBlock = block as ParagraphBlock;
       let paragraphMeasure = measure as ParagraphMeasure;
 
-      // Re-measure with floating zones if floating images exist in this cell
-      if (floatingZones.length > 0) {
+      // Re-measure when wrapping width changes or floating exclusions apply.
+      if (floatingZones.length > 0 || contentWidthOverride !== undefined) {
+        const previewState = { ...flowState };
+        const preview = placeTableCellBlock(previewState, paragraphBlock, paragraphMeasure);
         paragraphMeasure = measureParagraph(paragraphBlock, contentWidth, {
           floatingZones,
-          paragraphYOffset: cumulativeY,
+          paragraphYOffset: preview.contentTop,
         });
       }
+      const placement = placeTableCellBlock(flowState, paragraphBlock, paragraphMeasure);
 
       // Create synthetic fragment for the paragraph
       const syntheticFragment: ParagraphFragment = {
@@ -141,7 +225,7 @@ function renderCellContent(
         x: 0,
         y: 0,
         width: contentWidth,
-        height: paragraphMeasure.totalHeight,
+        height: placement.contentHeight,
         fromLine: 0,
         toLine: paragraphMeasure.lines.length,
         ...(paragraphBlock.pmStart !== undefined ? { pmStart: paragraphBlock.pmStart } : {}),
@@ -159,13 +243,12 @@ function renderCellContent(
 
       fragEl.style.position = "relative";
       fragEl.style.boxSizing = "border-box";
-      fragEl.style.height = `${paragraphMeasure.totalHeight}px`;
-      const spaceBefore = paragraphBlock.attrs?.spacing?.before ?? 0;
-      if (spaceBefore > 0) {
-        fragEl.style.paddingTop = `${spaceBefore}px`;
+      fragEl.style.height = `${placement.leadingSpacing + placement.contentHeight}px`;
+      if (placement.leadingSpacing > 0) {
+        fragEl.style.paddingTop = `${placement.leadingSpacing}px`;
       }
       contentEl.append(fragEl);
-      cumulativeY += paragraphMeasure.totalHeight;
+      anchorParagraphY = placement.contentTop;
     } else if (block?.kind === "table" && measure?.kind === "table") {
       // Nested table - render in normal document flow.
       // Avoid cumulative marginTop offsets here: cell content already flows vertically,
@@ -175,18 +258,132 @@ function renderCellContent(
 
       const nestedTableEl = renderNestedTable(tableBlock, tableMeasure, context, doc);
       nestedTableEl.style.position = "relative";
+      const placement = placeTableCellBlock(flowState, tableBlock, tableMeasure);
+      if (placement.leadingSpacing > 0) {
+        const spacer = doc.createElement("div");
+        spacer.style.height = `${placement.leadingSpacing}px`;
+        contentEl.append(spacer);
+      }
       contentEl.append(nestedTableEl);
-      cumulativeY += (measure as TableMeasure).totalHeight;
+      // A standalone anchored shape after a nested table belongs to a
+      // shape-only host paragraph at the current flow position. That host is
+      // omitted from the ProseMirror cell, so the nested table's bottom is the
+      // anchor Y for the following floating text box.
+      anchorParagraphY = flowState.height;
+    } else if (block?.kind === "textBox" && measure?.kind === "textBox") {
+      const textBoxBlock = block as TextBoxBlock;
+      const textBoxMeasure = measure as TextBoxMeasure;
+      const syntheticFragment: TextBoxFragment = {
+        kind: "textBox",
+        blockId: textBoxBlock.id,
+        x: 0,
+        y: 0,
+        width: textBoxMeasure.width,
+        height: textBoxMeasure.height,
+        ...(textBoxBlock.pmStart !== undefined ? { pmStart: textBoxBlock.pmStart } : {}),
+        ...(textBoxBlock.pmEnd !== undefined ? { pmEnd: textBoxBlock.pmEnd } : {}),
+      };
+      const textBoxEl = renderTextBoxFragment(
+        syntheticFragment,
+        textBoxBlock,
+        textBoxMeasure,
+        { ...context, insideTableCell: true },
+        { document: doc, renderTable: renderNestedTable },
+      );
+
+      if (isFloatingTextBoxBlock(textBoxBlock)) {
+        floatingTextBoxesLayer ??= createCellFloatingTextBoxesLayer(doc);
+        textBoxEl.style.left = `${resolveCellTextBoxX(textBoxBlock, contentWidth)}px`;
+        textBoxEl.style.top = `${anchorParagraphY + resolveCellTextBoxY(textBoxBlock)}px`;
+        textBoxEl.style.pointerEvents = "auto";
+        floatingTextBoxesLayer.append(textBoxEl);
+        continue;
+      }
+
+      const placement = placeTableCellBlock(flowState, textBoxBlock, textBoxMeasure);
+      if (placement.leadingSpacing > 0) {
+        const spacer = doc.createElement("div");
+        spacer.style.height = `${placement.leadingSpacing}px`;
+        contentEl.append(spacer);
+      }
+      textBoxEl.style.position = "relative";
+      textBoxEl.style.left = "0";
+      textBoxEl.style.top = "0";
+      contentEl.append(textBoxEl);
+      anchorParagraphY = flowState.height;
     }
   }
+  contentEl.style.height = `${finishTableCellFlow(flowState)}px`;
 
-  return contentEl;
+  if (floatingTextBoxesLayer) {
+    floatingLayers.push(floatingTextBoxesLayer);
+  }
+
+  return {
+    content: contentEl,
+    floatingLayers,
+  };
+}
+
+function createCellFloatingTextBoxesLayer(doc: Document): HTMLElement {
+  const layer = doc.createElement("div");
+  layer.className = "layout-cell-floating-text-boxes-layer";
+  layer.style.position = "absolute";
+  layer.style.inset = "0";
+  layer.style.pointerEvents = "none";
+  layer.style.zIndex = "10";
+  layer.style.overflow = "visible";
+  return layer;
+}
+
+function resolveCellTextBoxX(block: TextBoxBlock, contentWidth: number): number {
+  const horizontal = block.position?.horizontal;
+  if (horizontal?.posOffset !== undefined) {
+    return emuToPixels(horizontal.posOffset);
+  }
+  if (horizontal?.align === "center") {
+    return (contentWidth - block.width) / 2;
+  }
+  if (horizontal?.align === "right" || horizontal?.align === "outside") {
+    return contentWidth - block.width;
+  }
+  return 0;
+}
+
+function resolveCellTextBoxY(block: TextBoxBlock): number {
+  const vertical = block.position?.vertical;
+  if (vertical?.posOffset !== undefined) {
+    return emuToPixels(vertical.posOffset);
+  }
+  return 0;
+}
+
+function tableHasFloatingCellContent(block: TableBlock): boolean {
+  for (const row of block.rows) {
+    for (const cell of row.cells) {
+      for (const cellBlock of cell.blocks) {
+        if (cellBlock.kind === "textBox" && isFloatingTextBoxBlock(cellBlock)) {
+          return true;
+        }
+        if (
+          cellBlock.kind === "paragraph" &&
+          cellBlock.runs.some((run) => run.kind === "image" && isFloatingImageRun(run))
+        ) {
+          return true;
+        }
+        if (cellBlock.kind === "table" && tableHasFloatingCellContent(cellBlock)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 /**
  * Render a nested table (within a cell)
  */
-function renderNestedTable(
+export function renderNestedTable(
   block: TableBlock,
   measure: TableMeasure,
   context: RenderContext,
@@ -232,6 +429,8 @@ function renderNestedTable(
   const spanningCells = new Map<string, SpanningCell>();
 
   // Render all rows
+  const columnsPinned = tableColumnsArePinned(block);
+  const cellGrid = buildTableCellGrid(block, measure.columnWidths.length);
   let y = 0;
   for (let rowIndex = 0; rowIndex < block.rows.length; rowIndex++) {
     const row = block.rows[rowIndex];
@@ -245,20 +444,21 @@ function renderNestedTable(
       continue;
     }
 
-    const rowEl = renderTableRow(
+    const rowEl = renderTableRow({
       row,
       rowMeasure,
       rowIndex,
       y,
-      measure.columnWidths,
-      block.rows.length,
+      columnWidths: measure.columnWidths,
+      totalRows: block.rows.length,
       context,
       doc,
       spanningCells,
       rowYPositions,
-      undefined,
-      block.bidi,
-    );
+      bidi: block.bidi === true,
+      columnsPinned,
+      cellGrid,
+    });
     tableEl.append(rowEl);
     y += rowMeasure.height;
   }
@@ -282,33 +482,108 @@ function applyBorder(
     | "borderBottom"
     | "borderLeft";
 
-  if (!border || border.style === "none" || border.style === "nil" || border.width === 0) {
+  if (!border || border.style === "none" || border.style === "nil") {
     el.style[styleProp] = "none";
   } else {
-    const width = border.width ?? 1;
-    const color = border.color ?? "#000000";
-    const style = border.style ?? "solid";
-    el.style[styleProp] = `${width}px ${style} ${color}`;
+    el.style[styleProp] = borderStrokeToCss(border);
   }
+}
+
+type CellDiagonalDirection = "top-left-to-bottom-right" | "top-right-to-bottom-left";
+
+type RenderCellDiagonalBorderOptions = {
+  border: CellBorderSpec | undefined;
+  direction: CellDiagonalDirection;
+  cellWidth: number;
+  cellHeight: number;
+  doc: Document;
+};
+
+function renderCellDiagonalBorder({
+  border,
+  direction,
+  cellWidth,
+  cellHeight,
+  doc,
+}: RenderCellDiagonalBorderOptions): HTMLElement | null {
+  if (!hasVisibleBorder(border)) {
+    return null;
+  }
+
+  const line = doc.createElement("div");
+  const stroke = resolveCssBorderStroke(border ?? {});
+  const strokeWidth = stroke.width;
+  const color = stroke.color;
+  const length = Math.hypot(cellWidth, cellHeight);
+  const angle = Math.atan2(cellHeight, cellWidth);
+
+  line.className = CELL_DIAGONAL_BORDER_CLASS;
+  line.dataset["direction"] = direction;
+  line.style.position = "absolute";
+  line.style.left = "0";
+  line.style.top =
+    direction === "top-left-to-bottom-right"
+      ? `${-strokeWidth / 2}px`
+      : `${cellHeight - strokeWidth / 2}px`;
+  line.style.width = `${length}px`;
+  line.style.height = `${strokeWidth}px`;
+  line.style.transformOrigin = "0 50%";
+  line.style.transform = `rotate(${direction === "top-left-to-bottom-right" ? angle : -angle}rad)`;
+  line.style.pointerEvents = "none";
+  line.style.zIndex = "1";
+
+  switch (border?.style) {
+    case "dashed":
+      line.style.backgroundImage = `repeating-linear-gradient(to right, ${color} 0, ${color} ${strokeWidth * 3}px, transparent ${strokeWidth * 3}px, transparent ${strokeWidth * 5}px)`;
+      break;
+    case "dotted":
+      line.style.backgroundImage = `radial-gradient(circle at ${strokeWidth / 2}px 50%, ${color} ${strokeWidth / 2}px, transparent ${strokeWidth / 2}px)`;
+      line.style.backgroundSize = `${strokeWidth * 2}px ${strokeWidth}px`;
+      break;
+    case "double":
+      line.style.backgroundImage = `linear-gradient(to bottom, ${color} 0, ${color} 33%, transparent 33%, transparent 67%, ${color} 67%, ${color} 100%)`;
+      break;
+    default:
+      line.style.backgroundColor = color;
+      break;
+  }
+
+  return line;
 }
 
 /**
  * Render a single table cell
  */
-function renderTableCell(
-  cell: TableCell,
-  cellMeasure: TableCellMeasure,
-  x: number,
-  rowHeight: number,
+type RenderTableCellOptions = {
+  cell: TableCell;
+  cellMeasure: TableCellMeasure;
+  x: number;
+  rowHeight: number;
   borderFlags: {
-    isFirstRow: boolean;
+    drawTop: boolean;
     isLastRow: boolean;
-    isFirstCol: boolean;
+    drawLeft: boolean;
     isLastCol: boolean;
-  },
-  context: RenderContext,
-  doc: Document,
-): HTMLElement {
+  };
+  columnsPinned: boolean;
+  context: RenderContext;
+  doc: Document;
+  contentClip?: CellContentClip;
+  pageContentPosition?: PageContentPosition;
+};
+
+function renderTableCell({
+  cell,
+  cellMeasure,
+  x,
+  rowHeight,
+  borderFlags,
+  columnsPinned,
+  context,
+  doc,
+  contentClip,
+  pageContentPosition,
+}: RenderTableCellOptions): HTMLElement {
   const cellEl = doc.createElement("div");
   cellEl.className = TABLE_CLASS_NAMES.cell;
 
@@ -333,14 +608,15 @@ function renderTableCell(
     // Strategy: "bottom wins" for rows, "right wins" for columns.
     // Each cell's bottom border represents the shared edge with the row below.
     // Each cell's right border represents the shared edge with the column to its right.
-    // Only the first row draws its top border (table's top edge).
-    // Only the first column draws its left border (table's left edge).
-    if (borderFlags.isFirstRow) {
+    // Top/left edges are retained when the adjacent cell does not already
+    // own the shared edge. This also preserves partial boxes that begin inside
+    // a table instead of limiting those sides to the table perimeter.
+    if (borderFlags.drawTop) {
       applyBorder(cellEl, "top", cell.borders.top);
     }
     applyBorder(cellEl, "right", cell.borders.right);
     applyBorder(cellEl, "bottom", cell.borders.bottom);
-    if (borderFlags.isFirstCol) {
+    if (borderFlags.drawLeft) {
       applyBorder(cellEl, "left", cell.borders.left);
     }
   }
@@ -355,14 +631,15 @@ function renderTableCell(
     }
   }
 
-  // `w:noWrap` (§17.4.30): forbid soft-wrapping inside the cell. The
-  // measurement phase already collapses noWrap cell paragraphs to a single
-  // MeasuredLine (see NO_WRAP_MEASURE_WIDTH in PagedEditor.tsx), so each cell
-  // paints as one row. This style is the inline-content guard: it prevents
-  // the browser from re-wrapping inside a single line div if the painted
-  // content would overflow (e.g., user zoom, font fallback widening).
-  // eigenpal #424 (cell noWrap).
-  if (cell.noWrap) {
+  // `w:noWrap` (§17.4.30): forbid soft-wrapping inside the cell. This applies
+  // only when the columns can grow to honor it (auto-width table); measurement
+  // then collapses the cell to a single MeasuredLine (see NO_WRAP_MEASURE_WIDTH)
+  // and this style is the inline-content guard that stops the browser from
+  // re-wrapping the single line div (e.g. user zoom, font fallback widening).
+  // When the columns are pinned Word cannot honor `w:noWrap`, so measurement
+  // wrapped the cell; emitting `nowrap` here would collapse those lines and
+  // desync the painted height from the measured height. eigenpal #424.
+  if (cell.noWrap && !columnsPinned) {
     cellEl.style.whiteSpace = "nowrap";
   }
 
@@ -386,8 +663,69 @@ function renderTableCell(
   }
 
   // Render cell content
-  const contentEl = renderCellContent(cell, cellMeasure, context, doc);
-  cellEl.append(contentEl);
+  const contentWidthOverride =
+    cell.textDirection === "btLr" ? Math.max(1, rowHeight - padTop - padBottom) : undefined;
+  const renderedContent = renderCellContent({
+    cell,
+    cellMeasure,
+    context,
+    doc,
+    ...(contentWidthOverride !== undefined ? { contentWidthOverride } : {}),
+    ...(pageContentPosition
+      ? {
+          pageContentPosition: {
+            geometry: pageContentPosition.geometry,
+            x: pageContentPosition.x + padLeft,
+            y: pageContentPosition.y + padTop,
+          },
+        }
+      : {}),
+  });
+  if (cell.textDirection === "btLr") {
+    renderedContent.content.style.position = "absolute";
+    renderedContent.content.style.left = "50%";
+    renderedContent.content.style.top = "50%";
+    renderedContent.content.style.transform = "translate(-50%, -50%) rotate(-90deg)";
+  }
+  if (renderedContent.floatingLayers.length > 0) {
+    renderedContent.content.style.height = "100%";
+    renderedContent.content.style.overflow = "hidden";
+    cellEl.style.overflow = "visible";
+  }
+  if (contentClip) {
+    const contentHeight = Math.max(0, rowHeight - padTop - padBottom);
+    const clipTop = Math.min(contentHeight, Math.max(0, contentClip.top - padTop));
+    const clipBottom = Math.min(contentHeight, Math.max(clipTop, contentClip.bottom - padTop));
+    renderedContent.content.style.height = `${contentHeight}px`;
+    renderedContent.content.style.overflow = "hidden";
+    renderedContent.content.style.clipPath = `inset(${clipTop}px 0 ${contentHeight - clipBottom}px 0)`;
+  }
+  cellEl.append(renderedContent.content);
+  const topLeftToBottomRight = renderCellDiagonalBorder({
+    border: cell.borders?.topLeftToBottomRight,
+    direction: "top-left-to-bottom-right",
+    cellWidth: cellMeasure.width,
+    cellHeight: rowHeight,
+    doc,
+  });
+  if (topLeftToBottomRight) {
+    cellEl.append(topLeftToBottomRight);
+  }
+  const topRightToBottomLeft = renderCellDiagonalBorder({
+    border: cell.borders?.topRightToBottomLeft,
+    direction: "top-right-to-bottom-left",
+    cellWidth: cellMeasure.width,
+    cellHeight: rowHeight,
+    doc,
+  });
+  if (topRightToBottomLeft) {
+    cellEl.append(topRightToBottomLeft);
+  }
+  for (const floatingLayer of renderedContent.floatingLayers) {
+    floatingLayer.style.left = `${padLeft}px`;
+    floatingLayer.style.top = `${padTop}px`;
+    cellEl.append(floatingLayer);
+  }
 
   // Store PM positions for selection
   if (cell.blocks.length > 0) {
@@ -420,23 +758,83 @@ type SpanningCell = {
   totalHeight: number;
 };
 
+type TableCellGrid = Map<string, TableCell>;
+
+const tableCellGridKey = (rowIndex: number, columnIndex: number): string =>
+  `${rowIndex}:${columnIndex}`;
+
+function buildTableCellGrid(block: TableBlock, columnCount: number): TableCellGrid {
+  const grid: TableCellGrid = new Map();
+
+  for (let rowIndex = 0; rowIndex < block.rows.length; rowIndex++) {
+    const row = block.rows[rowIndex];
+    if (!row) {
+      continue;
+    }
+    let columnIndex = 0;
+    for (const cell of row.cells) {
+      while (grid.has(tableCellGridKey(rowIndex, columnIndex))) {
+        columnIndex += 1;
+      }
+      const colSpan = cell.colSpan ?? 1;
+      const rowSpan = cell.rowSpan ?? 1;
+      const rowEnd = Math.min(block.rows.length, rowIndex + rowSpan);
+      const columnEnd = Math.min(columnCount, columnIndex + colSpan);
+      for (let gridRow = rowIndex; gridRow < rowEnd; gridRow++) {
+        for (let gridColumn = columnIndex; gridColumn < columnEnd; gridColumn++) {
+          grid.set(tableCellGridKey(gridRow, gridColumn), cell);
+        }
+      }
+      columnIndex += colSpan;
+    }
+  }
+
+  return grid;
+}
+
+const hasVisibleBorder = (border: { width?: number; style?: string } | undefined): boolean =>
+  border !== undefined && border.style !== "none" && border.style !== "nil";
+
 /**
  * Render a table row with rowSpan support
  */
-function renderTableRow(
-  row: TableBlock["rows"][number],
-  rowMeasure: TableMeasure["rows"][number],
-  rowIndex: number,
-  y: number,
-  columnWidths: number[],
-  totalRows: number,
-  context: RenderContext,
-  doc: Document,
-  spanningCells?: Map<string, SpanningCell>,
-  rowYPositions?: number[],
-  isFirstRowInFragment?: boolean,
+type RenderTableRowOptions = {
+  row: TableBlock["rows"][number];
+  rowMeasure: TableMeasure["rows"][number];
+  rowIndex: number;
+  y: number;
+  columnWidths: number[];
+  totalRows: number;
+  context: RenderContext;
+  doc: Document;
+  spanningCells?: Map<string, SpanningCell>;
+  rowYPositions?: number[];
+  isFirstRowInFragment?: boolean;
+  bidi?: boolean;
+  columnsPinned?: boolean;
+  cellGrid?: TableCellGrid;
+  contentClip?: CellContentClip;
+  pageContentPosition?: PageContentPosition;
+};
+
+function renderTableRow({
+  row,
+  rowMeasure,
+  rowIndex,
+  y,
+  columnWidths,
+  totalRows,
+  context,
+  doc,
+  spanningCells,
+  rowYPositions,
+  isFirstRowInFragment,
   bidi = false,
-): HTMLElement {
+  columnsPinned = false,
+  cellGrid,
+  contentClip,
+  pageContentPosition,
+}: RenderTableRowOptions): HTMLElement {
   const rowEl = doc.createElement("div");
   rowEl.className = TABLE_CLASS_NAMES.row;
 
@@ -471,8 +869,9 @@ function renderTableRow(
   // Render cells
   // Track actual column index separately from cell index
   // because cells with colSpan > 1 span multiple columns
-  let x = 0;
-  let columnIndex = 0;
+  const gridBefore = row.gridBefore ?? 0;
+  let x = getTableRowLeadingWidth(row, columnWidths);
+  let columnIndex = gridBefore;
 
   // Skip columns occupied by spanning cells
   while (occupiedColumns.has(columnIndex)) {
@@ -518,16 +917,32 @@ function renderTableRow(
     const atLogicalEnd = columnIndex + colSpan >= columnWidths.length;
     const isFirstCol = bidi ? atLogicalEnd : atLogicalStart;
     const isLastCol = bidi ? atLogicalStart : atLogicalEnd;
+    const aboveCell = cellGrid?.get(tableCellGridKey(rowIndex - 1, columnIndex));
+    const leftNeighborColumn = bidi ? columnIndex + colSpan : columnIndex - 1;
+    const leftCell = cellGrid?.get(tableCellGridKey(rowIndex, leftNeighborColumn));
+    const drawTop = isFirstRow || !hasVisibleBorder(aboveCell?.borders?.bottom);
+    const drawLeft = isFirstCol || !hasVisibleBorder(leftCell?.borders?.right);
 
-    const cellEl = renderTableCell(
+    const cellEl = renderTableCell({
       cell,
       cellMeasure,
-      cellLeft,
-      cellHeight,
-      { isFirstRow, isLastRow, isFirstCol, isLastCol },
+      x: cellLeft,
+      rowHeight: cellHeight,
+      borderFlags: { drawTop, isLastRow, drawLeft, isLastCol },
+      columnsPinned,
       context,
       doc,
-    );
+      ...(contentClip ? { contentClip } : {}),
+      ...(pageContentPosition
+        ? {
+            pageContentPosition: {
+              geometry: pageContentPosition.geometry,
+              x: pageContentPosition.x + cellLeft,
+              y: pageContentPosition.y,
+            },
+          }
+        : {}),
+    });
     cellEl.dataset["cellIndex"] = String(cellIndex);
     cellEl.dataset["columnIndex"] = String(columnIndex);
 
@@ -587,6 +1002,13 @@ export function renderTableFragment(
   options: RenderTableFragmentOptions = {},
 ): HTMLElement {
   const doc = options.document ?? document;
+  const tablePageContentPosition = options.pageGeometry
+    ? {
+        geometry: options.pageGeometry,
+        x: fragment.x - options.pageGeometry.marginLeft,
+        y: fragment.y - options.pageGeometry.marginTop,
+      }
+    : undefined;
 
   const tableEl = doc.createElement("div");
   tableEl.className = TABLE_CLASS_NAMES.table;
@@ -595,7 +1017,7 @@ export function renderTableFragment(
   tableEl.style.position = "absolute";
   tableEl.style.width = `${fragment.width}px`;
   tableEl.style.height = `${fragment.height}px`;
-  tableEl.style.overflow = "hidden";
+  tableEl.style.overflow = tableHasFloatingCellContent(block) ? "visible" : "hidden";
 
   // Store metadata
   tableEl.dataset["blockId"] = String(fragment.blockId);
@@ -652,6 +1074,8 @@ export function renderTableFragment(
 
   // Track spanning cells across rows
   const spanningCells = new Map<string, SpanningCell>();
+  const columnsPinned = tableColumnsArePinned(block);
+  const cellGrid = buildTableCellGrid(block, measure.columnWidths.length);
 
   // Render repeated header rows for continuation fragments. For a mid-content
   // row break (eigenpal #698), keep repeated headers pinned to the fragment top
@@ -670,20 +1094,30 @@ export function renderTableFragment(
         continue;
       }
 
-      const rowEl = renderTableRow(
-        hdrRow,
-        hdrRowMeasure,
-        hdrIdx,
+      const rowEl = renderTableRow({
+        row: hdrRow,
+        rowMeasure: hdrRowMeasure,
+        rowIndex: hdrIdx,
         y,
-        measure.columnWidths,
-        block.rows.length,
+        columnWidths: measure.columnWidths,
+        totalRows: block.rows.length,
         context,
         doc,
         spanningCells,
         rowYPositions,
-        hdrIdx === 0, // first header row draws top border
-        block.bidi,
-      );
+        isFirstRowInFragment: hdrIdx === 0,
+        bidi: block.bidi === true,
+        columnsPinned,
+        cellGrid,
+        ...(tablePageContentPosition
+          ? {
+              pageContentPosition: {
+                ...tablePageContentPosition,
+                y: tablePageContentPosition.y + y,
+              },
+            }
+          : {}),
+      });
       rowEl.dataset["repeatedHeader"] = "true";
       tableEl.append(rowEl);
       y += hdrRowMeasure.height;
@@ -724,22 +1158,42 @@ export function renderTableFragment(
     const isFirstRowInFragment =
       headerRowCount > 0 && fragment.continuesFromPrev
         ? false // header rows already drawn, content rows are not "first"
-        : fragment.continuesFromPrev && rowIndex === fragment.fromRow;
+        : fragment.continuesFromPrev === true && rowIndex === fragment.fromRow;
+    const rowTopClip = rowIndex === fragment.fromRow ? fragment.topClip : undefined;
+    const rowBottomClip = rowIndex === fragment.toRow - 1 ? fragment.bottomClip : undefined;
+    const contentClip =
+      rowTopClip !== undefined || rowBottomClip !== undefined
+        ? {
+            top: rowTopClip ?? 0,
+            bottom: rowBottomClip ?? rowMeasure.height,
+          }
+        : undefined;
 
-    const rowEl = renderTableRow(
+    const rowEl = renderTableRow({
       row,
       rowMeasure,
       rowIndex,
       y,
-      measure.columnWidths,
-      block.rows.length,
+      columnWidths: measure.columnWidths,
+      totalRows: block.rows.length,
       context,
       doc,
       spanningCells,
       rowYPositions,
       isFirstRowInFragment,
-      block.bidi,
-    );
+      bidi: block.bidi === true,
+      columnsPinned,
+      cellGrid,
+      ...(contentClip ? { contentClip } : {}),
+      ...(tablePageContentPosition
+        ? {
+            pageContentPosition: {
+              ...tablePageContentPosition,
+              y: tablePageContentPosition.y + y,
+            },
+          }
+        : {}),
+    });
 
     contentParent.append(rowEl);
     y += rowMeasure.height;

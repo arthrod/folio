@@ -20,8 +20,10 @@ export type ApplyFolioDocumentOperationsOptions = {
     view: FolioAIEditView;
     snapshot: FolioAIEditSnapshot;
     batch: FolioDocumentOperationBatch;
+    story?: FolioDocumentOperationStory;
     author?: string;
     createCommentId?: (text: string) => number;
+    createUndoHandle?: () => FolioDocumentOperationUndoHandle;
 };
 
 // @public (undocumented)
@@ -29,6 +31,9 @@ export const assertSupportedFolioDocumentOperationVersion: (value: unknown) => t
 
 // @public
 export const buildAnnotatedBlockText: (blockNode: Node_2) => string;
+
+// @public
+export function clampRangeToDocSize(docSize: number, range: DocPositionRange): DocPositionRange;
 
 // @public (undocumented)
 export const createFolioAIEditSnapshot: (doc: Node_2) => FolioAIEditSnapshot;
@@ -38,6 +43,12 @@ export const createFolioAITextRangeHandle: (input: CreateFolioAITextRangeHandleO
 
 // @public (undocumented)
 export const diffWordSegments: (before: string, after: string) => WordDiffSegment[];
+
+// @public (undocumented)
+export type DocPositionRange = {
+    from: number;
+    to: number;
+};
 
 // @public (undocumented)
 export const FOLIO_DOCUMENT_OPERATION_BATCH_MODES: readonly ["best-effort", "atomic"];
@@ -60,22 +71,33 @@ export const FOLIO_DOCUMENT_OPERATION_MODES_BY_TYPE: Readonly<{
     readonly deleteBlock: readonly ["direct", "tracked-changes"];
     readonly commentOnBlock: readonly ["direct", "tracked-changes"];
     readonly insertSignatureTable: readonly ["direct"];
+    readonly insertTableRow: readonly ["direct"];
+    readonly deleteTableRow: readonly ["direct"];
+    readonly insertTableColumn: readonly ["direct"];
+    readonly deleteTableColumn: readonly ["direct"];
 }>;
 
 // @public (undocumented)
 export const FOLIO_DOCUMENT_OPERATION_PRECONDITIONS: readonly ["blockTextHash"];
 
 // @public (undocumented)
-export const FOLIO_DOCUMENT_OPERATION_STORIES: readonly ["main"];
+export const FOLIO_DOCUMENT_OPERATION_STORIES: readonly ["main", "header", "footer", "footnote", "endnote"];
 
 // @public (undocumented)
-export const FOLIO_DOCUMENT_OPERATION_TYPES: readonly ["replaceInBlock", "replaceRange", "commentOnRange", "formatRange", "insertAfterBlock", "insertBeforeBlock", "replaceBlock", "deleteBlock", "commentOnBlock", "insertSignatureTable"];
+export const FOLIO_DOCUMENT_OPERATION_TYPES: readonly ["replaceInBlock", "replaceRange", "commentOnRange", "formatRange", "insertAfterBlock", "insertBeforeBlock", "replaceBlock", "deleteBlock", "commentOnBlock", "insertSignatureTable", "insertTableRow", "deleteTableRow", "insertTableColumn", "deleteTableColumn"];
+
+// @public (undocumented)
+export const FOLIO_RESOLVED_REVIEWED_VIEWS: readonly ["original", "final"];
+
+// @public (undocumented)
+export const FOLIO_REVIEWED_VIEWS: readonly ["original", "current-markup", "final"];
 
 // @public (undocumented)
 export type FolioAIBlock = {
     id: string;
     kind: FolioAIBlockKind;
-    text: string;
+    text: string; /** One-based heading depth when the block has outline semantics. */
+    headingLevel?: number;
     displayLabel?: string;
     styleId?: string;
     previewRuns?: FolioAIBlockPreviewRun[];
@@ -190,6 +212,26 @@ export type FolioAIEditOperation = FolioAIEditReviewMeta & {
     position?: "after" | "before";
     parties: FolioAISignatureParty[];
     comment?: FolioAIComment;
+} | {
+    id: string;
+    type: "insertTableRow"; /** Stable paragraph anchor inside the row that receives the new sibling. */
+    blockId: string;
+    position?: "after" | "before"; /** Initial text for each physical cell in source order; omitted cells stay empty. */
+    cellTexts?: string[];
+} | {
+    id: string;
+    type: "deleteTableRow"; /** Stable paragraph anchor inside the row to delete. */
+    blockId: string;
+} | {
+    id: string;
+    type: "insertTableColumn"; /** Stable paragraph anchor inside the cell that receives the new sibling column. */
+    blockId: string;
+    position?: "after" | "before"; /** Initial text for newly created physical cells in row order. */
+    cellTexts?: string[];
+} | {
+    id: string;
+    type: "deleteTableColumn"; /** Stable paragraph anchor inside the column to delete. */
+    blockId: string;
 });
 
 // @public (undocumented)
@@ -224,7 +266,8 @@ export type FolioAIEditSkipReason = "missingBlock" | "changedBlock" | "ambiguous
 // @public (undocumented)
 export type FolioAIEditSnapshot = {
     blocks: FolioAIBlock[];
-    anchors: Record<string, FolioAIBlockAnchor>;
+    anchors: Record<string, FolioAIBlockAnchor>; /** Hidden empty paragraph used to anchor insertions when `blocks` is empty. */
+    emptyDocumentAnchorId?: string;
 };
 
 // @public
@@ -257,6 +300,12 @@ export type FolioAITextRangeHandle = {
     selectedTextHash: string;
 };
 
+// @public (undocumented)
+export type FolioApplyDocumentOperationsToStoryOptions = FolioApplyDocumentOperationsOptions & {
+    story: FolioEditableDocumentStoryHandle;
+    batch: FolioDocumentOperationBatch;
+};
+
 // @public
 export type FolioCommentAnchor = {
     commentId: number; /** Stable id of the anchored body block, or `null` when the anchor is absent. */
@@ -265,27 +314,45 @@ export type FolioCommentAnchor = {
 };
 
 // @public (undocumented)
+export type FolioDocumentNavigationTarget = {
+    type: "block";
+    story: "main";
+    blockId: string;
+} | FolioAITextRangeHandle;
+
+// @public (undocumented)
 export type FolioDocumentOperation = FolioAIEditOperation;
 
 // @public
 export type FolioDocumentOperationAffectedTarget = {
     type: "block";
-    story: "main";
+    story: FolioDocumentOperationStory;
     blockId: string;
     effect: "updated" | "deleted" | "commented";
 } | {
     type: "textRange";
     range: FolioAITextRangeHandle;
     effect: "formatted" | "commented";
+    story?: Exclude<FolioDocumentOperationStory, "main">;
 } | {
     type: "insertion";
-    story: "main";
+    story: FolioDocumentOperationStory;
     anchorBlockId: string;
     position: "before" | "after";
-    content: "block" | "signatureTable";
+    content: "block" | "signatureTable" | "tableRow" | "tableColumn";
 } | {
     type: "comment";
     commentId: number;
+} | {
+    type: "tableRow";
+    story: FolioDocumentOperationStory;
+    anchorBlockId: string;
+    effect: "deleted";
+} | {
+    type: "tableColumn";
+    story: FolioDocumentOperationStory;
+    anchorBlockId: string;
+    effect: "deleted";
 };
 
 // @public (undocumented)
@@ -342,14 +409,89 @@ export type FolioDocumentOperationResult = {
     applied: FolioAIEditAppliedOperation[];
     skipped: FolioAIEditSkippedOperation[];
     issues: FolioDocumentOperationIssue[]; /** Successful effects in input-operation order; skipped operations are omitted. */
-    receipts: FolioDocumentOperationReceipt[];
+    receipts: FolioDocumentOperationReceipt[]; /** Present when the execution surface can undo this committed batch. */
+    undoHandle: FolioDocumentOperationUndoHandle | null;
 };
 
 // @public (undocumented)
 export type FolioDocumentOperationStatus = "committed" | "previewed" | "rejected";
 
 // @public (undocumented)
+export type FolioDocumentOperationStory = "main" | {
+    type: "header";
+    relationshipId: string;
+} | {
+    type: "footer";
+    relationshipId: string;
+} | {
+    type: "footnote";
+    noteId: number;
+} | {
+    type: "endnote";
+    noteId: number;
+};
+
+// @public (undocumented)
 export type FolioDocumentOperationType = FolioDocumentOperation["type"];
+
+// @public (undocumented)
+export type FolioDocumentOperationUndoFailureReason = "unknownHandle" | "notLatest" | "documentChanged";
+
+// @public
+export type FolioDocumentOperationUndoHandle = {
+    type: "documentOperationUndo";
+    id: string;
+};
+
+// @public (undocumented)
+export type FolioDocumentOperationUndoResult = {
+    status: "undone";
+    undoHandle: FolioDocumentOperationUndoHandle;
+} | {
+    status: "rejected";
+    undoHandle: FolioDocumentOperationUndoHandle;
+    reason: FolioDocumentOperationUndoFailureReason;
+};
+
+// @public (undocumented)
+export type FolioDocumentOutline = {
+    sections: FolioDocumentOutlineEntry[];
+};
+
+// @public (undocumented)
+export type FolioDocumentOutlineEntry = {
+    handle: FolioDocumentSectionHandle;
+    headingBlockId: string;
+    text: string; /** One-based heading depth. */
+    level: number;
+    parentHandle?: FolioDocumentSectionHandle;
+};
+
+// @public (undocumented)
+export type FolioDocumentSection = {
+    handle: FolioDocumentSectionHandle;
+    heading: FolioDocumentOutlineEntry; /** Heading block followed by every block in its logical section. */
+    blocks: FolioAIBlock[];
+};
+
+// @public
+export type FolioDocumentSectionHandle = {
+    type: "headingSection";
+    story: "main";
+    headingBlockId: string;
+    headingTextHash: string; /** One-based depth used to detect structural section-boundary changes. */
+    headingLevel: number;
+};
+
+// @public (undocumented)
+export type FolioDocumentSectionReadResult = {
+    status: "found";
+    section: FolioDocumentSection;
+} | {
+    status: "missing";
+} | {
+    status: "stale";
+};
 
 // @public (undocumented)
 export type FolioDocumentStory = {
@@ -361,11 +503,38 @@ export type FolioDocumentStory = {
 export type FolioDocumentStoryHandle = {
     type: "main";
 } | {
-    type: "header" | "footer";
+    type: "header";
     relationshipId: string;
 } | {
-    type: "footnote" | "endnote";
+    type: "footer";
+    relationshipId: string;
+} | {
+    type: "footnote";
     noteId: number;
+} | {
+    type: "endnote";
+    noteId: number;
+};
+
+// @public (undocumented)
+export class FolioDocumentStoryNotFoundError extends FolioDocumentStoryNotFoundError_base {}
+
+// @public (undocumented)
+export type FolioEditableDocumentStoryHandle = FolioDocumentStoryHandle;
+
+// @public (undocumented)
+export type FolioReadReviewedStoryOptions = {
+    story?: FolioEditableDocumentStoryHandle;
+    view?: FolioReviewedView;
+};
+
+// @public (undocumented)
+export type FolioResolvedReviewedView = (typeof FOLIO_RESOLVED_REVIEWED_VIEWS)[number];
+
+// @public (undocumented)
+export type FolioResolveReviewedStoryOptions = {
+    story?: FolioEditableDocumentStoryHandle;
+    view: FolioResolvedReviewedView;
 };
 
 // @public
@@ -381,6 +550,18 @@ export type FolioReviewChange = {
 // @public (undocumented)
 export type FolioReviewChangeKind = "insertion" | "deletion";
 
+// @public (undocumented)
+export type FolioReviewedStory = {
+    story: FolioEditableDocumentStoryHandle;
+    view: FolioReviewedView;
+    snapshot: FolioAIEditSnapshot;
+    text: string;
+    changes: FolioReviewChange[];
+};
+
+// @public (undocumented)
+export type FolioReviewedView = (typeof FOLIO_REVIEWED_VIEWS)[number];
+
 // @public
 export const getCommentAnchorsFromDoc: (doc: Node_2) => FolioCommentAnchor[];
 
@@ -392,6 +573,9 @@ export const getFolioDocumentOperationIssues: (operations: readonly FolioDocumen
 
 // @public
 export const getFolioDocumentOperationReceipts: (operations: readonly FolioDocumentOperation[], applied: readonly FolioAIEditAppliedOperation[]) => FolioDocumentOperationReceipt[];
+
+// @public
+export const getFolioDocumentOutline: (snapshot: FolioAIEditSnapshot) => FolioDocumentOutline;
 
 // @public
 export const getFolioParaIdFromBlockId: (id: string) => string | null;
@@ -409,6 +593,12 @@ export class InvalidFolioDocumentOperationBatchError extends InvalidFolioDocumen
 export const isFolioDocumentOperationModeSupported: (operationType: FolioDocumentOperationType, mode: FolioDocumentOperationMode) => boolean;
 
 // @public (undocumented)
+export const isFolioResolvedReviewedView: (value: unknown) => value is FolioResolvedReviewedView;
+
+// @public (undocumented)
+export const isFolioReviewedView: (value: unknown) => value is FolioReviewedView;
+
+// @public (undocumented)
 export const isSupportedFolioDocumentOperationVersion: (value: unknown) => value is typeof FOLIO_DOCUMENT_OPERATION_CONTRACT_VERSION;
 
 // @public (undocumented)
@@ -417,8 +607,20 @@ export const normalizeFolioAIBlockText: (text: string) => string;
 // @public (undocumented)
 export const parseFolioDocumentOperationBatch: (value: unknown) => FolioDocumentOperationBatch;
 
+// @public
+export const readFolioDocumentSection: (snapshot: FolioAIEditSnapshot, handle: FolioDocumentSectionHandle) => FolioDocumentSectionReadResult;
+
+// @public (undocumented)
+export const resolveFolioAIBlockRange: (input: ResolveFolioAIBlockRangeOptions) => DocPositionRange | null;
+
+// @public
+export const resolveFolioAITextRange: (input: ResolveFolioAITextRangeOptions) => DocPositionRange | null;
+
 // @public (undocumented)
 export class UnsupportedFolioDocumentOperationVersionError extends UnsupportedFolioDocumentOperationVersionError_base {}
+
+// @public (undocumented)
+export class UnsupportedFolioReviewedViewError extends UnsupportedFolioReviewedViewError_base {}
 
 // @public
 export type WordDiffSegment = {

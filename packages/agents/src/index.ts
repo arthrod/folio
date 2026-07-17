@@ -9,11 +9,19 @@ export type { CreateReviewerBridgeOptions } from "./bridges/reviewer";
 export { createReviewerBridge } from "./bridges/reviewer";
 export type {
   FolioAgentBlockDiff,
+  FolioAgentCompareDocxVersionsOptions,
+  FolioAgentGenerateRedlineDocxOptions,
+  FolioAgentGenerateRedlineDocxResult,
   FolioAgentVersionDiff,
   FolioAgentVersionDiffSegment,
 } from "./compare";
-export { compareDocxVersions, formatVersionDiffForLLM } from "./compare";
+export { compareDocxVersions, formatVersionDiffForLLM, generateRedlineDocx } from "./compare";
 export { executeFolioToolCall } from "./execute";
+export {
+  FOLIO_DOCUMENT_OPERATION_BATCH_JSON_SCHEMA,
+  FOLIO_DOCUMENT_OPERATION_JSON_SCHEMA,
+  folioDocumentOperationBatchSchema,
+} from "./operation-schema";
 export type { ParseAddCommentResult, ParseSuggestChangesResult } from "./parse";
 export { parseAddCommentInput, parseSuggestChangesInput } from "./parse";
 export type { AnthropicToolDefinition, OpenAIToolDefinition } from "./providers";
@@ -22,10 +30,16 @@ export { FOLIO_AGENT_TOOLS, getFolioToolDefinitions } from "./tools";
 export type {
   FolioAgentApplyOperationsSummary,
   FolioAgentBlock,
+  FolioAgentDocumentOutline,
   FolioAgentChange,
   FolioAgentComment,
   FolioAgentCommentFilter,
   FolioAgentCommentReply,
+  FolioAgentOutlineEntry,
+  FolioAgentSectionRead,
+  FolioAgentScopedFindTextResult,
+  FolioAgentStoryFindTextResult,
+  FolioAgentStoryTextMatch,
   FolioAgentTextMatch,
   FolioAgentToolDefinition,
   FolioAgentToolName,

@@ -1,12 +1,11 @@
 /**
  * Table row-break geometry. Ported from eigenpal/docx-editor#698 (folio subset).
  *
- * Word lets a table row break across a page boundary ("allow row to break
- * across pages", on by default). When a row is taller than a whole page it
- * cannot fit anywhere, so the portion that fits stays and the rest continues on
- * the next page — broken between whole text lines, never through a glyph.
- * Without this folio forced the oversized row onto one page and the overflow
- * was clipped (content lost; upstream #570).
+ * Table rows may break across flow regions unless `cantSplit` is set. When a
+ * permitted row exceeds the current region, the portion that fits stays and
+ * the rest continues in the next region, broken between whole text lines and
+ * never through a glyph. This also prevents oversized rows from overflowing
+ * one page and clipping content (upstream #570).
  *
  * This computes, per row, the safe break offsets (the y of every line bottom in
  * the row's cells) so the paginator can snap a break to the deepest whole line
@@ -20,7 +19,9 @@ import {
   getTableCellContentWidth,
   getTableCellFloatingImages,
 } from "./measure/tableCellFloating";
-import type { Measure, TableBlock, TableCell, TableCellMeasure, TableMeasure } from "./types";
+import { createTableCellFlowState, placeTableCellBlock } from "./measure/tableCellFlow";
+import { isEmptyParagraph } from "./paragraphSpacing";
+import type { TableBlock, TableCell, TableCellMeasure, TableMeasure } from "./types";
 
 type UnsafeBreakRange = {
   top: number;
@@ -30,19 +31,12 @@ type UnsafeBreakRange = {
 type CellBreakGeometry = {
   bottoms: number[];
   unsafeRanges: UnsafeBreakRange[];
+  suppressibleLeadingRanges: UnsafeBreakRange[];
 };
 
-const DEFAULT_TABLE_CELL_PADDING_TOP = 1;
+const BREAK_OFFSET_EPSILON = 0.01;
 
-function getAtomicBlockHeight(measure: Measure): number {
-  if ("totalHeight" in measure) {
-    return measure.totalHeight;
-  }
-  if ("height" in measure) {
-    return measure.height;
-  }
-  return 0;
-}
+const DEFAULT_TABLE_CELL_PADDING_TOP = 1;
 
 function isInsideRange(offset: number, range: UnsafeBreakRange): boolean {
   return offset > range.top && offset < range.bottom;
@@ -73,6 +67,10 @@ function shiftCellGeometry(geometry: CellBreakGeometry, offset: number): CellBre
       top: range.top + offset,
       bottom: range.bottom + offset,
     })),
+    suppressibleLeadingRanges: geometry.suppressibleLeadingRanges.map((range) => ({
+      top: range.top + offset,
+      bottom: range.bottom + offset,
+    })),
   };
 }
 
@@ -81,13 +79,11 @@ function cellBreakGeometry(
   cell: TableCell | undefined,
   measure: TableCellMeasure,
 ): CellBreakGeometry {
-  // Mirror the PAINTER's cell-content stacking (renderCellContent), not just the
-  // cell-height model: each block advances by its `totalHeight` (which bundles
-  // space-before/after), but its lines paint from the block top with no leading
-  // space-before. Seating line bottoms this way keeps them on the painted line
-  // boundaries so an oversized-row break never cuts through a glyph row.
+  // Mirror the painter's shared cell-flow placement so clean row breaks stay
+  // aligned with both glyph boundaries and inter-paragraph whitespace.
   const bottoms: number[] = [];
   const unsafeRanges: UnsafeBreakRange[] = [];
+  const suppressibleLeadingRanges: UnsafeBreakRange[] = [];
   const cellBlocks = cell?.blocks;
   const blockMeasures = measure.blocks;
   const padTop = cell?.padding?.top ?? DEFAULT_TABLE_CELL_PADDING_TOP;
@@ -95,27 +91,32 @@ function cellBreakGeometry(
   const floatingImages =
     cell !== undefined ? getTableCellFloatingImages(cell, measure, contentWidth) : [];
   const floatingZones = buildTableCellFloatingZones(floatingImages, contentWidth);
-  let y = padTop;
-  let paragraphY = 0;
+  const flowState = createTableCellFlowState();
   for (let i = 0; i < blockMeasures.length; i++) {
     let blockMeasure = blockMeasures[i];
     if (blockMeasure?.kind === "paragraph") {
       const block = cellBlocks?.[i];
-      if (block?.kind === "paragraph" && floatingZones.length > 0) {
+      if (block?.kind !== "paragraph") {
+        continue;
+      }
+      if (floatingZones.length > 0) {
+        const previewState = { ...flowState };
+        const preview = placeTableCellBlock(previewState, block, blockMeasure);
         blockMeasure = measureParagraph(block, contentWidth, {
           floatingZones,
-          paragraphYOffset: paragraphY,
+          paragraphYOffset: preview.contentTop,
         });
       }
-      // The painter (renderCellContent) stacks each cell paragraph by its full
-      // measured height (`totalHeight`, which bundles space-before/after) yet
-      // paints the lines from the fragment top with NO leading space-before; the
-      // before/after surface as trailing space. Mirror that exactly: seat line
-      // bottoms from the block top and advance by `totalHeight`. Offsetting the
-      // lines by `spacing.before` (as the cell-height model does) shifted every
-      // break offset off the painted line boundary, so an oversized row split
-      // through the middle of a glyph row across the page break.
-      const blockTop = y;
+      const placement = placeTableCellBlock(flowState, block, blockMeasure);
+      if (placement.leadingSpacing > 0 && isEmptyParagraph(block)) {
+        suppressibleLeadingRanges.push({
+          top: padTop + placement.top,
+          bottom: padTop + placement.contentTop,
+        });
+      }
+      // Paragraph lines paint after the resolved leading spacing, matching the
+      // paragraph fragment's top padding in the cell painter.
+      let y = padTop + placement.contentTop;
       for (const line of blockMeasure.lines) {
         y += line.floatSkipBefore ?? 0;
         const top = y;
@@ -123,22 +124,61 @@ function cellBreakGeometry(
         unsafeRanges.push({ top, bottom: y });
         bottoms.push(y);
       }
-      y = blockTop + blockMeasure.totalHeight;
-      paragraphY += blockMeasure.totalHeight;
+      // Inter-paragraph spacing is also a safe break band. Recording the box
+      // boundary lets pagination use available whitespace instead of backing
+      // up to the preceding glyph line.
+      bottoms.push(padTop + flowState.height);
     } else if (blockMeasure) {
-      // Nested table / non-paragraph: one atomic block (break only at its bottom).
-      const blockHeight = getAtomicBlockHeight(blockMeasure);
+      const block = cellBlocks?.[i];
+      if (!block) {
+        continue;
+      }
+      const placement = placeTableCellBlock(flowState, block, blockMeasure);
+      const blockHeight = placement.contentHeight;
       if (blockHeight > 0) {
-        const top = y;
-        y += blockHeight;
-        paragraphY += blockHeight;
+        const top = padTop + placement.contentTop;
+        const y = top + blockHeight;
         unsafeRanges.push({ top, bottom: y });
         bottoms.push(y);
       }
     }
   }
-  return { bottoms, unsafeRanges };
+  return { bottoms, unsafeRanges, suppressibleLeadingRanges };
 }
+
+const continuationSkipForCell = (
+  geometry: CellBreakGeometry,
+  offset: number,
+): number | undefined => {
+  const hasRemainingContent = geometry.unsafeRanges.some(
+    ({ bottom }) => bottom > offset + BREAK_OFFSET_EPSILON,
+  );
+  if (!hasRemainingContent) {
+    return undefined;
+  }
+
+  const leadingRange = geometry.suppressibleLeadingRanges.find(
+    ({ top, bottom }) =>
+      top <= offset + BREAK_OFFSET_EPSILON && bottom > offset + BREAK_OFFSET_EPSILON,
+  );
+  return leadingRange ? leadingRange.bottom - offset : 0;
+};
+
+/**
+ * Leading spacing before an empty paragraph is consumed when a split row
+ * resumes at the top of a fresh flow region. Only a whitespace band shared by
+ * every cell with remaining content is suppressible; non-empty paragraphs,
+ * line boxes, cell padding, and explicit row height retain authored space.
+ */
+const continuationSkipAfter = (geometries: CellBreakGeometry[], offset: number): number => {
+  const skips = geometries
+    .map((geometry) => continuationSkipForCell(geometry, offset))
+    .filter((skip): skip is number => skip !== undefined);
+  if (skips.length === 0 || skips.some((skip) => skip <= BREAK_OFFSET_EPSILON)) {
+    return 0;
+  }
+  return Math.min(...skips);
+};
 
 /** Precomputed break geometry for a table. */
 export type TableRowBreakInfo = {
@@ -150,6 +190,8 @@ export type TableRowBreakInfo = {
    * final boundary.
    */
   breakOffsets: number[][];
+  /** Suppressible leading paragraph whitespace after each matching break offset. */
+  continuationSkips: number[][];
 };
 
 /** Build break geometry for a table from its block + measure. */
@@ -167,6 +209,7 @@ export function buildTableRowBreakInfo(
   rowTops.push(acc);
 
   const breakOffsets: number[][] = [];
+  const continuationSkips: number[][] = [];
   for (let r = 0; r < rowCount; r++) {
     const rowHeight = measure.rows[r]?.height ?? 0;
     const offsets = new Set<number>();
@@ -198,10 +241,31 @@ export function buildTableRowBreakInfo(
           geometry.unsafeRanges.every((range) => !isInsideRange(offset, range)),
         ),
     );
-    breakOffsets.push(safeOffsets.sort((a, b) => a - b));
+    const sortedOffsets = safeOffsets.sort((a, b) => a - b);
+    breakOffsets.push(sortedOffsets);
+    continuationSkips.push(
+      sortedOffsets.map((offset) => continuationSkipAfter(cellGeometries, offset)),
+    );
   }
 
-  return { rowTops, breakOffsets };
+  return { rowTops, breakOffsets, continuationSkips };
+}
+
+/** Leading empty-paragraph whitespace to consume when a row resumes after `offset`. */
+export function getRowContinuationSkip(
+  info: TableRowBreakInfo,
+  rowIndex: number,
+  offset: number,
+): number {
+  const offsets = info.breakOffsets[rowIndex];
+  const skips = info.continuationSkips[rowIndex];
+  const index = offsets?.findIndex(
+    (candidate) => Math.abs(candidate - offset) <= BREAK_OFFSET_EPSILON,
+  );
+  if (index === undefined || index < 0) {
+    return 0;
+  }
+  return skips?.[index] ?? 0;
 }
 
 /**

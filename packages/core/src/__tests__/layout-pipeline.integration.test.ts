@@ -367,7 +367,11 @@ describe("Layout Engine - Page Production", () => {
         { kind: "pageBreak", id: 1, pmStart: 15, pmEnd: 16 },
         {
           ...makeParagraphBlock(2, "Cached next page", 17),
-          attrs: { renderedPageBreakBefore: true },
+          attrs: {
+            renderedPageBreakBefore: true,
+            spacing: { before: 24 },
+            spacingExplicit: { before: true },
+          },
         },
       ];
       const measures: Measure[] = [
@@ -380,9 +384,91 @@ describe("Layout Engine - Page Production", () => {
 
       expect(layout.pages.length).toBe(2);
       expect(layout.pages[1].fragments[0].blockId).toBe(2);
+      expect(layout.pages[1].fragments[0].y).toBe(DEFAULT_MARGINS.top);
     });
 
-    test("rendered page break starts a new page after content", () => {
+    test("rendered page break reuses an authored boundary across an empty carrier", () => {
+      const blocks: FlowBlock[] = [
+        makeParagraphBlock(0, "Before break", 1),
+        { kind: "pageBreak", id: 1, pmStart: 15, pmEnd: 16 },
+        {
+          ...makeParagraphBlock(2, "", 17),
+          runs: [],
+        },
+        {
+          ...makeParagraphBlock(3, "Cached next page", 18),
+          attrs: {
+            renderedPageBreakBefore: true,
+            spacing: { before: 24 },
+          },
+        },
+      ];
+      const measures: Measure[] = [
+        makeParagraphMeasure([makeLine(0, 0, 0, 12, 100, 24)]),
+        { kind: "pageBreak" },
+        makeParagraphMeasure([]),
+        makeParagraphMeasure([makeLine(0, 0, 0, 16, 90, 24)]),
+      ];
+
+      const layout = layoutDocument(blocks, measures, makeLayoutOptions());
+
+      expect(layout.pages).toHaveLength(2);
+      expect(layout.pages[1]?.fragments.at(-1)?.blockId).toBe(3);
+      expect(layout.pages[1]?.fragments.at(-1)?.y).toBe(DEFAULT_MARGINS.top);
+    });
+
+    test("rendered page break preserves leading spacing after a section boundary", () => {
+      const blocks: FlowBlock[] = [
+        makeParagraphBlock(0, "Before section", 1),
+        { kind: "sectionBreak", id: 1, type: "nextPage" },
+        {
+          ...makeParagraphBlock(2, "First paragraph in section", 17),
+          attrs: {
+            renderedPageBreakBefore: true,
+            spacing: { before: 24 },
+            spacingExplicit: { before: true },
+          },
+        },
+      ];
+      const measures: Measure[] = [
+        makeParagraphMeasure([makeLine(0, 0, 0, 14, 100, 24)]),
+        { kind: "sectionBreak" },
+        makeParagraphMeasure([makeLine(0, 0, 0, 26, 120, 24)]),
+      ];
+
+      const layout = layoutDocument(blocks, measures, makeLayoutOptions());
+
+      expect(layout.pages).toHaveLength(2);
+      expect(layout.pages[1]?.fragments[0]?.blockId).toBe(2);
+      expect(layout.pages[1]?.fragments[0]?.y).toBe(DEFAULT_MARGINS.top + 24);
+    });
+
+    test("rendered page break consumes inherited spacing after a section boundary", () => {
+      const blocks: FlowBlock[] = [
+        makeParagraphBlock(0, "Before section", 1),
+        { kind: "sectionBreak", id: 1, type: "nextPage" },
+        {
+          ...makeParagraphBlock(2, "First paragraph in section", 17),
+          attrs: {
+            renderedPageBreakBefore: true,
+            spacing: { before: 24 },
+          },
+        },
+      ];
+      const measures: Measure[] = [
+        makeParagraphMeasure([makeLine(0, 0, 0, 14, 100, 24)]),
+        { kind: "sectionBreak" },
+        makeParagraphMeasure([makeLine(0, 0, 0, 26, 120, 24)]),
+      ];
+
+      const layout = layoutDocument(blocks, measures, makeLayoutOptions());
+
+      expect(layout.pages).toHaveLength(2);
+      expect(layout.pages[1]?.fragments[0]?.blockId).toBe(2);
+      expect(layout.pages[1]?.fragments[0]?.y).toBe(DEFAULT_MARGINS.top);
+    });
+
+    test("stale rendered page break remains advisory when the paragraph fits", () => {
       const blocks: FlowBlock[] = [
         makeParagraphBlock(0, "Before break", 1),
         {
@@ -397,8 +483,102 @@ describe("Layout Engine - Page Production", () => {
 
       const layout = layoutDocument(blocks, measures, makeLayoutOptions());
 
-      expect(layout.pages.length).toBe(2);
-      expect(layout.pages[1].fragments[0].blockId).toBe(1);
+      expect(layout.pages).toHaveLength(1);
+      expect(layout.pages[0]?.fragments.map(({ blockId }) => blockId)).toEqual([0, 1]);
+    });
+
+    test("rendered page break preserves a fitting keep-next heading boundary", () => {
+      const blocks: FlowBlock[] = [
+        makeParagraphBlock(0, "Before heading", 1),
+        {
+          ...makeParagraphBlock(1, "Kept heading", 16, { keepNext: true }),
+          attrs: { keepNext: true, renderedPageBreakBefore: true },
+        },
+        makeParagraphBlock(2, "Kept body", 29),
+      ];
+      const measures: Measure[] = [
+        makeParagraphMeasure([makeLine(0, 0, 0, 14, 100, 24)]),
+        makeParagraphMeasure([makeLine(0, 0, 0, 12, 100, 24)]),
+        makeParagraphMeasure([makeLine(0, 0, 0, 9, 100, 24)]),
+      ];
+
+      const layout = layoutDocument(blocks, measures, makeLayoutOptions());
+
+      expect(layout.pages).toHaveLength(2);
+      expect(layout.pages[0]?.fragments.map(({ blockId }) => blockId)).toEqual([0]);
+      expect(layout.pages[1]?.fragments.map(({ blockId }) => blockId)).toEqual([1, 2]);
+    });
+
+    test("rendered page break moves a paragraph that would cross the current page", () => {
+      const blocks: FlowBlock[] = [
+        makeParagraphBlock(0, "Nearly fills page one", 1),
+        {
+          ...makeParagraphBlock(1, "Cached paragraph wraps across four lines", 23),
+          attrs: { renderedPageBreakBefore: true },
+        },
+      ];
+      const measures: Measure[] = [
+        makeParagraphMeasure([makeLine(0, 0, 0, 20, 500, 820)]),
+        makeParagraphMeasure([
+          makeLine(0, 0, 0, 10, 100, 20),
+          makeLine(0, 10, 0, 20, 100, 20),
+          makeLine(0, 20, 0, 30, 100, 20),
+          makeLine(0, 30, 0, 40, 100, 20),
+        ]),
+      ];
+
+      const layout = layoutDocument(blocks, measures, makeLayoutOptions());
+
+      expect(layout.pages).toHaveLength(2);
+      expect(layout.pages[0]?.fragments.map(({ blockId }) => blockId)).toEqual([0]);
+      expect(layout.pages[1]?.fragments.map(({ blockId }) => blockId)).toEqual([1]);
+    });
+
+    test("rendered page break does not reapply leading spacing after snapping", () => {
+      const blocks: FlowBlock[] = [
+        makeParagraphBlock(0, "Nearly fills page one", 1),
+        {
+          ...makeParagraphBlock(1, "Cached next page", 23),
+          attrs: {
+            renderedPageBreakBefore: true,
+            spacing: { before: 24 },
+            spacingExplicit: { before: true },
+          },
+        },
+      ];
+      const measures: Measure[] = [
+        makeParagraphMeasure([makeLine(0, 0, 0, 20, 500, 820)]),
+        makeParagraphMeasure([makeLine(0, 0, 0, 16, 90, 80)]),
+      ];
+
+      const layout = layoutDocument(blocks, measures, makeLayoutOptions());
+
+      expect(layout.pages).toHaveLength(2);
+      expect(layout.pages[1]?.fragments[0]?.y).toBe(DEFAULT_MARGINS.top);
+    });
+
+    test("authored pageBreakBefore keeps leading spacing", () => {
+      const blocks: FlowBlock[] = [
+        makeParagraphBlock(0, "Before break", 1),
+        {
+          ...makeParagraphBlock(1, "Authored next page", 14),
+          attrs: {
+            pageBreakBefore: true,
+            renderedPageBreakBefore: true,
+            spacing: { before: 24 },
+            spacingExplicit: { before: true },
+          },
+        },
+      ];
+      const measures: Measure[] = [
+        makeParagraphMeasure([makeLine(0, 0, 0, 12, 100, 24)]),
+        makeParagraphMeasure([makeLine(0, 0, 0, 18, 90, 24)]),
+      ];
+
+      const layout = layoutDocument(blocks, measures, makeLayoutOptions());
+
+      expect(layout.pages).toHaveLength(2);
+      expect(layout.pages[1]?.fragments[0]?.y).toBe(DEFAULT_MARGINS.top + 24);
     });
 
     test("rendered page break does not add a blank page at a natural overflow", () => {
@@ -419,6 +599,26 @@ describe("Layout Engine - Page Production", () => {
       expect(layout.pages.length).toBe(2);
       expect(layout.pages[0].fragments[0].blockId).toBe(0);
       expect(layout.pages[1].fragments[0].blockId).toBe(1);
+    });
+
+    test("rendered page break reuses a page opened by the preceding paragraph continuation", () => {
+      const blocks: FlowBlock[] = [
+        makeParagraphBlock(0, "Paragraph split across the boundary", 1),
+        {
+          ...makeParagraphBlock(1, "Cached next page", 38),
+          attrs: { renderedPageBreakBefore: true },
+        },
+      ];
+      const measures: Measure[] = [
+        makeParagraphMeasure([makeLine(0, 0, 0, 20, 500, 850), makeLine(0, 20, 0, 37, 300, 24)]),
+        makeParagraphMeasure([makeLine(0, 0, 0, 16, 90, 24)]),
+      ];
+
+      const layout = layoutDocument(blocks, measures, makeLayoutOptions());
+
+      expect(layout.pages).toHaveLength(2);
+      expect(layout.pages[1].fragments.map((fragment) => fragment.blockId)).toEqual([0, 1]);
+      expect(layout.pages[1].fragments[0]).toMatchObject({ continuesFromPrev: true });
     });
 
     test("rendered page break reuses a page containing only an overflowed empty paragraph", () => {
@@ -482,7 +682,207 @@ describe("Layout Engine - Page Production", () => {
       expect(layout.pages[1]?.fragments.map(({ blockId }) => blockId)).toEqual([1, 2, 3, 4]);
     });
 
-    test("successive rendered page breaks remain authoritative after natural reflow", () => {
+    test("rendered page break reuses a page opened by a keep-next chain", () => {
+      const marker = {
+        ...makeParagraphBlock(3, "Cached boundary", 61),
+        attrs: { renderedPageBreakBefore: true },
+      };
+      const blocks: FlowBlock[] = [
+        makeParagraphBlock(0, "Nearly fills page one", 1),
+        makeParagraphBlock(1, "Heading", 23, { keepNext: true }),
+        makeParagraphBlock(2, "Kept body", 31),
+        marker,
+      ];
+      const measures: Measure[] = [
+        makeParagraphMeasure([makeLine(0, 0, 0, 20, 500, 810)]),
+        makeParagraphMeasure([makeLine(0, 0, 0, 7, 100, 24)]),
+        makeParagraphMeasure([makeLine(0, 0, 0, 9, 100, 40)]),
+        makeParagraphMeasure([makeLine(0, 0, 0, 15, 100, 24)]),
+      ];
+
+      const layout = layoutDocument(blocks, measures, makeLayoutOptions());
+
+      expect(layout.pages).toHaveLength(2);
+      expect(layout.pages[1]?.fragments.map(({ blockId }) => blockId)).toEqual([1, 2, 3]);
+    });
+
+    test("rendered page break reuses a page containing a paragraph continuation", () => {
+      const continued = makeParagraphBlock(
+        1,
+        "A paragraph whose measured lines continue across the page boundary",
+        23,
+      );
+      const marker = {
+        ...makeParagraphBlock(2, "Cached boundary", 90),
+        attrs: { renderedPageBreakBefore: true },
+      };
+      const blocks: FlowBlock[] = [
+        makeParagraphBlock(0, "Nearly fills page one", 1),
+        continued,
+        marker,
+      ];
+      const measures: Measure[] = [
+        makeParagraphMeasure([makeLine(0, 0, 0, 20, 500, 800)]),
+        makeParagraphMeasure([makeLine(0, 0, 0, 31, 200, 40), makeLine(0, 32, 0, 64, 200, 40)]),
+        makeParagraphMeasure([makeLine(0, 0, 0, 15, 100, 24)]),
+      ];
+
+      const layout = layoutDocument(blocks, measures, makeLayoutOptions());
+
+      expect(layout.pages).toHaveLength(2);
+      expect(layout.pages[0]?.fragments.map(({ blockId }) => blockId)).toEqual([0, 1]);
+      expect(layout.pages[1]?.fragments.map(({ blockId }) => blockId)).toEqual([1, 2]);
+    });
+
+    test("stale rendered page break remains advisory after a whole paragraph moves", () => {
+      const previousItem = {
+        ...makeParagraphBlock(1, "Moves intact", 23),
+        attrs: { numPr: { numId: 4, ilvl: 1 } },
+      };
+      const marker = {
+        ...makeParagraphBlock(2, "Cached boundary", 50),
+        attrs: {
+          numPr: { numId: 4, ilvl: 0 },
+          renderedPageBreakBefore: true,
+        },
+      };
+      const blocks: FlowBlock[] = [
+        makeParagraphBlock(0, "Nearly fills page one", 1),
+        previousItem,
+        marker,
+      ];
+      const measures: Measure[] = [
+        makeParagraphMeasure([makeLine(0, 0, 0, 20, 500, 840)]),
+        makeParagraphMeasure([makeLine(0, 0, 0, 12, 100, 40)]),
+        makeParagraphMeasure([makeLine(0, 0, 0, 15, 100, 24)]),
+      ];
+
+      const layout = layoutDocument(blocks, measures, makeLayoutOptions());
+
+      expect(layout.pages).toHaveLength(2);
+      expect(layout.pages[1]?.fragments.map(({ blockId }) => blockId)).toEqual([1, 2]);
+    });
+
+    test("rendered page break reuses a page opened within one numbered sequence", () => {
+      const previousItem = {
+        ...makeParagraphBlock(1, "Moves intact", 23),
+        attrs: { numPr: { numId: 4, ilvl: 1 } },
+      };
+      const marker = {
+        ...makeParagraphBlock(2, "Cached boundary", 50),
+        attrs: {
+          numPr: { numId: 4, ilvl: 1 },
+          renderedPageBreakBefore: true,
+        },
+      };
+      const blocks: FlowBlock[] = [
+        makeParagraphBlock(0, "Nearly fills page one", 1),
+        previousItem,
+        marker,
+      ];
+      const measures: Measure[] = [
+        makeParagraphMeasure([makeLine(0, 0, 0, 20, 500, 840)]),
+        makeParagraphMeasure([makeLine(0, 0, 0, 12, 100, 40)]),
+        makeParagraphMeasure([makeLine(0, 0, 0, 15, 100, 24)]),
+      ];
+
+      const layout = layoutDocument(blocks, measures, makeLayoutOptions());
+
+      expect(layout.pages).toHaveLength(2);
+      expect(layout.pages[1]?.fragments.map(({ blockId }) => blockId)).toEqual([1, 2]);
+    });
+
+    test("rendered page break reuses a page opened within one tabbed style sequence", () => {
+      const previousRow: FlowBlock = {
+        ...makeParagraphBlock(1, "First row", 23),
+        runs: [
+          { kind: "text", text: "First", pmStart: 23, pmEnd: 28 },
+          { kind: "tab", pmStart: 28, pmEnd: 29 },
+          { kind: "text", text: "row", pmStart: 29, pmEnd: 32 },
+        ],
+        attrs: {
+          styleId: "TabularLine",
+          indent: { left: 42 },
+          tabs: [{ val: "start", pos: 720 }],
+        },
+      };
+      const marker: FlowBlock = {
+        ...makeParagraphBlock(2, "Second row", 33),
+        runs: [
+          { kind: "text", text: "Second", pmStart: 33, pmEnd: 39 },
+          { kind: "tab", pmStart: 39, pmEnd: 40 },
+          { kind: "text", text: "row", pmStart: 40, pmEnd: 43 },
+        ],
+        attrs: {
+          styleId: "TabularLine",
+          indent: { left: 42 },
+          tabs: [{ val: "start", pos: 720 }],
+          renderedPageBreakBefore: true,
+        },
+      };
+      const blocks: FlowBlock[] = [
+        makeParagraphBlock(0, "Nearly fills page one", 1),
+        previousRow,
+        marker,
+      ];
+      const measures: Measure[] = [
+        makeParagraphMeasure([makeLine(0, 0, 0, 20, 500, 840)]),
+        makeParagraphMeasure([makeLine(0, 0, 0, 9, 100, 40)]),
+        makeParagraphMeasure([makeLine(0, 0, 0, 10, 100, 24)]),
+      ];
+
+      const layout = layoutDocument(blocks, measures, makeLayoutOptions());
+
+      expect(layout.pages).toHaveLength(2);
+      expect(layout.pages[1]?.fragments.map(({ blockId }) => blockId)).toEqual([1, 2]);
+    });
+
+    test("stale rendered page break remains advisory when tabbed layouts reflow", () => {
+      const previousRow: FlowBlock = {
+        ...makeParagraphBlock(1, "First row", 23),
+        runs: [
+          { kind: "text", text: "First", pmStart: 23, pmEnd: 28 },
+          { kind: "tab", pmStart: 28, pmEnd: 29 },
+          { kind: "text", text: "row", pmStart: 29, pmEnd: 32 },
+        ],
+        attrs: {
+          styleId: "TabularLine",
+          indent: { left: 42 },
+          tabs: [{ val: "start", pos: 720 }],
+        },
+      };
+      const marker: FlowBlock = {
+        ...makeParagraphBlock(2, "Different row", 33),
+        runs: [
+          { kind: "text", text: "Different", pmStart: 33, pmEnd: 42 },
+          { kind: "tab", pmStart: 42, pmEnd: 43 },
+          { kind: "text", text: "row", pmStart: 43, pmEnd: 46 },
+        ],
+        attrs: {
+          styleId: "TabularLine",
+          indent: { left: 42 },
+          tabs: [{ val: "start", pos: 1440 }],
+          renderedPageBreakBefore: true,
+        },
+      };
+      const blocks: FlowBlock[] = [
+        makeParagraphBlock(0, "Nearly fills page one", 1),
+        previousRow,
+        marker,
+      ];
+      const measures: Measure[] = [
+        makeParagraphMeasure([makeLine(0, 0, 0, 20, 500, 840)]),
+        makeParagraphMeasure([makeLine(0, 0, 0, 9, 100, 40)]),
+        makeParagraphMeasure([makeLine(0, 0, 0, 13, 100, 24)]),
+      ];
+
+      const layout = layoutDocument(blocks, measures, makeLayoutOptions());
+
+      expect(layout.pages).toHaveLength(2);
+      expect(layout.pages[1]?.fragments.map(({ blockId }) => blockId)).toEqual([1, 2]);
+    });
+
+    test("successive stale rendered page breaks remain advisory after natural reflow", () => {
       const blocks: FlowBlock[] = [
         makeParagraphBlock(0, "Fill page one", 1),
         makeParagraphBlock(1, "Natural page two", 15),
@@ -508,10 +908,9 @@ describe("Layout Engine - Page Production", () => {
 
       const layout = layoutDocument(blocks, measures, makeLayoutOptions());
 
-      expect(layout.pages.length).toBe(4);
-      expect(layout.pages[1].fragments.map((fragment) => fragment.blockId)).toEqual([1]);
-      expect(layout.pages[2].fragments.map((fragment) => fragment.blockId)).toEqual([2, 3, 4]);
-      expect(layout.pages[3].fragments.map((fragment) => fragment.blockId)).toEqual([5]);
+      expect(layout.pages).toHaveLength(3);
+      expect(layout.pages[1]?.fragments.map(({ blockId }) => blockId)).toEqual([1, 2, 3]);
+      expect(layout.pages[2]?.fragments.map(({ blockId }) => blockId)).toEqual([4, 5]);
     });
 
     test("explicit pageBreakBefore takes priority over a rendered page break hint", () => {

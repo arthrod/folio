@@ -9,7 +9,17 @@ import { ommlToMathml } from "../docx/mathToMathml";
 import { parseXmlDocument } from "../docx/xmlParser";
 import { evaluateFieldInstruction } from "../fields/evaluateField";
 import type { FieldContext } from "../fields/fieldContext";
-import { getListMarkerInlineWidth } from "../layout-engine/measure/listMarkerWidth";
+import {
+  getListMarkerInlineWidth,
+  getListMarkerVisualOffset,
+} from "../layout-engine/measure/listMarkerWidth";
+import { DEFAULT_FONT_SIZE } from "../layout-engine/measure/measureHelpers";
+import {
+  FONT_KERNING_MODE,
+  countCompressibleSpaces,
+  getFontKerningMode,
+  getRunFontKerningMode,
+} from "../layout-engine/measure/textMeasurementPolicy";
 import type {
   ParagraphBlock,
   ParagraphMeasure,
@@ -39,6 +49,7 @@ import {
   rotatedBoundingBox,
 } from "../utils/rotationBoundingBox";
 import { hasCjk, segmentByScript } from "../utils/scriptSegments";
+import { borderStrokeToCss, resolveParagraphBorderHorizontalOutsets } from "./borderStroke";
 import { getAutomaticTextColorForBackground } from "./documentColors";
 import { applyImageVisualAttrs, hasImageVisualAttrs, wrapImageWithCrop } from "./renderImage";
 import { isFloatingImageRun, resolveImageLineAlign } from "./renderUtils";
@@ -243,12 +254,7 @@ function applyRunStyles(element: HTMLElement, run: TextRun | TabRun): void {
     element.style.transform = `scaleX(${run.horizontalScale / 100})`;
     element.style.transformOrigin = "left center";
   }
-  if (run.kerningMinPt && run.kerningMinPt > 0) {
-    const fontSizePt = run.fontSize ?? 11;
-    if (fontSizePt >= run.kerningMinPt) {
-      element.style.fontKerning = "normal";
-    }
-  }
+  element.style.fontKerning = getRunFontKerningMode(run, DEFAULT_FONT_SIZE);
   if (run.emboss) {
     element.style.textShadow = "1px 1px 1px rgba(255,255,255,0.5), -1px -1px 1px rgba(0,0,0,0.3)";
   }
@@ -1262,6 +1268,123 @@ export function splitTextRunsByEastAsia(runs: Run[]): Run[] {
   return result;
 }
 
+type CollapsibleLineEdgeSpacesResult = {
+  runs: Run[];
+  collapsedLeadingRuns: Set<TextRun>;
+  collapsedTrailingRuns: Set<TextRun>;
+};
+
+const paintsLineEdgeSpaces = (run: TextRun): boolean =>
+  Boolean(
+    run.underline ||
+    run.strike ||
+    run.highlight ||
+    run.shading ||
+    run.hyperlink ||
+    run.hidden ||
+    run.templatePreview ||
+    run.isInsertion ||
+    run.isDeletion ||
+    run.commentIds?.length ||
+    run.textEffect ||
+    run.emphasisMark,
+  );
+
+const splitTextRunAt = (run: TextRun, index: number): [TextRun, TextRun] => {
+  const leading = { ...run, text: run.text.slice(0, index) };
+  const trailing = { ...run, text: run.text.slice(index) };
+  if (run.pmStart === undefined) {
+    return [leading, trailing];
+  }
+
+  const splitPosition = Math.min(run.pmStart + index, run.pmEnd ?? Number.POSITIVE_INFINITY);
+  leading.pmEnd = splitPosition;
+  trailing.pmStart = splitPosition;
+  return [leading, trailing];
+};
+
+/**
+ * Word keeps ordinary line-edge spaces addressable in the document model but
+ * gives them no painted advance. Collapsible trailing spaces always collapse;
+ * leading spaces collapse only after a soft wrap, not at the authored
+ * paragraph start or after a manual line break. Split paint runs to preserve
+ * exact PM ranges.
+ */
+const splitCollapsibleLineEdgeSpaces = (
+  sourceRuns: Run[],
+  collapseLeading: boolean,
+): CollapsibleLineEdgeSpacesResult => {
+  const runs = [...sourceRuns];
+  const collapsedLeadingRuns = new Set<TextRun>();
+  const collapsedTrailingRuns = new Set<TextRun>();
+
+  for (let index = runs.length - 1; index >= 0; index--) {
+    const run = runs[index];
+    if (!run || !isTextRun(run)) {
+      break;
+    }
+    if (run.text.length === 0) {
+      continue;
+    }
+
+    const trailingSpaces = / +$/u.exec(run.text);
+    if (!trailingSpaces || paintsLineEdgeSpaces(run)) {
+      break;
+    }
+
+    if (trailingSpaces.index === 0) {
+      collapsedTrailingRuns.add(run);
+      continue;
+    }
+
+    const [leading, trailing] = splitTextRunAt(run, trailingSpaces.index);
+    runs.splice(index, 1, leading, trailing);
+    collapsedTrailingRuns.add(trailing);
+    break;
+  }
+
+  if (collapseLeading) {
+    for (let index = 0; index < runs.length; index++) {
+      const run = runs[index];
+      if (!run || !isTextRun(run)) {
+        break;
+      }
+      if (run.text.length === 0) {
+        continue;
+      }
+
+      const leadingSpaces = /^ +/u.exec(run.text);
+      if (!leadingSpaces || paintsLineEdgeSpaces(run)) {
+        break;
+      }
+
+      if (leadingSpaces[0].length === run.text.length) {
+        collapsedLeadingRuns.add(run);
+        continue;
+      }
+
+      const [leading, trailing] = splitTextRunAt(run, leadingSpaces[0].length);
+      runs.splice(index, 1, leading, trailing);
+      collapsedLeadingRuns.add(leading);
+      break;
+    }
+  }
+
+  return { runs, collapsedLeadingRuns, collapsedTrailingRuns };
+};
+
+const startsAfterSoftWrap = (block: ParagraphBlock, line: MeasuredLine): boolean => {
+  if (line.fromChar > 0) {
+    return true;
+  }
+  if (line.fromRun === 0) {
+    return false;
+  }
+
+  const previousRun = block.runs.at(line.fromRun - 1);
+  return previousRun !== undefined && !isLineBreakRun(previousRun);
+};
+
 /**
  * Options for rendering a line with justify support
  */
@@ -1303,28 +1426,20 @@ type RenderLineOptions = {
  */
 const RIGHT_EDGE_EPSILON_PX = 0.5;
 
-function countShrinkableSpaces(runs: Run[]): number {
+function countShrinkableSpaces(runs: Run[], context: RenderContext | undefined): number {
   let count = 0;
   for (const run of runs) {
     if (isTextRun(run)) {
-      for (const char of run.text ?? "") {
-        if (char === " ") count++;
-      }
+      count += countCompressibleSpaces(run.text ?? "");
     } else if (isFieldRun(run)) {
-      for (const char of run.fallback ?? "") {
-        if (char === " ") count++;
-      }
-    } else if (isMathRun(run)) {
-      for (const char of run.plainText ?? "") {
-        if (char === " ") count++;
-      }
+      count += countCompressibleSpaces(resolveFieldText(run, context));
     }
   }
   return count;
 }
 
 /**
- * Build a TextMeasureStyle from a TextRun or FieldRun's relevant fields.
+ * Build the shared measurement style from a paintable text run.
  */
 function runMeasureStyle(run: TextRun | FieldRun | MathRun): TextMeasureStyle {
   return {
@@ -1333,6 +1448,7 @@ function runMeasureStyle(run: TextRun | FieldRun | MathRun): TextMeasureStyle {
     ...(run.letterSpacing !== undefined ? { letterSpacing: run.letterSpacing } : {}),
     ...(run.smallCaps !== undefined ? { smallCaps: run.smallCaps } : {}),
     ...(run.eastAsiaFontFamily !== undefined ? { eastAsiaFontFamily: run.eastAsiaFontFamily } : {}),
+    kerning: getRunFontKerningMode(run, DEFAULT_FONT_SIZE) === FONT_KERNING_MODE.enabled,
   };
 }
 
@@ -1525,6 +1641,7 @@ type TextMeasureStyle = {
   /** EA font for CJK code points; segments the measured text by script when set
    * (and the run has no letter spacing), mirroring measureContainer. */
   eastAsiaFontFamily?: string;
+  kerning?: boolean;
 };
 
 function applyLetterSpacingToMeasuredWidth(
@@ -1549,6 +1666,7 @@ function createTextMeasurer(
     if (!ctx) {
       return applyLetterSpacingToMeasuredWidth(text.length * 7, text, style.letterSpacing);
     } // Fallback estimate
+    ctx.fontKerning = getFontKerningMode(style);
     // Use font resolver for category-appropriate fallback stacks,
     // matching measureContainer.ts
     const cssFallback = resolveFontFamily(fontFamily).cssFallback;
@@ -1615,7 +1733,29 @@ export function renderLine(
   lineEl.style.lineHeight = `${line.lineHeight}px`;
 
   // Get runs for this line
-  const runsForLine = splitTextRunsByEastAsia(sliceRunsForLine(block, line));
+  const splitRuns = splitTextRunsByEastAsia(sliceRunsForLine(block, line));
+  const {
+    runs: runsForLine,
+    collapsedLeadingRuns: collapsedLeadingSpaceRuns,
+    collapsedTrailingRuns: collapsedTrailingSpaceRuns,
+  } = splitCollapsibleLineEdgeSpaces(splitRuns, startsAfterSoftWrap(block, line));
+  const isCollapsedLineEdgeSpaceRun = (run: TextRun): boolean =>
+    collapsedLeadingSpaceRuns.has(run) || collapsedTrailingSpaceRuns.has(run);
+  const renderLineTextRun = (run: TextRun): HTMLElement => {
+    const runEl = renderTextRun(run, doc);
+    if (collapsedLeadingSpaceRuns.has(run)) {
+      runEl.dataset["collapsedLeadingSpaces"] = "true";
+    }
+    if (collapsedTrailingSpaceRuns.has(run)) {
+      runEl.dataset["collapsedTrailingSpaces"] = "true";
+    }
+    if (isCollapsedLineEdgeSpaceRun(run)) {
+      runEl.style.fontSize = "0";
+      runEl.style.letterSpacing = "0";
+      runEl.style.wordSpacing = "0";
+    }
+    return runEl;
+  };
   // OOXML `<m:oMathPara>` (display math) defaults to `jc="centerGroup"` —
   // Word renders display math centred on its own paragraph. When the line
   // holds a single block math run, centre it horizontally so the equation
@@ -1723,9 +1863,23 @@ export function renderLine(
     if (shouldJustify) {
       const firstLineIndentPx = options.isFirstLine ? (options.firstLineIndentPx ?? 0) : 0;
       const firstLineHangingPx = Math.max(0, -firstLineIndentPx);
-      const justifyCapacityPx = options.availableWidth + firstLineHangingPx;
+      const hasVisibleListMarker =
+        options.isFirstLine && block.attrs?.listMarker && !block.attrs.listMarkerHidden;
+      // A list marker consumes the hanging slot inline. When the marker starts
+      // before the content edge, its negative margin cancels the part of that
+      // slot outside the paragraph; only the portion between the content edge
+      // and the body start can expand the line box. Letting the full hanging
+      // value expand a zero-left list pushed justified text past the right
+      // margin by exactly one hanging slot.
+      const firstLineHangingExpansionPx = hasVisibleListMarker
+        ? Math.min(firstLineHangingPx, Math.max(0, options.leftIndentPx ?? 0))
+        : firstLineHangingPx;
+      const justifyCapacityPx = options.availableWidth + firstLineHangingExpansionPx;
       const overfullPx = line.width - justifyCapacityPx;
-      const shrinkableSpaces = countShrinkableSpaces(runsForLine);
+      const shrinkableSpaces = countShrinkableSpaces(
+        runsForLine.filter((run) => !isTextRun(run) || !isCollapsedLineEdgeSpaceRun(run)),
+        options.context,
+      );
       if (overfullPx > RIGHT_EDGE_EPSILON_PX && shrinkableSpaces > 0) {
         lineEl.style.textAlign = "left";
         lineEl.style.textAlignLast = "auto";
@@ -1745,10 +1899,9 @@ export function renderLine(
         lineEl.style.textAlignLast = "justify";
       }
       // Set explicit width so browser knows how wide to justify/compress to.
-      const listFirstLineOffset =
-        options.isFirstLine && block.attrs?.listMarker && !block.attrs.listMarkerHidden
-          ? (options.firstLineIndentPx ?? 0)
-          : 0;
+      const listFirstLineOffset = hasVisibleListMarker
+        ? Math.max(firstLineIndentPx, -firstLineHangingExpansionPx)
+        : 0;
       lineEl.style.width = `${options.availableWidth - listFirstLineOffset}px`;
     }
   }
@@ -1924,7 +2077,7 @@ export function renderLine(
             break;
           }
           if (isTextRun(next)) {
-            lineEl.append(renderTextRun(next, doc));
+            lineEl.append(renderLineTextRun(next));
           } else if (isFieldRun(next) && options?.context) {
             lineEl.append(renderFieldRun(next, doc, options.context));
           } else if (isImageRun(next)) {
@@ -1952,7 +2105,12 @@ export function renderLine(
       // the content area (Word TOC styles author stops a hair beyond the
       // margin); without this, the painted tab spills into the right margin.
       let tabWidth = tabResult.width;
+      const landsOnLeftIndent =
+        tabResult.alignment === "start" &&
+        leftIndentPx > 0 &&
+        Math.abs(currentX + tabWidth - leftIndentPx) <= RIGHT_EDGE_EPSILON_PX;
       if (
+        !landsOnLeftIndent &&
         lineRightEdgeX !== undefined &&
         canClampTabToRightEdge(
           tabResult.alignment,
@@ -1971,11 +2129,14 @@ export function renderLine(
       // Update X position
       currentX += tabWidth;
     } else if (isTextRun(run)) {
-      const runEl = renderTextRun(run, doc);
+      const runEl = renderLineTextRun(run);
 
       lineEl.append(runEl);
 
       // Measure text width for accurate tab position tracking
+      if (isCollapsedLineEdgeSpaceRun(run)) {
+        continue;
+      }
       const fontSize = run.fontSize || 11;
       const fontFamily = run.fontFamily || "Calibri";
       const measuredWidth = measureText(
@@ -2049,6 +2210,18 @@ export function renderLine(
       // Fallback for unknown run types
       const runEl = renderRun(run, doc, options?.context);
       lineEl.append(runEl);
+    }
+  }
+
+  if (line.discretionaryHyphen) {
+    const sourceRun = block.runs[line.discretionaryHyphen.runIndex];
+    if (sourceRun && isTextRun(sourceRun)) {
+      const hyphenRun = { ...sourceRun, text: "-" };
+      Reflect.deleteProperty(hyphenRun, "pmStart");
+      Reflect.deleteProperty(hyphenRun, "pmEnd");
+      const hyphenEl = renderTextRun(hyphenRun, doc);
+      hyphenEl.dataset["discretionaryHyphen"] = "true";
+      lineEl.append(hyphenEl);
     }
   }
 
@@ -2306,7 +2479,8 @@ export function renderParagraphFragment(
     // Ensure box-sizing is set for proper border calculations
     fragmentEl.style.boxSizing = "border-box";
 
-    const borderToCss = (b: BorderStyle) => `${b.width}px ${borderStyleToCss(b.style)} ${b.color}`;
+    const borderToCss = (border: BorderStyle) =>
+      borderStrokeToCss({ ...border, style: borderStyleToCss(border.style) });
 
     // Word-style border grouping (ECMA-376 §17.3.1.24):
     // Adjacent paragraphs with identical pBdr form a group.
@@ -2331,12 +2505,12 @@ export function renderParagraphFragment(
     // With box-sizing: border-box, the border paints inside the box, so each
     // side's outer edge must shift outward by both `space` (text↔border gap
     // in OOXML §17.3.1.24) and the border width to keep the visible gap.
-    borderBox.style.left = `${
-      indentLeft - (borders.left?.space ?? 0) - (borders.left?.width ?? 0)
-    }px`;
-    borderBox.style.right = `${
-      indentRight - (borders.right?.space ?? 0) - (borders.right?.width ?? 0)
-    }px`;
+    const horizontalOutsets = resolveParagraphBorderHorizontalOutsets(
+      borders,
+      renderedTopBorder !== undefined || renderedBottomBorder !== undefined,
+    );
+    borderBox.style.left = `${indentLeft - horizontalOutsets.left}px`;
+    borderBox.style.right = `${indentRight - horizontalOutsets.right}px`;
     borderBox.style.top = `${-(renderedTopBorder?.space ?? 0) - (renderedTopBorder?.width ?? 0)}px`;
     borderBox.style.bottom = `${
       -(renderedBottomBorder?.space ?? 0) - (renderedBottomBorder?.width ?? 0)
@@ -2515,9 +2689,6 @@ export function renderParagraphFragment(
     } else if (indentLeft > 0) {
       // Body lines (not first line)
       lineEl.style.paddingLeft = `${indentLeft}px`;
-    } else if (hasHanging) {
-      // Hanging indent without left indent: body lines need padding = hanging
-      lineEl.style.paddingLeft = `${indent.hanging ?? 0}px`;
     }
 
     if (indentRight > 0) {
@@ -2562,7 +2733,11 @@ export function renderParagraphFragment(
       // 2. First text run's font (paragraph content)
       // 3. Paragraph default font (from style)
       let firstTextRun: TextRun | undefined;
-      if (!block.attrs.listMarkerFontFamily || !block.attrs.listMarkerFontSize) {
+      if (
+        !block.attrs.listMarkerFontFamily ||
+        !block.attrs.listMarkerFontSize ||
+        block.attrs.listMarkerBold === undefined
+      ) {
         for (let ri = line.fromRun; ri <= line.toRun; ri++) {
           const r = block.runs[ri];
           if (r && r.kind === "text") {
@@ -2577,25 +2752,32 @@ export function renderParagraphFragment(
         block.attrs.defaultFontFamily;
       const markerFontSize =
         block.attrs.listMarkerFontSize ?? firstTextRun?.fontSize ?? block.attrs.defaultFontSize;
+      const markerBold = block.attrs.listMarkerBold ?? firstTextRun?.bold;
 
       const marker = renderListMarker(
         block.attrs.listMarker,
         getListMarkerInlineWidth(block),
+        getListMarkerVisualOffset(block),
         doc,
         markerFontFamily,
         markerFontSize,
+        markerBold,
         block.attrs.listMarkerRevision,
         block.attrs.listMarkerSecondSlotOffsetTwips,
       );
-      // When the hang exceeds the left indent the marker belongs in the left
-      // margin — exactly where Word puts it (a list whose direct `w:ind` has
-      // `hanging` > `left`, eigenpal #730 / #729). CSS padding can't be
-      // negative, so the negative portion rides on the marker's own margin-left.
-      // Gated to `indentLeft > 0`: with no left indent the body/continuation
-      // lines already sit at `hanging` (see body-line branch above), so hanging
-      // the marker into the margin there would misalign the first line.
-      if (markerStart < 0 && indentLeft > 0) {
-        marker.style.marginLeft = `${markerStart}px`;
+      // When the marker sits left of the line's own start it belongs in the
+      // left margin — exactly where Word puts it (a list whose direct `w:ind`
+      // has `hanging` > `left`, eigenpal #730 / #729, OR a NEGATIVE `left`, e.g.
+      // `w:ind w:left="-180" w:hanging="360"`). CSS padding can't be negative,
+      // so the negative portion rides on the marker's own margin-left. The line
+      // element already carries `margin-left = min(indentLeft, 0)`, so subtract
+      // that so the marker only takes the REMAINING negative offset: for a
+      // positive left indent the line margin is 0 and this is just `markerStart`;
+      // for a negative left indent it is `markerStart - indentLeft = -hanging`.
+      const markerLineMargin = Math.min(indentLeft, 0);
+      const markerMarginLeft = markerStart - markerLineMargin;
+      if (markerMarginLeft < 0) {
+        marker.style.marginLeft = `${markerMarginLeft}px`;
       }
       lineEl.prepend(marker);
     }
@@ -2609,7 +2791,7 @@ export function renderParagraphFragment(
 
 /**
  * Render a list marker element as an inline-block at the start of the first
- * body line. `minWidth` (from `getListMarkerInlineWidth`) sizes the marker
+ * body line. `inlineWidth` (from `getListMarkerInlineWidth`) sizes the marker
  * so the body text aligns at the next tab stop per ECMA-376 §17.9.25 —
  * this honours `w:suff` (`tab` / `space` / `nothing`) and the document's
  * tab grid. Long markers like "1.1.1." therefore grow to the next stop
@@ -2617,10 +2799,12 @@ export function renderParagraphFragment(
  */
 function renderListMarker(
   marker: string,
-  minWidth: number,
+  inlineWidth: number,
+  visualOffset: number,
   doc: Document,
   fontFamily?: string,
   fontSize?: number,
+  bold?: boolean,
   revision?: ParagraphAttrs["listMarkerRevision"],
   secondSlotOffsetTwips?: number,
 ): HTMLElement {
@@ -2637,6 +2821,9 @@ function renderListMarker(
     // 1pt = 96/72 px
     span.style.fontSize = `${(fontSize * 96) / 72}px`;
   }
+  if (bold !== undefined) {
+    span.style.fontWeight = bold ? DOCX_BOLD_FONT_WEIGHT : "normal";
+  }
 
   // `text-align-last` inherits, so a justified paragraph would distribute the
   // marker's internal whitespace across its minWidth box — pushing folded
@@ -2645,8 +2832,9 @@ function renderListMarker(
   span.style.textAlign = "left";
   span.style.textAlignLast = "left";
   span.style.boxSizing = "border-box";
-  if (minWidth > 0) {
-    span.style.minWidth = `${minWidth}px`;
+  span.style.width = `${inlineWidth}px`;
+  if (visualOffset !== 0) {
+    span.style.transform = `translateX(${visualOffset}px)`;
   }
 
   if (revision) {

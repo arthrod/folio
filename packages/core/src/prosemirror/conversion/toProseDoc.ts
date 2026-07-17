@@ -44,10 +44,13 @@ import type {
   MoveFrom,
   MoveTo,
   MathEquation,
+  ShapeTextBody,
   Theme,
 } from "../../types/document";
-import { resolveColor } from "../../utils/colorResolver";
-import { mergeParagraphFormatting } from "../../utils/paragraphFormattingMerge";
+import {
+  mergeParagraphFormatting,
+  mergeParagraphTabStops,
+} from "../../utils/paragraphFormattingMerge";
 import { mergeTextFormatting } from "../../utils/textFormattingMerge";
 import { emuToPixels } from "../../utils/units";
 import { setAutospacingBaseValue } from "../autospacingBase";
@@ -60,8 +63,14 @@ import type {
   TableAttrs,
   TableRowAttrs,
   TableCellAttrs,
+  TextBoxAttrs,
 } from "../schema/nodes";
 import { assertValidProseMirrorDocument } from "../validation";
+import {
+  resolveEffectiveTableCellFormatting,
+  type TableCellMarginsAttrs,
+  type TableCellPosition,
+} from "./effectiveTableCellFormatting";
 import { marksToTextFormatting } from "./fromProseDoc";
 import { shadingToRunShadingAttrs } from "./runShadingMark";
 
@@ -100,6 +109,7 @@ export function toProseDoc(document: Document, options?: ToProseDocOptions): PMN
   const styleResolver = createStyleEngine(options?.styles ?? document.package.styles);
   const theme = options?.theme ?? document.package.theme ?? null;
   let textBoxGroupIndex = 0;
+  const nextTextBoxGroupId = (): string => String(textBoxGroupIndex++);
 
   const convertBodyBlocks = (blocks: BlockContent[]): PMNode[] => {
     const out: PMNode[] = [];
@@ -109,13 +119,31 @@ export function toProseDoc(document: Document, options?: ToProseDocOptions): PMN
         if (pbPos === "before") {
           out.push(schema.node("pageBreak"));
         }
-        out.push(...convertParagraphWithTextBoxes(block, styleResolver, String(textBoxGroupIndex)));
-        textBoxGroupIndex += 1;
+        const converted = convertParagraphWithTextBoxes(block, styleResolver, {
+          textBoxGroupId: nextTextBoxGroupId(),
+          context: { theme, nextTextBoxGroupId },
+        });
+        const firstConverted = converted.at(0);
+        if (
+          pbPos === "before" &&
+          converted.length === 1 &&
+          firstConverted?.type.name === "paragraph" &&
+          firstConverted.content.size === 0 &&
+          document.package.settings?.splitPageBreakAndParagraphMark !== true
+        ) {
+          const paragraph = firstConverted;
+          converted[0] = paragraph.type.create(
+            { ...paragraph.attrs, _pageBreakCarrier: true },
+            paragraph.content,
+            paragraph.marks,
+          );
+        }
+        out.push(...converted);
         if (pbPos === "after") {
           out.push(schema.node("pageBreak"));
         }
       } else if (block.type === "table") {
-        out.push(convertTable(block, styleResolver, theme));
+        out.push(convertTable(block, styleResolver, { theme, nextTextBoxGroupId }));
       } else {
         out.push(convertBlockSdt(block, convertBodyBlocks));
       }
@@ -240,13 +268,12 @@ function convertParagraph(
     paragraph.formatting?.runProperties,
     styleResolver,
   );
-  // Word does not propagate paragraph-mark-only visual decorations
-  // (highlight, shading) to body runs — they paint the pilcrow alone. Strip
-  // them off the inheritance path so a `<w:pPr><w:rPr><w:highlight/></w:rPr>`
-  // used to mark just the paragraph glyph doesn't bleed onto every run.
+  // Paragraph-mark-only visual decorations (highlight, shading) paint the
+  // paragraph glyph alone. Strip them from the body-run inheritance path.
   let inheritableParagraphRunFormatting: TextFormatting | undefined;
   if (paragraphRunFormatting && !isTocParagraph) {
-    inheritableParagraphRunFormatting = stripParagraphMarkOnlyFormatting(paragraphRunFormatting);
+    inheritableParagraphRunFormatting =
+      stripParagraphMarkFormattingForBodyRuns(paragraphRunFormatting);
   }
   const baseRunFormatting = mergeTextFormatting(styleRunFormatting, extraRunFormatting);
   // With a named paragraph style, w:pPr/w:rPr formats the paragraph mark and
@@ -265,7 +292,9 @@ function convertParagraph(
         ? suppressParagraphMarkFormatting(baseRunFormatting, undefined, formatting)
         : baseRunFormatting;
     }
-    if (!hasDirectRunFormatting(formatting)) {
+    const hasExplicitRunFormatting =
+      hasDirectRunFormatting(formatting) || formatting?.styleId !== undefined;
+    if (!hasExplicitRunFormatting) {
       return defaultRunFormatting;
     }
     return suppressParagraphMarkFormatting(
@@ -489,6 +518,12 @@ function paragraphFormattingToAttrs(
   if (paragraph.listRendering?.markerFontSize) {
     attrs.listMarkerFontSize = paragraph.listRendering.markerFontSize;
   }
+  if (paragraph.listRendering?.markerBold !== undefined) {
+    attrs.listMarkerBold = paragraph.listRendering.markerBold;
+  }
+  if (paragraph.listRendering?.markerAlignment) {
+    attrs.listMarkerAlignment = paragraph.listRendering.markerAlignment;
+  }
   if (paragraph.listRendering?.markerSuffix) {
     attrs.listMarkerSuffix = paragraph.listRendering.markerSuffix;
   }
@@ -563,6 +598,26 @@ function paragraphFormattingToAttrs(
       ? (styleResolver.getStyle(styleId) ?? styleResolver.getDefaultParagraphStyle())
       : styleResolver.getDefaultParagraphStyle();
     const docDefaultSpacing = styleResolver.getDocDefaults()?.pPr;
+    const spacingFromImplicitDefaultStyle: NonNullable<
+      ParagraphAttrs["spacingFromImplicitDefaultStyle"]
+    > = {};
+    if (
+      !styleId &&
+      formatting?.spaceBefore === undefined &&
+      paragraphStyle?.pPr?.spaceBefore !== undefined
+    ) {
+      spacingFromImplicitDefaultStyle.before = true;
+    }
+    if (
+      !styleId &&
+      formatting?.spaceAfter === undefined &&
+      paragraphStyle?.pPr?.spaceAfter !== undefined
+    ) {
+      spacingFromImplicitDefaultStyle.after = true;
+    }
+    if (spacingFromImplicitDefaultStyle.before || spacingFromImplicitDefaultStyle.after) {
+      attrs.spacingFromImplicitDefaultStyle = spacingFromImplicitDefaultStyle;
+    }
     const spacingFromDocDefaults: NonNullable<ParagraphAttrs["spacingFromDocDefaults"]> = {};
     if (
       formatting?.spaceBefore === undefined &&
@@ -583,23 +638,27 @@ function paragraphFormattingToAttrs(
     if (spacingFromDocDefaults.before || spacingFromDocDefaults.after) {
       attrs.spacingFromDocDefaults = spacingFromDocDefaults;
     }
-    set("indentLeft", formatting?.indentLeft ?? stylePpr?.indentLeft);
-    set("indentRight", formatting?.indentRight ?? stylePpr?.indentRight);
     // When the paragraph explicitly removes the style's numbering (direct
-    // numId=0 under a numbered style), Word also drops the style's
-    // marker-positioning firstLine/hanging — the paragraph keeps only the
-    // indents it states itself (#765: a direct left=357 renders indented
-    // instead of hanging the first line back to the margin). Outside that
-    // case w:ind merges per attribute: a direct left-only indent keeps the
-    // style's firstLine (Word's own Increase Indent emits exactly that).
+    // numId=0 under a numbered style), the reference layout also drops the
+    // style's marker-positioning indents. The paragraph keeps only the indents
+    // it states itself (#765: a direct left=357 renders indented instead of
+    // hanging the first line back to the margin). Outside that case w:ind
+    // merges per attribute: a direct left-only indent keeps the style's
+    // firstLine.
     const numberingRemoved =
       formatting?.numPr?.numId === 0 && stylePpr?.numPr !== undefined && stylePpr.numPr.numId !== 0;
-    const styleFirstLine = numberingRemoved ? undefined : stylePpr;
-    set("indentFirstLine", formatting?.indentFirstLine ?? styleFirstLine?.indentFirstLine);
-    set("hangingIndent", formatting?.hangingIndent ?? styleFirstLine?.hangingIndent);
+    const numberingStyleIndent = numberingRemoved ? undefined : stylePpr;
+    const effectiveIndent = mergeParagraphFormatting(numberingStyleIndent, formatting);
+    set("indentLeft", effectiveIndent?.indentLeft);
+    set("indentRight", formatting?.indentRight ?? stylePpr?.indentRight);
+    set("indentFirstLine", effectiveIndent?.indentFirstLine);
+    set("hangingIndent", effectiveIndent?.hangingIndent);
     set("borders", formatting?.borders ?? stylePpr?.borders);
     set("shading", formatting?.shading ?? stylePpr?.shading);
-    set("tabs", formatting?.tabs ?? stylePpr?.tabs);
+    set("tabs", mergeParagraphTabStops(stylePpr?.tabs, formatting?.tabs));
+    set("kinsoku", formatting?.kinsoku ?? stylePpr?.kinsoku);
+    set("overflowPunctuation", formatting?.overflowPunctuation ?? stylePpr?.overflowPunctuation);
+    set("suppressAutoHyphens", formatting?.suppressAutoHyphens ?? stylePpr?.suppressAutoHyphens);
 
     // Page break control
     set("pageBreakBefore", formatting?.pageBreakBefore ?? stylePpr?.pageBreakBefore);
@@ -646,6 +705,9 @@ function paragraphFormattingToAttrs(
     set("borders", formatting?.borders);
     set("shading", formatting?.shading);
     set("tabs", formatting?.tabs);
+    set("kinsoku", formatting?.kinsoku);
+    set("overflowPunctuation", formatting?.overflowPunctuation);
+    set("suppressAutoHyphens", formatting?.suppressAutoHyphens);
 
     // Page break control
     set("pageBreakBefore", formatting?.pageBreakBefore);
@@ -661,7 +723,12 @@ function paragraphFormattingToAttrs(
     set("direction", directionFromBidi(formatting?.bidi));
 
     // Default run properties (pPr/rPr)
-    set("defaultTextFormatting", resolveTextFormatting(formatting?.runProperties, styleResolver));
+    set(
+      "defaultTextFormatting",
+      stripParagraphMarkOnlyFormatting(
+        resolveTextFormatting(formatting?.runProperties, styleResolver) ?? {},
+      ),
+    );
   }
 
   // Section break type and full section properties for layout + round-trip
@@ -890,8 +957,27 @@ function hasDirectRunFormatting(formatting: TextFormatting | undefined): boolean
 }
 
 function stripParagraphMarkOnlyFormatting(formatting: TextFormatting): TextFormatting | undefined {
-  const { allCaps: _ac, highlight: _h, shading: _s, smallCaps: _sc, ...rest } = formatting;
+  const {
+    allCaps: _ac,
+    highlight: _h,
+    shading: _s,
+    smallCaps: _sc,
+    vertAlign: _va,
+    ...rest
+  } = formatting;
   return Object.keys(rest).length > 0 ? rest : undefined;
+}
+
+function stripParagraphMarkFormattingForBodyRuns(
+  formatting: TextFormatting,
+): TextFormatting | undefined {
+  const paragraphMarkFormatting = stripParagraphMarkOnlyFormatting(formatting);
+  if (!paragraphMarkFormatting) {
+    return undefined;
+  }
+
+  const { fontFamily: _fontFamily, ...bodyRunFormatting } = paragraphMarkFormatting;
+  return Object.keys(bodyRunFormatting).length > 0 ? bodyRunFormatting : undefined;
 }
 
 function suppressParagraphMarkFormatting(
@@ -908,18 +994,18 @@ function suppressParagraphMarkFormatting(
     (paragraphMarkPrecedesStyle
       ? mergeTextFormatting(paragraphMark, base)
       : mergeTextFormatting(base, paragraphMark)) ?? {};
-  suppressBooleanParagraphMark(result, paragraphMark, direct, "bold");
-  suppressBooleanParagraphMark(result, paragraphMark, direct, "italic");
-  suppressBooleanParagraphMark(result, paragraphMark, direct, "strike");
-  suppressBooleanParagraphMark(result, paragraphMark, direct, "doubleStrike");
-  suppressBooleanParagraphMark(result, paragraphMark, direct, "allCaps");
-  suppressBooleanParagraphMark(result, paragraphMark, direct, "smallCaps");
-  suppressBooleanParagraphMark(result, paragraphMark, direct, "hidden");
-  suppressBooleanParagraphMark(result, paragraphMark, direct, "emboss");
-  suppressBooleanParagraphMark(result, paragraphMark, direct, "imprint");
-  suppressBooleanParagraphMark(result, paragraphMark, direct, "shadow");
-  suppressBooleanParagraphMark(result, paragraphMark, direct, "outline");
-  suppressBooleanParagraphMark(result, paragraphMark, direct, "rtl");
+  suppressBooleanParagraphMark(result, base, paragraphMark, direct, "bold");
+  suppressBooleanParagraphMark(result, base, paragraphMark, direct, "italic");
+  suppressBooleanParagraphMark(result, base, paragraphMark, direct, "strike");
+  suppressBooleanParagraphMark(result, base, paragraphMark, direct, "doubleStrike");
+  suppressBooleanParagraphMark(result, base, paragraphMark, direct, "allCaps");
+  suppressBooleanParagraphMark(result, base, paragraphMark, direct, "smallCaps");
+  suppressBooleanParagraphMark(result, base, paragraphMark, direct, "hidden");
+  suppressBooleanParagraphMark(result, base, paragraphMark, direct, "emboss");
+  suppressBooleanParagraphMark(result, base, paragraphMark, direct, "imprint");
+  suppressBooleanParagraphMark(result, base, paragraphMark, direct, "shadow");
+  suppressBooleanParagraphMark(result, base, paragraphMark, direct, "outline");
+  suppressBooleanParagraphMark(result, base, paragraphMark, direct, "rtl");
 
   // A direct run suppresses a size stored only on the paragraph mark. Restore
   // the resolved paragraph-style size instead of letting the pilcrow size leak
@@ -938,7 +1024,6 @@ function suppressParagraphMarkFormatting(
   ) {
     result.fontSizeCs = base.fontSizeCs;
   }
-
   if (paragraphMark.underline !== undefined && direct?.underline === undefined) {
     result.underline = { style: "none" };
   }
@@ -955,6 +1040,7 @@ function suppressParagraphMarkFormatting(
 
 function suppressBooleanParagraphMark(
   result: TextFormatting,
+  base: TextFormatting | undefined,
   paragraphMark: TextFormatting,
   direct: TextFormatting | undefined,
   key: keyof Pick<
@@ -976,7 +1062,7 @@ function suppressBooleanParagraphMark(
   if (paragraphMark[key] === undefined || direct?.[key] !== undefined) {
     return;
   }
-  result[key] = false;
+  result[key] = base?.[key] ?? false;
 }
 
 function resolveTextFormatting(
@@ -1078,7 +1164,7 @@ function calculateRowSpans(table: Table): Map<string, RowSpanInfo> {
       clearActiveVerticalMerges(activeMerges, result);
       continue;
     }
-    let colIndex = 0;
+    let colIndex = row.formatting?.gridBefore ?? 0;
     const rowCells = row.cells.map((cell) => {
       const colspan = cell.formatting?.gridSpan ?? 1;
       const vMerge = cell.formatting?.vMerge;
@@ -1186,10 +1272,15 @@ function paragraphContentHasMeaningfulContent(content: Paragraph["content"][numb
   return true;
 }
 
+type TableConversionContext = {
+  theme: Theme | null | undefined;
+  nextTextBoxGroupId: () => string;
+};
+
 function convertTable(
   table: Table,
   styleResolver: StyleEngine | null,
-  theme: Theme | null | undefined,
+  context: TableConversionContext,
 ): PMNode {
   // Calculate rowSpan values from vMerge
   const rowSpanMap = calculateRowSpans(table);
@@ -1211,15 +1302,17 @@ function convertTable(
   const conditionalTableStyleId = tableStyle?.styleId ?? fallbackTableStyle?.styleId;
   const resolvedTableBorders =
     table.formatting?.borders ?? tableStyle?.tblPr?.borders ?? fallbackTableStyle?.tblPr?.borders;
+  const resolvedTableIndent =
+    table.formatting?.indent ?? tableStyle?.tblPr?.indent ?? fallbackTableStyle?.tblPr?.indent;
 
   // Resolve default cell margins through the same table-style cascade.
   const tableCellMargins =
     table.formatting?.cellMargins ??
     tableStyle?.tblPr?.cellMargins ??
     fallbackTableStyle?.tblPr?.cellMargins;
-  let cellMarginsAttr: { top?: number; bottom?: number; left?: number; right?: number } | undefined;
+  let cellMarginsAttr: TableCellMarginsAttrs | undefined;
   if (tableCellMargins) {
-    const m: { top?: number; bottom?: number; left?: number; right?: number } = {};
+    const m: TableCellMarginsAttrs = {};
     if (tableCellMargins.top?.value !== undefined) {
       m.top = tableCellMargins.top.value;
     }
@@ -1263,8 +1356,17 @@ function convertTable(
   if (table.formatting?.borders) {
     attrs.borders = table.formatting.borders;
   }
+  if (resolvedTableIndent) {
+    attrs._resolvedIndent = resolvedTableIndent;
+  }
   if (table.formatting) {
     attrs._originalFormatting = table.formatting;
+  }
+  // Carry `w:tblPrChange` opaquely through PM (same rationale as the
+  // paragraph `_propertyChanges` attr) so edits don't strip the tracked
+  // property-change history and accept/reject can resolve it.
+  if (table.propertyChanges && table.propertyChanges.length > 0) {
+    attrs.tblPrChange = [...table.propertyChanges];
   }
 
   const conditionalStyles: {
@@ -1340,6 +1442,7 @@ function convertTable(
     return convertTableRow(
       row,
       styleResolver,
+      context,
       isFirstRowStyled,
       columnWidths,
       totalWidth,
@@ -1353,7 +1456,6 @@ function convertTable(
       totalColumns,
       rowSpanMap,
       cellMarginsAttr,
-      theme,
     );
   });
 
@@ -1363,10 +1465,11 @@ function convertTable(
 function countTableColumns(rows: TableRow[]): number {
   let maxColumns = 0;
   for (const row of rows) {
-    let rowColumns = 0;
+    let rowColumns = row.formatting?.gridBefore ?? 0;
     for (const cell of row.cells) {
       rowColumns += cell.formatting?.gridSpan ?? 1;
     }
+    rowColumns += row.formatting?.gridAfter ?? 0;
     maxColumns = Math.max(maxColumns, rowColumns);
   }
   return maxColumns;
@@ -1378,6 +1481,7 @@ function countTableColumns(rows: TableRow[]): number {
 function convertTableRow(
   row: TableRow,
   styleResolver: StyleEngine | null,
+  context: TableConversionContext,
   isHeaderRow: boolean,
   columnWidths?: number[],
   totalWidth?: number,
@@ -1404,13 +1508,7 @@ function convertTableRow(
   totalRows?: number,
   totalColumns?: number,
   rowSpanMap?: Map<string, RowSpanInfo>,
-  defaultCellMargins?: {
-    top?: number;
-    bottom?: number;
-    left?: number;
-    right?: number;
-  },
-  theme?: Theme | null,
+  defaultCellMargins?: TableCellMarginsAttrs,
 ): PMNode {
   const attrs: TableRowAttrs = {
     // isHeader controls header row REPETITION on page breaks.
@@ -1429,6 +1527,10 @@ function convertTableRow(
   }
   if (row.formatting) {
     attrs._originalFormatting = row.formatting;
+  }
+  // Carry `w:trPrChange` opaquely through PM for round-trip + accept/reject.
+  if (row.propertyChanges && row.propertyChanges.length > 0) {
+    attrs.trPrChange = [...row.propertyChanges];
   }
 
   const numCells = row.cells.length;
@@ -1455,7 +1557,7 @@ function convertTableRow(
   }
 
   // Track column index for mapping to columnWidths (accounting for colspan)
-  let colIndex = 0;
+  let colIndex = row.formatting?.gridBefore ?? 0;
   const cells: PMNode[] = [];
 
   for (const cellIndex_item of effectiveCells) {
@@ -1603,175 +1705,88 @@ function convertTableRow(
     }
 
     cells.push(
-      convertTableCell(
+      convertTableCell({
         cell,
         styleResolver,
-        isHeaderRow,
-        gridWidth,
-        cellConditionalStyle,
+        context,
+        isHeader: isHeaderRow,
+        gridWidthPercent: gridWidth,
+        conditionalStyle: cellConditionalStyle,
         tableBorders,
-        isFirstRow,
-        isLastRow,
-        isFirstCol,
-        isLastCol,
+        position: { isFirstRow, isLastRow, isFirstColumn: isFirstCol, isLastColumn: isLastCol },
         calculatedRowSpan,
         preserveVMergeRestart,
-        rowSpanInfo?.continuationCells,
+        vMergeContinuationCells: rowSpanInfo?.continuationCells,
         defaultCellMargins,
-        theme,
-      ),
+      }),
     );
   }
 
   return schema.node("tableRow", attrs, cells);
 }
 
-const TABLE_BORDER_SIDES = [
-  "top",
-  "bottom",
-  "left",
-  "right",
-  "insideH",
-  "insideV",
-] as const satisfies readonly (keyof TableBorders)[];
-
-function resolveThemedBorderColors(
-  borders: TableBorders | undefined,
-  theme: Theme | null | undefined,
-): TableBorders | undefined {
-  if (!borders || !theme?.colorScheme) {
-    return borders;
-  }
-
-  let resolved: TableBorders | undefined;
-  for (const side of TABLE_BORDER_SIDES) {
-    const border = borders[side];
-    if (!border?.color?.themeColor || border.color.auto) {
-      continue;
-    }
-
-    resolved ??= { ...borders };
-    resolved[side] = {
-      ...border,
-      color: {
-        rgb: resolveColor(border.color, theme).replace(/^#/u, ""),
-      },
-    };
-  }
-
-  return resolved ?? borders;
-}
+type ConvertTableCellOptions = {
+  cell: TableCell;
+  styleResolver: StyleEngine | null;
+  context: TableConversionContext;
+  isHeader: boolean;
+  gridWidthPercent: number | undefined;
+  conditionalStyle: TableConditionalStyle | undefined;
+  tableBorders: TableBorders | undefined;
+  position: TableCellPosition;
+  calculatedRowSpan: number | undefined;
+  preserveVMergeRestart: boolean | undefined;
+  vMergeContinuationCells: TableCell[] | undefined;
+  defaultCellMargins: TableCellMarginsAttrs | undefined;
+};
 
 /**
  * Convert a TableCell to a ProseMirror table cell node
  */
-function convertTableCell(
-  cell: TableCell,
-  styleResolver: StyleEngine | null,
-  isHeader: boolean,
-  gridWidthPercent?: number,
-  conditionalStyle?: TableConditionalStyle,
-  tableBorders?: TableBorders,
-  isFirstRow?: boolean,
-  isLastRow?: boolean,
-  isFirstCol?: boolean,
-  isLastCol?: boolean,
-  calculatedRowSpan?: number,
-  preserveVMergeRestart?: boolean,
-  vMergeContinuationCells?: TableCell[],
-  defaultCellMargins?: {
-    top?: number;
-    bottom?: number;
-    left?: number;
-    right?: number;
-  },
-  theme?: Theme | null,
-): PMNode {
+function convertTableCell({
+  cell,
+  styleResolver,
+  context,
+  isHeader,
+  gridWidthPercent,
+  conditionalStyle,
+  tableBorders,
+  position,
+  calculatedRowSpan,
+  preserveVMergeRestart,
+  vMergeContinuationCells,
+  defaultCellMargins,
+}: ConvertTableCellOptions): PMNode {
   const formatting = cell.formatting;
 
   // Use the pre-calculated rowSpan from vMerge analysis
   const rowspan = calculatedRowSpan ?? 1;
-
-  // Determine width: prefer cell's own width, fall back to grid width
-  let width = formatting?.width?.value;
-  let widthType = formatting?.width?.type;
-
-  // If cell doesn't have its own width, use the grid-calculated percentage
-  if (width === undefined && gridWidthPercent !== undefined) {
-    width = gridWidthPercent;
-    widthType = "pct";
-  }
-
-  // Determine background color: prefer cell's own shading, fall back to conditional style
-  const backgroundColor =
-    formatting?.shading?.fill?.rgb ?? conditionalStyle?.tcPr?.shading?.fill?.rgb;
-
-  // Convert borders — preserve full BorderSpec per side
-  // Priority: cell borders > conditional style borders > table borders
-  const baseBorders = (() => {
-    if (tableBorders) {
-      return {
-        top: isFirstRow ? tableBorders.top : tableBorders.insideH,
-        bottom: isLastRow ? tableBorders.bottom : tableBorders.insideH,
-        left: isFirstCol ? tableBorders.left : tableBorders.insideV,
-        right: isLastCol ? tableBorders.right : tableBorders.insideV,
-      };
-    }
-    return undefined;
-  })();
-
-  const conditionalBorders = conditionalStyle?.tcPr?.borders;
-  const cellBorders = formatting?.borders;
-
-  const borders = resolveThemedBorderColors(
-    baseBorders || conditionalBorders || cellBorders
-      ? {
-          ...baseBorders,
-          ...conditionalBorders,
-          ...cellBorders,
-        }
-      : undefined,
-    theme,
-  );
-
-  // Helper to build margins object without undefined values
-  const buildMarginsAttr = (src: {
-    top?: { value: number };
-    bottom?: { value: number };
-    left?: { value: number };
-    right?: { value: number };
-  }): { top?: number; bottom?: number; left?: number; right?: number } => {
-    const m: { top?: number; bottom?: number; left?: number; right?: number } = {};
-    if (src.top?.value !== undefined) {
-      m.top = src.top.value;
-    }
-    if (src.bottom?.value !== undefined) {
-      m.bottom = src.bottom.value;
-    }
-    if (src.left?.value !== undefined) {
-      m.left = src.left.value;
-    }
-    if (src.right?.value !== undefined) {
-      m.right = src.right.value;
-    }
-    return m;
-  };
+  const effectiveFormatting = resolveEffectiveTableCellFormatting({
+    directFormatting: formatting,
+    styleFormatting: conditionalStyle?.tcPr,
+    tableBorders,
+    position,
+    gridWidthPercent,
+    defaultMargins: defaultCellMargins,
+    theme: context.theme,
+  });
 
   const attrs: TableCellAttrs = {
     colspan: formatting?.gridSpan ?? 1,
     rowspan,
   };
-  if (width !== undefined) {
-    attrs.width = width;
-  }
-  if (widthType) {
-    attrs.widthType = widthType;
+  if (effectiveFormatting.width.type === "value") {
+    attrs.width = effectiveFormatting.width.value;
+    if (effectiveFormatting.width.widthType) {
+      attrs.widthType = effectiveFormatting.width.widthType;
+    }
   }
   if (formatting?.verticalAlign) {
     attrs.verticalAlign = formatting.verticalAlign;
   }
-  if (backgroundColor) {
-    attrs.backgroundColor = backgroundColor;
+  if (effectiveFormatting.background.type === "color") {
+    attrs.backgroundColor = effectiveFormatting.background.rgb;
+    attrs._resolvedBackgroundColor = effectiveFormatting.background.rgb;
   }
   if (formatting?.textDirection) {
     attrs.textDirection = formatting.textDirection;
@@ -1779,18 +1794,18 @@ function convertTableCell(
   if (formatting?.noWrap !== undefined) {
     attrs.noWrap = formatting.noWrap;
   }
-  if (borders) {
-    attrs.borders = borders;
+  if (effectiveFormatting.borders) {
+    attrs.borders = effectiveFormatting.borders;
   }
-  if (formatting?.margins) {
-    attrs.margins = buildMarginsAttr(formatting.margins);
-  } else if (conditionalStyle?.tcPr?.margins) {
-    attrs.margins = buildMarginsAttr(conditionalStyle.tcPr.margins);
-  } else if (defaultCellMargins) {
-    attrs.margins = defaultCellMargins;
+  if (effectiveFormatting.margins) {
+    attrs.margins = effectiveFormatting.margins;
   }
   if (formatting) {
     attrs._originalFormatting = formatting;
+  }
+  // Carry `w:tcPrChange` opaquely through PM for round-trip + accept/reject.
+  if (cell.propertyChanges && cell.propertyChanges.length > 0) {
+    attrs.tcPrChange = [...cell.propertyChanges];
   }
   if (preserveVMergeRestart) {
     attrs._preserveVMergeRestart = true;
@@ -1804,17 +1819,20 @@ function convertTableCell(
   for (const content of cell.content) {
     if (content.type === "paragraph") {
       contentNodes.push(
-        convertParagraph(
-          content,
-          styleResolver,
-          undefined,
-          conditionalStyle?.rPr,
-          conditionalStyle?.pPr,
-        ),
+        ...convertParagraphWithTextBoxes(content, styleResolver, {
+          textBoxGroupId: context.nextTextBoxGroupId(),
+          context,
+          ...(conditionalStyle?.rPr !== undefined
+            ? { extraRunFormatting: conditionalStyle.rPr }
+            : {}),
+          ...(conditionalStyle?.pPr !== undefined
+            ? { tableParagraphOverlay: conditionalStyle.pPr }
+            : {}),
+        }),
       );
     } else {
       // Nested tables - recursively convert
-      contentNodes.push(convertTable(content, styleResolver, theme));
+      contentNodes.push(convertTable(content, styleResolver, context));
     }
   }
 
@@ -1941,6 +1959,14 @@ function convertInlineSdt(
       if (nestedSdt) {
         inlineNodes.push(nestedSdt);
       }
+    } else if (content.type === "insertion") {
+      inlineNodes.push(
+        ...convertTrackedChange(content, "insertion", getInheritedRunFormatting, styleResolver),
+      );
+    } else if (content.type === "deletion") {
+      inlineNodes.push(
+        ...convertTrackedChange(content, "deletion", getInheritedRunFormatting, styleResolver),
+      );
     } else {
       // content.type === "mathEquation" — narrowed by exhaustion of the
       // InlineSdt['content'] union above.
@@ -2352,12 +2378,15 @@ function convertImage(image: Image, rawXml?: string): PMNode {
     cropBottom: image.crop?.bottom,
     cropLeft: image.crop?.left,
     position,
+    layoutInCell: image.layoutInCell,
     borderWidth,
     borderColor,
     borderStyle,
     wrapText,
     hlinkHref: image.hlinkHref,
     _docxRawXml: rawXml,
+    _docxObjectPreview:
+      rawXml !== undefined && /<(?:[A-Za-z_][\w.-]*:)?object(?:\s|>)/u.test(rawXml),
   });
 }
 
@@ -2508,6 +2537,10 @@ export function textFormattingToMarks(
         csTheme: formatting.fontFamily.csTheme,
       }),
     );
+  }
+
+  if (formatting.language) {
+    marks.push(schema.mark("language", formatting.language));
   }
 
   // Superscript/Subscript
@@ -2731,13 +2764,31 @@ function convertShape(shape: Shape): PMNode {
  * Convert a paragraph block to PM nodes, extracting text boxes as sibling nodes.
  * Skips ghost empty paragraphs that only contained text box drawings.
  */
+type ConvertParagraphWithTextBoxesOptions = {
+  textBoxGroupId: string;
+  context: TableConversionContext;
+  extraRunFormatting?: TextFormatting;
+  tableParagraphOverlay?: TableCellParagraphSpacingOverlay;
+};
+
 function convertParagraphWithTextBoxes(
   block: Paragraph,
   styleResolver: StyleEngine | null,
-  textBoxGroupId: string,
+  {
+    textBoxGroupId,
+    context,
+    extraRunFormatting,
+    tableParagraphOverlay,
+  }: ConvertParagraphWithTextBoxesOptions,
 ): PMNode[] {
   const textBoxes = extractTextBoxesFromParagraph(block);
-  const pmParagraph = convertParagraph(block, styleResolver);
+  const pmParagraph = convertParagraph(
+    block,
+    styleResolver,
+    undefined,
+    extraRunFormatting,
+    tableParagraphOverlay,
+  );
   const nodes: PMNode[] = [];
   const isEmptyAfterExtraction = textBoxes.length > 0 && pmParagraph.content.size === 0;
   const keepWrapperParagraph =
@@ -2745,12 +2796,14 @@ function convertParagraphWithTextBoxes(
   if (!isEmptyAfterExtraction || keepWrapperParagraph) {
     nodes.push(pmParagraph);
   }
-  for (const tb of textBoxes) {
+  for (const { textBox, trackedChange } of textBoxes) {
     nodes.push(
-      convertTextBox(tb, styleResolver, {
+      convertTextBox(textBox, styleResolver, {
         placement:
           isEmptyAfterExtraction && !keepWrapperParagraph ? "standalone" : "inlineWithPrevious",
         groupId: textBoxGroupId,
+        context,
+        trackedChange,
       }),
     );
   }
@@ -2770,48 +2823,83 @@ function hasParagraphBoundaryPayload(block: Paragraph, pmParagraph: PMNode): boo
 
 /**
  * Extract text boxes from paragraph runs.
- * Text boxes appear as ShapeContent where the shape has textBody,
- * or as DrawingContent that contains a text box instead of an image.
+ * Text boxes appear as ShapeContent where the shape has textBody.
  */
-function extractTextBoxesFromParagraph(paragraph: Paragraph): TextBox[] {
-  const textBoxes: TextBox[] = [];
+type ExtractedTextBox = {
+  textBox: TextBox;
+  trackedChange: NonNullable<TextBoxAttrs["_docxTrackedChange"]> | undefined;
+};
+
+function extractTextBoxesFromParagraph(paragraph: Paragraph): ExtractedTextBox[] {
+  const textBoxes: ExtractedTextBox[] = [];
+  const extractFromRun = (
+    run: Run,
+    trackedChange?: NonNullable<TextBoxAttrs["_docxTrackedChange"]>,
+  ): void => {
+    for (const runContent of run.content) {
+      if (runContent.type !== "shape" || !runContent.shape.textBody) {
+        continue;
+      }
+      textBoxes.push({
+        textBox: textBoxFromShape(runContent.shape, runContent.shape.textBody),
+        trackedChange,
+      });
+    }
+  };
+
   for (const content of paragraph.content) {
     if (content.type === "run") {
-      for (const rc of content.content) {
-        if (rc.type === "shape") {
-          const shape = rc.shape as Shape;
-          if (shape.textBody) {
-            // Convert shape with text body to TextBox
-            const textBox: TextBox = {
-              type: "textBox",
-              size: shape.size,
-              content: shape.textBody.content,
-            };
-            if (shape.id) {
-              textBox.id = shape.id;
-            }
-            if (shape.position) {
-              textBox.position = shape.position;
-            }
-            if (shape.wrap) {
-              textBox.wrap = shape.wrap;
-            }
-            if (shape.fill) {
-              textBox.fill = shape.fill;
-            }
-            if (shape.outline) {
-              textBox.outline = shape.outline;
-            }
-            if (shape.textBody.margins) {
-              textBox.margins = shape.textBody.margins;
-            }
-            textBoxes.push(textBox);
-          }
-        }
+      extractFromRun(content);
+      continue;
+    }
+    if (
+      content.type !== "insertion" &&
+      content.type !== "deletion" &&
+      content.type !== "moveFrom" &&
+      content.type !== "moveTo"
+    ) {
+      continue;
+    }
+    const trackedChange = { type: content.type, info: content.info } as const satisfies NonNullable<
+      TextBoxAttrs["_docxTrackedChange"]
+    >;
+    for (const trackedContent of content.content) {
+      if (trackedContent.type === "run") {
+        extractFromRun(trackedContent, trackedChange);
       }
     }
   }
   return textBoxes;
+}
+
+function textBoxFromShape(shape: Shape, textBody: ShapeTextBody): TextBox {
+  const textBox: TextBox = {
+    type: "textBox",
+    size: shape.size,
+    content: textBody.content,
+  };
+  if (shape.id) {
+    textBox.id = shape.id;
+  }
+  if (shape.position) {
+    textBox.position = shape.position;
+  }
+  if (shape.wrap) {
+    textBox.wrap = shape.wrap;
+  }
+  if (shape.fill) {
+    textBox.fill = shape.fill;
+  }
+  if (shape.outline) {
+    textBox.outline = shape.outline;
+  }
+  if (textBody.margins) {
+    textBox.margins = textBody.margins;
+  }
+  if (textBody.autoFit) {
+    textBox.autoFit = textBody.autoFit;
+  }
+  return textBox;
 }
 
 /**
@@ -2823,7 +2911,9 @@ function convertTextBox(
   options: {
     placement?: "standalone" | "inlineWithPrevious";
     groupId?: string;
-  } = {},
+    context: TableConversionContext;
+    trackedChange: NonNullable<TextBoxAttrs["_docxTrackedChange"]> | undefined;
+  },
 ): PMNode {
   const textBoxData: { size?: Partial<TextBox["size"]> } = textBox;
   const textBoxSize = textBoxData.size;
@@ -2855,10 +2945,19 @@ function convertTextBox(
   const marginLeft = textBox.margins?.left !== undefined ? emuToPixels(textBox.margins.left) : 7;
   const marginRight = textBox.margins?.right !== undefined ? emuToPixels(textBox.margins.right) : 7;
 
-  // Convert text box content (paragraphs) to PM nodes
+  // Convert text box content to PM nodes
   const contentNodes: PMNode[] = [];
-  for (const para of textBox.content) {
-    contentNodes.push(convertParagraph(para, styleResolver));
+  for (const block of textBox.content) {
+    if (block.type === "paragraph") {
+      contentNodes.push(
+        ...convertParagraphWithTextBoxes(block, styleResolver, {
+          textBoxGroupId: options.context.nextTextBoxGroupId(),
+          context: options.context,
+        }),
+      );
+      continue;
+    }
+    contentNodes.push(convertTable(block, styleResolver, options.context));
   }
 
   // Ensure at least one paragraph
@@ -2940,6 +3039,7 @@ function convertTextBox(
     {
       width: widthPx,
       height: heightPx,
+      autoFit: textBox.autoFit,
       textBoxId: textBox.id,
       fillColor,
       outlineWidth,
@@ -2960,6 +3060,7 @@ function convertTextBox(
       position,
       _docxPlacement: options.placement,
       _docxGroupId: options.groupId,
+      _docxTrackedChange: options.trackedChange,
     },
     contentNodes,
   );
@@ -2981,15 +3082,20 @@ export function headerFooterToProseDoc(
   const styleResolver = options?.styles ? createStyleEngine(options.styles) : null;
   const theme = options?.theme ?? null;
   let textBoxGroupIndex = 0;
+  const nextTextBoxGroupId = (): string => String(textBoxGroupIndex++);
 
   const convertBlocks = (blocks: BlockContent[]): PMNode[] => {
     const out: PMNode[] = [];
     for (const block of blocks) {
       if (block.type === "paragraph") {
-        out.push(...convertParagraphWithTextBoxes(block, styleResolver, String(textBoxGroupIndex)));
-        textBoxGroupIndex += 1;
+        out.push(
+          ...convertParagraphWithTextBoxes(block, styleResolver, {
+            textBoxGroupId: nextTextBoxGroupId(),
+            context: { theme, nextTextBoxGroupId },
+          }),
+        );
       } else if (block.type === "table") {
-        out.push(convertTable(block, styleResolver, theme));
+        out.push(convertTable(block, styleResolver, { theme, nextTextBoxGroupId }));
       } else {
         out.push(convertBlockSdt(block, convertBlocks));
       }

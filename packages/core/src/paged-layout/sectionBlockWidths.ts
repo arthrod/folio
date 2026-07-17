@@ -15,6 +15,9 @@ type PerBlockMeasureInputs = {
   // bands (`bandTopContentY`) in the measure pass. Sections can vary page size
   // and margins, so these are per-block like `widths`/`marginTops`.
   pageHeights: number[];
+  pageWidths: number[];
+  marginLefts: number[];
+  marginRights: number[];
   marginBottoms: number[];
 };
 
@@ -45,9 +48,13 @@ export function computePerBlockMeasureInputs({
   bodyConfig,
   finalConfig,
 }: ComputePerBlockMeasureInput): PerBlockMeasureInputs {
-  function colWidth(cw: number, cols: ColumnLayout): number {
+  function colWidth(cw: number, cols: ColumnLayout, columnIndex: number): number {
     if (cols.count <= 1) {
       return cw;
+    }
+    const authoredWidth = cols.widths?.[columnIndex];
+    if (authoredWidth !== undefined) {
+      return authoredWidth;
     }
     return Math.floor((cw - (cols.count - 1) * cols.gap) / cols.count);
   }
@@ -63,22 +70,43 @@ export function computePerBlockMeasureInputs({
   );
 
   let sectionIdx = 0;
+  let columnIndex = 0;
   const widths: number[] = [];
   const marginTops: number[] = [];
   const pageHeights: number[] = [];
+  const pageWidths: number[] = [];
+  const marginLefts: number[] = [];
+  const marginRights: number[] = [];
   const marginBottoms: number[] = [];
 
   for (let i = 0; i < blocks.length; i++) {
     const config = sectionConfigs[sectionIdx] ?? finalConfig;
-    widths.push(colWidth(contentWidth(config), config.columns ?? SINGLE_COLUMN_LAYOUT));
+    const columns = config.columns ?? SINGLE_COLUMN_LAYOUT;
+    widths.push(colWidth(contentWidth(config), columns, columnIndex));
     marginTops.push(config.margins.top);
     pageHeights.push(config.pageSize.h);
+    pageWidths.push(config.pageSize.w);
+    marginLefts.push(config.margins.left);
+    marginRights.push(config.margins.right);
     marginBottoms.push(config.margins.bottom);
 
     if (sectionIdx < breakIndices.length && i === breakIndices[sectionIdx]) {
       sectionIdx++;
+      columnIndex = 0;
+    } else if (blocks[i]?.kind === "pageBreak") {
+      columnIndex = 0;
+    } else if (blocks[i]?.kind === "columnBreak") {
+      columnIndex = (columnIndex + 1) % columns.count;
     }
   }
 
-  return { widths, marginTops, pageHeights, marginBottoms };
+  return {
+    widths,
+    marginTops,
+    pageHeights,
+    pageWidths,
+    marginLefts,
+    marginRights,
+    marginBottoms,
+  };
 }

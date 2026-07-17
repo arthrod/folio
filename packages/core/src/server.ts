@@ -17,8 +17,15 @@ export type {
   FolioAIEditSnapshot,
   FolioAIInlineFormatting,
   FolioAITextRangeHandle,
+  FolioDocumentNavigationTarget,
+  FolioDocumentOutline,
+  FolioDocumentOutlineEntry,
+  FolioDocumentSection,
+  FolioDocumentSectionHandle,
+  FolioDocumentSectionReadResult,
 } from "./ai-edits/types";
 export { createFolioAITextRangeHandle } from "./ai-edits/snapshot";
+export { getFolioDocumentOutline, readFolioDocumentSection } from "./ai-edits/scoped-reading";
 export {
   deriveBlockId,
   getFolioParaIdFromBlockId,
@@ -28,18 +35,57 @@ export {
   type FolioBlockId,
 } from "./types/block-id";
 export { createDocx } from "./docx/rezip";
+export {
+  ensureParaIds,
+  EnsureParaIdsError,
+  type EnsureParaIdsOptions,
+  type EnsureParaIdsResult,
+} from "./docx/ensureParaIds";
 export { replyToComment, type CreateCommentReplyInput } from "./docx/replyToComment";
 export { createEmptyDocument, type CreateEmptyDocumentOptions } from "./utils/createDocument";
 export {
+  extractDocumentStyleSet,
+  extractDocumentStyleSetFromDocx,
+  inspectDocumentStyles,
+  inspectDocumentStylesFromDocx,
+  type DocumentStyleCatalog,
+  type DocumentStyleCatalogEntry,
+  type ExtractDocumentStyleSetOptions,
+} from "./style-sets/extract";
+export {
+  createStellaStyleDocumentPreset,
+  createStellaStyleSet,
+  STELLA_STYLE_SET_NAME,
+} from "./style-sets/stellaStyle";
+export {
+  DOCUMENT_PRESET_VERSION,
+  DOCUMENT_STYLE_SET_VERSION,
+  type DocumentPreset,
+  type DocumentStyleSet,
+} from "./style-sets/types";
+export {
+  FOLIO_RESOLVED_REVIEWED_VIEWS,
+  FOLIO_REVIEWED_VIEWS,
   FolioDocxReviewer,
+  FolioDocumentStoryNotFoundError,
+  UnsupportedFolioReviewedViewError,
   applyFolioAIEditsToBuffer,
+  isFolioResolvedReviewedView,
+  isFolioReviewedView,
   type ApplyFolioAIEditsToBufferOptions,
   type ApplyFolioAIEditsToBufferResult,
   type FolioApplyOperationsOptions,
   type FolioApplyDocumentOperationsOptions,
+  type FolioApplyDocumentOperationsToStoryOptions,
   type FolioDocxReviewerOptions,
   type FolioDocumentStory,
   type FolioDocumentStoryHandle,
+  type FolioEditableDocumentStoryHandle,
+  type FolioReadReviewedStoryOptions,
+  type FolioResolveReviewedStoryOptions,
+  type FolioResolvedReviewedView,
+  type FolioReviewedStory,
+  type FolioReviewedView,
   type FolioReviewChange,
   type FolioReviewChangeFilter,
   type FolioReviewChangeKind,
@@ -49,11 +95,37 @@ export {
   type FolioReviewReplyInput,
 } from "./ai-edits/headless";
 export {
+  applyFolioVersionDiffPrivacy,
   compareDocxVersions,
+  FOLIO_DOCUMENT_METADATA_PROPERTIES,
+  FOLIO_VERSION_COMPARISON_SCOPES,
+  FOLIO_VERSION_COMPARISON_PRIVACY_TRANSFORMS,
+  InvalidFolioVersionComparisonOptionsError,
+  isFolioVersionComparisonScope,
+  isFolioVersionComparisonPrivacyTransform,
   type FolioBlockDiff,
+  type FolioCompareDocxVersionsOptions,
+  type FolioDocumentMetadataProperty,
+  type FolioDocumentMetadataValue,
+  type FolioFormatProperty,
+  type FolioMetadataDiff,
+  type FolioStoryDiff,
+  type FolioVersionBlockHandle,
+  type FolioVersionComparisonScope,
+  type FolioVersionComparisonPrivacyTransform,
   type FolioVersionDiff,
+  type FolioVersionDiffPrivacyOptions,
+  type FolioVersionDiffPrivacyReport,
+  type FolioVersionDiffSummaryCounts,
   type FolioVersionDiffSegment,
 } from "./version-comparison";
+export {
+  generateRedlineDocx,
+  InvalidGenerateRedlineDocxOptionsError,
+  type GenerateRedlineDocxOptions,
+  type GenerateRedlineDocxResult,
+  type GenerateRedlineUnprocessedStory,
+} from "./redline";
 export type {
   FolioAIComment,
   FolioAIEditApplyMode,
@@ -90,4 +162,26 @@ export {
   type FolioDocumentOperationType,
   type FolioDocumentOperationResult,
   type FolioDocumentOperationStatus,
+  type FolioDocumentOperationStory,
+  type FolioDocumentOperationUndoFailureReason,
+  type FolioDocumentOperationUndoHandle,
+  type FolioDocumentOperationUndoResult,
 } from "./document-operations";
+export {
+  extractDocxText,
+  type DocxParagraphSource,
+  type ExtractedDocxParagraph,
+  type ExtractedDocxText,
+} from "./docx/server/extractDocxText";
+export { DocxArchiveError } from "./docx/server/boundedArchive";
+export {
+  FOLIO_DOCUMENT_PRIVACY_TRANSFORMS,
+  FolioDocumentPrivacyArchiveError,
+  InvalidFolioDocumentPrivacyOptionsError,
+  isFolioDocumentPrivacyTransform,
+  rewriteDocxMetadataPrivacy,
+  type FolioDocumentPrivacyOptions,
+  type FolioDocumentPrivacyReport,
+  type FolioDocumentPrivacyTransform,
+  type RewriteDocxMetadataPrivacyResult,
+} from "./docx/metadataPrivacy";

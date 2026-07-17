@@ -35,12 +35,14 @@ export const ImageExtension = createNodeExtension({
       cropBottom: { default: null },
       cropLeft: { default: null },
       position: { default: null },
+      layoutInCell: { default: null },
       borderWidth: { default: null },
       borderColor: { default: null },
       borderStyle: { default: null },
       wrapText: { default: null },
       hlinkHref: { default: null },
       _docxRawXml: { default: null },
+      _docxObjectPreview: { default: null },
     },
     parseDOM: [
       {

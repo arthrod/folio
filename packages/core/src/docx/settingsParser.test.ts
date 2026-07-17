@@ -94,3 +94,97 @@ describe("parseSettings — w:themeFontLang (§17.15.1.88)", () => {
     expect(parseSettings(null).themeFontLang).toBeUndefined();
   });
 });
+
+describe("parseSettings — document line-breaking rules", () => {
+  test("reads language-scoped prohibited line-start and line-end characters", () => {
+    const settings = parseSettings(
+      wrap(`
+        <w:noLineBreaksBefore w:lang="ja-JP" w:val="、。"/>
+        <w:noLineBreaksAfter w:lang="ja-JP" w:val="（［"/>
+      `),
+    );
+
+    expect(settings.lineBreakRules).toEqual({
+      noLineBreaksBefore: { language: "ja-JP", characters: "、。" },
+      noLineBreaksAfter: { language: "ja-JP", characters: "（［" },
+    });
+  });
+
+  test("reads the legacy Ethiopic and Amharic breaking compatibility flag", () => {
+    expect(
+      parseSettings(wrap(`<w:compat><w:applyBreakingRules/></w:compat>`)).lineBreakRules,
+    ).toEqual({ useLegacyEthiopicAmharicRules: true });
+  });
+
+  test("ignores disabled and incomplete line-breaking controls", () => {
+    expect(
+      parseSettings(
+        wrap(`
+          <w:noLineBreaksBefore w:lang="ja-JP"/>
+          <w:compat><w:applyBreakingRules w:val="0"/></w:compat>
+        `),
+      ).lineBreakRules,
+    ).toBeUndefined();
+  });
+});
+
+describe("parseSettings — document automatic hyphenation", () => {
+  test("reads the Word hyphenation controls", () => {
+    expect(
+      parseSettings(
+        wrap(`
+          <w:autoHyphenation/>
+          <w:doNotHyphenateCaps/>
+          <w:consecutiveHyphenLimit w:val="2"/>
+          <w:hyphenationZone w:val="360"/>
+        `),
+      ),
+    ).toMatchObject({
+      autoHyphenation: true,
+      doNotHyphenateCaps: true,
+      consecutiveHyphenLimit: 2,
+      hyphenationZoneTwips: 360,
+    });
+  });
+
+  test("preserves explicit disabled on/off values", () => {
+    expect(
+      parseSettings(
+        wrap(`
+          <w:autoHyphenation w:val="0"/>
+          <w:doNotHyphenateCaps w:val="false"/>
+        `),
+      ),
+    ).toMatchObject({
+      autoHyphenation: false,
+      doNotHyphenateCaps: false,
+    });
+  });
+
+  test("ignores absent, malformed, negative, and out-of-range integer controls", () => {
+    expect(parseSettings(wrap("")).autoHyphenation).toBeUndefined();
+    const settings = parseSettings(
+      wrap(`
+        <w:consecutiveHyphenLimit w:val="-1"/>
+        <w:hyphenationZone w:val="31681"/>
+      `),
+    );
+
+    expect(settings.consecutiveHyphenLimit).toBeUndefined();
+    expect(settings.hyphenationZoneTwips).toBeUndefined();
+  });
+});
+
+describe("parseSettings — break-only paragraph placement", () => {
+  test("records only an enabled splitPgBreakAndParaMark compatibility flag", () => {
+    expect(
+      parseSettings(wrap(`<w:compat><w:splitPgBreakAndParaMark/></w:compat>`))
+        .splitPageBreakAndParagraphMark,
+    ).toBe(true);
+    expect(
+      parseSettings(wrap(`<w:compat><w:splitPgBreakAndParaMark w:val="0"/></w:compat>`))
+        .splitPageBreakAndParagraphMark,
+    ).toBeUndefined();
+    expect(parseSettings(wrap("")).splitPageBreakAndParagraphMark).toBeUndefined();
+  });
+});

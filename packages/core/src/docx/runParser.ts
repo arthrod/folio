@@ -59,6 +59,7 @@ import { parseVmlImageContent } from "./vmlImageParser";
 import { resolveThemeFontRef } from "./themeParser";
 import {
   cloneWithXmlnsDeclarations,
+  findAllDeep,
   findChild,
   findChildren,
   getAttribute,
@@ -166,6 +167,7 @@ type RunPropertyChildren = {
   iCs?: XmlElement;
   imprint?: XmlElement;
   kern?: XmlElement;
+  lang?: XmlElement;
   outline?: XmlElement;
   position?: XmlElement;
   rFonts?: XmlElement;
@@ -234,6 +236,9 @@ function collectFirstRunPropertyChildren(rPr: XmlElement): RunPropertyChildren {
         break;
       case "kern":
         children.kern ??= child;
+        break;
+      case "lang":
+        children.lang ??= child;
         break;
       case "outline":
         children.outline ??= child;
@@ -514,6 +519,20 @@ export function parseRunProperties(
     }
 
     formatting.fontFamily = fontFamily;
+  }
+
+  const lang = propertyChildren.lang;
+  if (lang) {
+    const val = getAttribute(lang, "w", "val") || undefined;
+    const eastAsia = getAttribute(lang, "w", "eastAsia") || undefined;
+    const bidi = getAttribute(lang, "w", "bidi") || undefined;
+    if (val || eastAsia || bidi) {
+      formatting.language = {
+        ...(val ? { val } : {}),
+        ...(eastAsia ? { eastAsia } : {}),
+        ...(bidi ? { bidi } : {}),
+      };
+    }
   }
 
   // Character spacing in twips (w:spacing)
@@ -817,7 +836,7 @@ function parseDrawingContent(
   rels: RelationshipMap | null,
   media: Map<string, MediaFile> | null,
 ): DrawingContent | ShapeContent | null {
-  const groupImage = parseGroupDrawing(element);
+  const groupImage = parseGroupDrawing(element, rels ?? undefined, media ?? undefined);
   if (groupImage) {
     return { type: "drawing", image: groupImage, rawXml: elementToXml(element) };
   }
@@ -956,9 +975,15 @@ function parseRunContents(
         break;
       }
 
-      case "object":
-        // Legacy OLE objects remain outside the active image path.
+      case "object": {
+        // Embedded objects can carry a relationship-backed VML preview. Route
+        // that preview through the image path while retaining the source XML.
+        const objectPreview = parseVmlImageContent(child, rels, media, rootXmlns);
+        if (objectPreview) {
+          contents.push(objectPreview);
+        }
         break;
+      }
 
       case "rPr":
         // Run properties - already handled separately
@@ -977,14 +1002,31 @@ function parseRunContents(
 
       case "AlternateContent": {
         // mc:AlternateContent — folio cannot evaluate `mc:Requires`, so it
-        // renders the Choice by default. A VML `w:pict` in the Fallback is the
-        // compatibility image folio can always show; prefer it only when it
-        // resolves to a real media part (not a textbox / empty pict / broken
-        // relationship), otherwise fall through to the Choice's DrawingML image.
+        // renders the Choice by default. A supported grouped Choice retains
+        // authored group geometry, so it takes priority over a flattened
+        // fallback. Otherwise, prefer a VML `w:pict` in the Fallback only when
+        // it resolves to a real media part (not a textbox / empty pict / broken
+        // relationship), then fall through to the Choice's DrawingML image.
         // The whole AlternateContent is kept on save so the Choice is not lost.
         const alternateChildren = getChildElements(child);
         const choiceEl = alternateChildren.find((el) => getLocalName(el.name) === "Choice");
         const fallbackEl = alternateChildren.find((el) => getLocalName(el.name) === "Fallback");
+
+        const groupedChoiceDrawing = choiceEl
+          ? getChildElements(choiceEl).find(
+              (element) =>
+                getLocalName(element.name) === "drawing" &&
+                findAllDeep(element, "wpg", "wgp").length > 0,
+            )
+          : undefined;
+        if (groupedChoiceDrawing) {
+          const groupedDrawing = parseDrawingContent(groupedChoiceDrawing, rels, media);
+          if (groupedDrawing?.type === "drawing" && groupedDrawing.image.src) {
+            groupedDrawing.rawXml = elementToXml(child);
+            contents.push(groupedDrawing);
+            break;
+          }
+        }
 
         const fallbackPict = fallbackEl
           ? getChildElements(fallbackEl).find((el) => getLocalName(el.name) === "pict")

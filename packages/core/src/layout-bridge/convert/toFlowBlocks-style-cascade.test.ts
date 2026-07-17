@@ -198,6 +198,45 @@ describe("toFlowBlocks style cascade", () => {
     expect(run.allCaps).toBe(false);
   });
 
+  test("paragraph-mark booleans do not replace inherited paragraph-style booleans", () => {
+    const styles: StyleDefinitions = {
+      styles: [
+        {
+          styleId: "EmphasizedClause",
+          type: "paragraph",
+          name: "Emphasized Clause",
+          rPr: { bold: true },
+        },
+      ],
+    };
+    const paragraph: Paragraph = {
+      type: "paragraph",
+      formatting: {
+        styleId: "EmphasizedClause",
+        runProperties: { bold: false },
+      },
+      content: [
+        {
+          type: "run",
+          formatting: { bold: false },
+          content: [{ type: "text", text: "Plain lead" }],
+        },
+        {
+          type: "run",
+          formatting: { fontSize: 22 },
+          content: [{ type: "text", text: "Styled remainder" }],
+        },
+      ],
+    };
+
+    const blocks = toFlowBlocks(toProseDoc(makeDoc(paragraph, styles), { styles }), {});
+    const runs = firstParagraph(blocks).runs.filter((run) => run.kind === "text");
+
+    expect(runs).toHaveLength(2);
+    expect(runs[0]?.bold).toBe(false);
+    expect(runs[1]?.bold).toBe(true);
+  });
+
   test("default character style reaches runs without rStyle", () => {
     const styles: StyleDefinitions = {
       docDefaults: { rPr: { fontSize: 22 } },
@@ -309,6 +348,7 @@ describe("toFlowBlocks style cascade", () => {
           default: true,
           name: "Normal Table",
           tblPr: {
+            indent: { value: 0, type: "dxa" },
             cellMargins: {
               left: { value: 144, type: "dxa" },
               right: { value: 288, type: "dxa" },
@@ -355,10 +395,13 @@ describe("toFlowBlocks style cascade", () => {
       left: 144,
       right: 288,
     });
+    expect(tableNode?.attrs["_resolvedIndent"]).toEqual({ value: 0, type: "dxa" });
+    expect(tableNode?.attrs["_originalFormatting"]?.indent).toBeUndefined();
 
     const tableBlock = toFlowBlocks(pmDoc, {})[0];
     expect(tableBlock?.kind).toBe("table");
     if (tableBlock?.kind === "table") {
+      expect(tableBlock.indent).toBe(0);
       expect(tableBlock.rows[0]?.cells[0]?.padding?.left).toBeCloseTo(9.6, 1);
       expect(tableBlock.rows[0]?.cells[0]?.padding?.right).toBeCloseTo(19.2, 1);
     }

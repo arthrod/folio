@@ -13,4 +13,8 @@ describe("normalizeLineText", () => {
   test("normalizes Symbol-font copyright extraction noise", () => {
     expect(normalizeLineText("\uf0e3 Loan Market Association")).toBe("ã Loan Market Association");
   });
+
+  test("folds CJK radical aliases emitted by PDF font maps", () => {
+    expect(normalizeLineText("⺟甲⼄丙丁")).toBe("母甲乙丙丁");
+  });
 });

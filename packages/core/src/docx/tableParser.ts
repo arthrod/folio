@@ -34,6 +34,7 @@ import type {
   TableMeasurement,
   TableWidthType,
   TableBorders,
+  TableCellBorders,
   TableLook,
   CellMargins,
   FloatingTableProperties,
@@ -58,6 +59,7 @@ import {
 import type { BookmarkMarker } from "./bookmarkPlacement";
 import type { NumberingMap } from "./numberingParser";
 import { parseParagraph } from "./paragraphParser";
+import { enrichParagraphTextBoxes } from "./paragraphTextBoxEnrichment";
 import {
   BorderStyleSchema,
   FloatingTableXSpecSchema,
@@ -264,6 +266,26 @@ export function parseTableBorders(bordersElement: XmlElement | null): TableBorde
   }
 
   return borders;
+}
+
+/** Parse cell-only diagonal borders in addition to the shared table sides. */
+function parseTableCellBorders(bordersElement: XmlElement | null): TableCellBorders | undefined {
+  if (!bordersElement) {
+    return undefined;
+  }
+
+  const borders: TableCellBorders = { ...parseTableBorders(bordersElement) };
+  const topLeftToBottomRight = parseBorderSpec(findChild(bordersElement, "w", "tl2br"));
+  if (topLeftToBottomRight) {
+    borders.topLeftToBottomRight = topLeftToBottomRight;
+  }
+
+  const topRightToBottomLeft = parseBorderSpec(findChild(bordersElement, "w", "tr2bl"));
+  if (topRightToBottomLeft) {
+    borders.topRightToBottomLeft = topRightToBottomLeft;
+  }
+
+  return Object.keys(borders).length > 0 ? borders : undefined;
 }
 
 // ============================================================================
@@ -826,6 +848,26 @@ export function parseTableRowProperties(
 
   const formatting: TableRowFormatting = {};
 
+  const gridBefore = parseNumericAttribute(findChild(trPrElement, "w", "gridBefore"), "w", "val");
+  if (gridBefore !== undefined && gridBefore > 0) {
+    formatting.gridBefore = gridBefore;
+  }
+
+  const widthBefore = parseTableMeasurement(findChild(trPrElement, "w", "wBefore"));
+  if (widthBefore) {
+    formatting.widthBefore = widthBefore;
+  }
+
+  const gridAfter = parseNumericAttribute(findChild(trPrElement, "w", "gridAfter"), "w", "val");
+  if (gridAfter !== undefined && gridAfter > 0) {
+    formatting.gridAfter = gridAfter;
+  }
+
+  const widthAfter = parseTableMeasurement(findChild(trPrElement, "w", "wAfter"));
+  if (widthAfter) {
+    formatting.widthAfter = widthAfter;
+  }
+
   // Row height (w:trHeight)
   // Note: w:trHeight uses w:val (not w:w) for the height value in twips.
   const heightElement = findChild(trPrElement, "w", "trHeight");
@@ -1034,7 +1076,7 @@ export function parseTableCellProperties(
   }
 
   // Cell borders (w:tcBorders)
-  const borders = parseTableBorders(findChild(tcPrElement, "w", "tcBorders"));
+  const borders = parseTableCellBorders(findChild(tcPrElement, "w", "tcBorders"));
   if (borders) {
     formatting.borders = borders;
   }
@@ -1178,6 +1220,7 @@ function parseCellContent(
     if (localName === "p") {
       // Parse paragraph
       const para = parseParagraph(child, styles, theme, numbering, rels, media, options);
+      enrichParagraphTextBoxes(para, child, styles, theme, numbering, rels, media, parseTable);
       prependPendingBookmarkMarkers(para, pendingBookmarkMarkers);
       content.push(para);
     } else if (localName === "tbl") {

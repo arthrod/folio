@@ -23,16 +23,22 @@ import type {
   TextFormatting,
   NumberFormat,
   TableBorders,
+  TableCellBorders,
   TableFormatting,
+  TablePropertyChange,
   TableRowFormatting,
+  TableRowPropertyChange,
   TableCell,
   TableCellFormatting,
+  TableCellPropertyChange,
   TableWidthType,
   SectionProperties,
   ShapeFill,
   ShapeOutline,
+  ShapeTextBody,
   SdtProperties,
   SdtType,
+  TrackedChangeInfo,
 } from "../../types/document";
 import type { OutlineStyleAttr } from "../../types/documentEnumValues";
 import type { SpacingExplicit } from "../../types/formatting";
@@ -52,6 +58,12 @@ export type ParagraphAttrs = {
 
   // Alignment
   alignment?: ParagraphAlignment;
+  /** Effective East Asian line-edge policy (`w:kinsoku`). */
+  kinsoku?: boolean;
+  /** Effective hanging-punctuation policy (`w:overflowPunct`). */
+  overflowPunctuation?: boolean;
+  /** Effective paragraph opt-out from document automatic hyphenation. */
+  suppressAutoHyphens?: boolean;
 
   // Spacing (in twips)
   spaceBefore?: number;
@@ -61,6 +73,8 @@ export type ParagraphAttrs = {
   spacingExplicit?: SpacingExplicit;
   /** Layout provenance: document defaults survive on empty paragraphs. */
   spacingFromDocDefaults?: SpacingExplicit;
+  /** Layout provenance: implicit default-style spacing survives on empty paragraphs. */
+  spacingFromImplicitDefaultStyle?: SpacingExplicit;
 
   // Indentation (in twips)
   indentLeft?: number;
@@ -99,6 +113,10 @@ export type ParagraphAttrs = {
   listMarkerFontFamily?: string;
   /** Marker font size from numbering level rPr, in points */
   listMarkerFontSize?: number;
+  /** Marker bold state from numbering level rPr */
+  listMarkerBold?: boolean;
+  /** Horizontal alignment of the marker around the paragraph's list anchor. */
+  listMarkerAlignment?: "left" | "center" | "right";
   /**
    * `w:suff` (§17.9.25) — what follows the marker before body text.
    * `tab` (default) grows the marker to the next tab stop; `space` adds one
@@ -151,6 +169,8 @@ export type ParagraphAttrs = {
   pageBreakBefore?: boolean;
   /** Word's cached rendered-page-break marker; preserved for round-trip only. */
   renderedPageBreakBefore?: boolean;
+  /** Internal import marker for a paragraph whose only run content is a hard page break. */
+  _pageBreakCarrier?: boolean;
   keepNext?: boolean;
   keepLines?: boolean;
   widowControl?: boolean;
@@ -289,6 +309,8 @@ export type ImageAttrs = {
   cropLeft?: number;
   /** Position for floating images (horizontal and vertical alignment) */
   position?: ImagePositionAttrs;
+  /** Use the containing table cell as the anchor's positioning scope (the OOXML default). */
+  layoutInCell?: boolean;
   /** Border width in pixels */
   borderWidth?: number;
   /** Border color as CSS color string */
@@ -301,6 +323,8 @@ export type ImageAttrs = {
   hlinkHref?: string;
   /** Original OOXML for opaque/unsupported DOCX drawings. */
   _docxRawXml?: string;
+  /** Embedded-object previews use their authored box as the exact line height. */
+  _docxObjectPreview?: boolean;
 };
 
 /**
@@ -481,6 +505,8 @@ export type TextBoxAttrs = {
   width?: number;
   /** Height in pixels */
   height?: number;
+  /** Text fitting behavior */
+  autoFit?: ShapeTextBody["autoFit"];
   /** Unique identifier */
   textBoxId?: string;
   /** Fill color as CSS color */
@@ -523,6 +549,12 @@ export type TextBoxAttrs = {
   _docxPlacement?: "standalone" | "inlineWithPrevious";
   /** Original DOCX paragraph group for standalone text-box reconstruction. */
   _docxGroupId?: string;
+  /** Original run-level revision wrapper for save-path reconstruction. */
+  _docxTrackedChange?:
+    | { type: "insertion"; info: TrackedChangeInfo }
+    | { type: "deletion"; info: TrackedChangeInfo }
+    | { type: "moveFrom"; info: TrackedChangeInfo }
+    | { type: "moveTo"; info: TrackedChangeInfo };
 };
 
 /**
@@ -552,8 +584,12 @@ export type TableAttrs = {
   look?: TableLook;
   /** Table-level borders (w:tblBorders) — full BorderSpec per side */
   borders?: TableBorders;
+  /** Effective table indent after style resolution. PM-only; never serialized. */
+  _resolvedIndent?: NonNullable<TableFormatting["indent"]>;
   /** Original table formatting from DOCX for lossless round-trip serialization */
   _originalFormatting?: TableFormatting;
+  /** Tracked table property changes (w:tblPrChange) for round-trip + accept/reject */
+  tblPrChange?: TablePropertyChange[];
 };
 
 /**
@@ -570,6 +606,8 @@ export type TableRowAttrs = {
   hidden?: boolean;
   /** Original row formatting from DOCX for lossless round-trip serialization */
   _originalFormatting?: TableRowFormatting;
+  /** Tracked row property changes (w:trPrChange) for round-trip + accept/reject */
+  trPrChange?: TableRowPropertyChange[];
 };
 
 /**
@@ -590,21 +628,20 @@ export type TableCellAttrs = {
   verticalAlign?: "top" | "center" | "bottom";
   /** Background color (RGB hex) */
   backgroundColor?: string;
+  /** Resolved source color. PM-only; distinguishes theme rendering from a user override. */
+  _resolvedBackgroundColor?: string;
   /** OOXML text direction (e.g. 'tbRl', 'btLr') */
   textDirection?: NonNullable<TableCellFormatting["textDirection"]>;
   /** No text wrapping in cell */
   noWrap?: boolean;
   /** Cell borders — full BorderSpec per side (style, color, size) */
-  borders?: {
-    top?: BorderSpec;
-    bottom?: BorderSpec;
-    left?: BorderSpec;
-    right?: BorderSpec;
-  };
+  borders?: TableCellBorders;
   /** Cell margins/padding in twips per side */
   margins?: { top?: number; bottom?: number; left?: number; right?: number };
   /** Original cell formatting from DOCX for lossless round-trip serialization */
   _originalFormatting?: TableCellFormatting;
+  /** Tracked cell property changes (w:tcPrChange) for round-trip + accept/reject */
+  tcPrChange?: TableCellPropertyChange[];
   /** Preserve a DOCX vMerge restart even when PM cannot model it as a rowspan. */
   _preserveVMergeRestart?: boolean;
   /** Original DOCX vMerge continuation cells skipped into this PM rowspan. */

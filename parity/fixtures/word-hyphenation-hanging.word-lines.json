@@ -1,0 +1,420 @@
+{
+  "schema": "folio.word-line-endpoints",
+  "version": 1,
+  "source": {
+    "fileName": "word-hyphenation-hanging.docx",
+    "sha256": "1e63c15179e446e83b2e718426afa5a3e6f986c9a7fa84f3f1dcd78b97c1d7a8"
+  },
+  "reference": {
+    "renderer": "word",
+    "capturedAt": "2026-07-14T15:32:06.485Z",
+    "wordVersion": "16.112",
+    "mutoolVersion": "mutool version 1.28.0"
+  },
+  "pages": [
+    {
+      "number": 1,
+      "lines": [
+        {
+          "text": "EN automatic",
+          "region": "unknown"
+        },
+        {
+          "text": "Representation international-",
+          "region": "unknown"
+        },
+        {
+          "text": "ization characterization",
+          "region": "unknown"
+        },
+        {
+          "text": "demonstration compatibility.",
+          "region": "unknown"
+        }
+      ]
+    },
+    {
+      "number": 2,
+      "lines": [
+        {
+          "text": "EN paragraph suppression",
+          "region": "unknown"
+        },
+        {
+          "text": "Representation",
+          "region": "unknown"
+        },
+        {
+          "text": "internationalization",
+          "region": "unknown"
+        },
+        {
+          "text": "characterization",
+          "region": "unknown"
+        },
+        {
+          "text": "demonstration compatibility.",
+          "region": "unknown"
+        }
+      ]
+    },
+    {
+      "number": 3,
+      "lines": [
+        {
+          "text": "EN all caps",
+          "region": "unknown"
+        },
+        {
+          "text": "INTERNATIONALIZATION",
+          "region": "unknown"
+        },
+        {
+          "text": "CHARACTERIZATION",
+          "region": "unknown"
+        },
+        {
+          "text": "REPRESENTATION",
+          "region": "unknown"
+        },
+        {
+          "text": "COMPATIBILITY",
+          "region": "unknown"
+        }
+      ]
+    },
+    {
+      "number": 4,
+      "lines": [
+        {
+          "text": "EN consecutive limit",
+          "region": "unknown"
+        },
+        {
+          "text": "Internationalization charac-",
+          "region": "unknown"
+        },
+        {
+          "text": "terization representation",
+          "region": "unknown"
+        },
+        {
+          "text": "demonstration compatibility",
+          "region": "unknown"
+        },
+        {
+          "text": "localization.",
+          "region": "unknown"
+        }
+      ]
+    },
+    {
+      "number": 5,
+      "lines": [
+        {
+          "text": "Czech automatic",
+          "region": "unknown"
+        },
+        {
+          "text": "Nejpravděpodobnější charak-",
+          "region": "unknown"
+        },
+        {
+          "text": "teristika internacionalizace",
+          "region": "unknown"
+        },
+        {
+          "text": "dokumentace.",
+          "region": "unknown"
+        }
+      ]
+    },
+    {
+      "number": 6,
+      "lines": [
+        {
+          "text": "British English automatic",
+          "region": "unknown"
+        },
+        {
+          "text": "Characterisation internation-",
+          "region": "unknown"
+        },
+        {
+          "text": "alisation localisation",
+          "region": "unknown"
+        },
+        {
+          "text": "standardisation documenta-",
+          "region": "unknown"
+        },
+        {
+          "text": "tion.",
+          "region": "unknown"
+        }
+      ]
+    },
+    {
+      "number": 7,
+      "lines": [
+        {
+          "text": "Japanese hanging punctuation",
+          "region": "unknown"
+        },
+        {
+          "text": "契約条件（重要事項）。契約",
+          "region": "unknown"
+        },
+        {
+          "text": "条件、重要事項）契約条件。",
+          "region": "unknown"
+        }
+      ]
+    },
+    {
+      "number": 8,
+      "lines": [
+        {
+          "text": "Custom prohibited character",
+          "region": "unknown"
+        },
+        {
+          "text": "甲乙丙丁※甲乙丙丁※甲乙丙",
+          "region": "unknown"
+        },
+        {
+          "text": "丁※甲乙丙丁",
+          "region": "unknown"
+        }
+      ]
+    },
+    {
+      "number": 9,
+      "lines": [
+        {
+          "text": "EN split formatting",
+          "region": "unknown"
+        },
+        {
+          "text": "Representation international-",
+          "region": "unknown"
+        },
+        {
+          "text": "ization characterization",
+          "region": "unknown"
+        },
+        {
+          "text": "demonstration compatibility.",
+          "region": "unknown"
+        }
+      ]
+    },
+    {
+      "number": 10,
+      "lines": [
+        {
+          "text": "Japanese overflow disabled",
+          "region": "unknown"
+        },
+        {
+          "text": "甲乙丙丁戊己庚辛壬癸子丑",
+          "region": "unknown"
+        },
+        {
+          "text": "寅。甲乙丙丁",
+          "region": "unknown"
+        }
+      ]
+    },
+    {
+      "number": 11,
+      "lines": [
+        {
+          "text": "Japanese overflow enabled",
+          "region": "unknown"
+        },
+        {
+          "text": "甲乙丙丁戊己庚辛壬癸子丑寅。",
+          "region": "unknown"
+        },
+        {
+          "text": "甲乙丙丁",
+          "region": "unknown"
+        }
+      ]
+    },
+    {
+      "number": 12,
+      "lines": [
+        {
+          "text": "Japanese closing pair",
+          "region": "unknown"
+        },
+        {
+          "text": "甲乙丙丁戊己庚辛壬癸子丑寅。",
+          "region": "unknown"
+        },
+        {
+          "text": "」甲乙丙丁",
+          "region": "unknown"
+        }
+      ]
+    },
+    {
+      "number": 13,
+      "lines": [
+        {
+          "text": "Japanese split punctuation",
+          "region": "unknown"
+        },
+        {
+          "text": "甲乙丙丁戊己庚辛壬癸子丑寅。",
+          "region": "unknown"
+        },
+        {
+          "text": "甲乙丙丁",
+          "region": "unknown"
+        }
+      ]
+    },
+    {
+      "number": 14,
+      "lines": [
+        {
+          "text": "Justified common paragraph",
+          "region": "unknown"
+        },
+        {
+          "text": "Contract clauses allocate risk between parties and",
+          "region": "unknown"
+        },
+        {
+          "text": "describe notice requirements, payment timing, remedies,",
+          "region": "unknown"
+        },
+        {
+          "text": "and termination rights.",
+          "region": "unknown"
+        }
+      ]
+    },
+    {
+      "number": 15,
+      "lines": [
+        {
+          "text": "First-line paragraph indent",
+          "region": "unknown"
+        },
+        {
+          "text": "Contract clauses allocate risk between",
+          "region": "unknown"
+        },
+        {
+          "text": "parties and describe notice requirements, payment",
+          "region": "unknown"
+        },
+        {
+          "text": "timing, remedies, and termination rights.",
+          "region": "unknown"
+        }
+      ]
+    },
+    {
+      "number": 16,
+      "lines": [
+        {
+          "text": "Explicit tab stops",
+          "region": "unknown"
+        },
+        {
+          "text": "Service item Annual renewal and support plan 1,250.00",
+          "region": "unknown"
+        }
+      ]
+    },
+    {
+      "number": 17,
+      "lines": [
+        {
+          "text": "Wrapped numbered item",
+          "region": "unknown"
+        },
+        {
+          "text": "1. The supplier must preserve records, provide audit",
+          "region": "unknown"
+        },
+        {
+          "text": "access, and notify the customer before deleting",
+          "region": "unknown"
+        },
+        {
+          "text": "retained material.",
+          "region": "unknown"
+        }
+      ]
+    },
+    {
+      "number": 18,
+      "lines": [
+        {
+          "text": "Constrained table cell",
+          "region": "unknown"
+        },
+        {
+          "text": "Payment is due within thirty days after",
+          "region": "unknown"
+        },
+        {
+          "text": "receipt of a valid invoice and supporting",
+          "region": "unknown"
+        },
+        {
+          "text": "records.",
+          "region": "unknown"
+        }
+      ]
+    },
+    {
+      "number": 19,
+      "lines": [
+        {
+          "text": "Mixed emphasis runs",
+          "region": "unknown"
+        },
+        {
+          "text": "The agreement requires written notice before",
+          "region": "unknown"
+        },
+        {
+          "text": "either party may terminate for convenience.",
+          "region": "unknown"
+        },
+        {
+          "text": "Additional obligations continue.",
+          "region": "unknown"
+        }
+      ]
+    },
+    {
+      "number": 20,
+      "lines": [
+        {
+          "text": "Left-aligned control paragraph",
+          "region": "unknown"
+        },
+        {
+          "text": "Contract clauses allocate risk between parties and",
+          "region": "unknown"
+        },
+        {
+          "text": "describe notice requirements, payment timing, remedies,",
+          "region": "unknown"
+        },
+        {
+          "text": "and termination rights.",
+          "region": "unknown"
+        }
+      ]
+    }
+  ]
+}

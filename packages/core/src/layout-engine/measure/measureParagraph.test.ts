@@ -44,6 +44,42 @@ describe("text measurement cache", () => {
       expect(getMeasureCount()).toBe(2);
     }, fakeMeasure);
   });
+
+  test("keeps enabled kerning in the text width cache key", () => {
+    withFakeTextMeasure((getMeasureCount) => {
+      const text = "AVAV";
+      measureTextWidth(text, { fontFamily: "Arial", fontSize: 11, kerning: false });
+      measureTextWidth(text, { fontFamily: "Arial", fontSize: 11, kerning: true });
+
+      expect(getMeasureCount()).toBe(2);
+    }, fakeMeasure);
+  });
+});
+
+describe("run kerning threshold", () => {
+  test("disables pair kerning unless the authored threshold is met", () => {
+    withFakeTextMeasure(
+      () => {
+        const runs = [{ kind: "text" as const, text: "AVAV", fontSize: 11 }];
+        const charWidth = 4;
+        const availableWidth = runs[0]!.text.length * charWidth;
+        const base = { kind: "paragraph" as const, id: "kerning", runs };
+
+        expect(measureParagraph(base, availableWidth).lines).toHaveLength(2);
+        expect(
+          measureParagraph({ ...base, runs: [{ ...runs[0]!, kerningMinPt: 10 }] }, availableWidth)
+            .lines,
+        ).toHaveLength(1);
+        expect(
+          measureParagraph({ ...base, runs: [{ ...runs[0]!, kerningMinPt: 12 }] }, availableWidth)
+            .lines,
+        ).toHaveLength(2);
+      },
+      {
+        charWidth: (_char, _font, fontKerning) => (fontKerning === "normal" ? 4 : 5),
+      },
+    );
+  });
 });
 
 describe("font metrics cache", () => {
@@ -67,6 +103,65 @@ describe("font metrics cache", () => {
 
       expect(getMeasureCount()).toBe(2);
     }, fakeMeasure);
+  });
+
+  test("keeps outline level in the paragraph measurement cache key", () => {
+    const paragraph = {
+      kind: "paragraph" as const,
+      id: "outline-cache",
+      runs: [],
+    };
+
+    expect(hashParagraphBlock(paragraph)).not.toBe(
+      hashParagraphBlock({
+        ...paragraph,
+        attrs: { outlineLevel: 0, reserveEmptyOutlineHeight: true },
+      }),
+    );
+  });
+
+  test("keeps automatic hyphenation policy in the paragraph measurement cache key", () => {
+    const paragraph: ParagraphBlock = {
+      kind: "paragraph",
+      id: "hyphenation-cache",
+      runs: [{ kind: "text", text: "hyphenation", language: { val: "en-US" } }],
+    };
+
+    expect(hashParagraphBlock(paragraph)).not.toBe(
+      hashParagraphBlock({
+        ...paragraph,
+        attrs: { automaticHyphenation: { enabled: true } },
+      }),
+    );
+    expect(
+      hashParagraphBlock({
+        ...paragraph,
+        attrs: { automaticHyphenation: { enabled: true } },
+      }),
+    ).not.toBe(
+      hashParagraphBlock({
+        ...paragraph,
+        attrs: {
+          automaticHyphenation: { enabled: true },
+          suppressAutoHyphens: true,
+        },
+      }),
+    );
+    expect(
+      hashParagraphBlock({
+        ...paragraph,
+        attrs: {
+          automaticHyphenation: { enabled: true, hyphenationZoneTwips: 360 },
+        },
+      }),
+    ).not.toBe(
+      hashParagraphBlock({
+        ...paragraph,
+        attrs: {
+          automaticHyphenation: { enabled: true, hyphenationZoneTwips: 720 },
+        },
+      }),
+    );
   });
 });
 
@@ -137,6 +232,54 @@ describe("empty paragraph line-height floor", () => {
     expect(measure.totalHeight).toBeCloseTo(11 * PT_TO_PX * 1.15 + 12, 1);
   });
 
+  test("empty top-level outline paragraph reserves two line boxes", () => {
+    const paragraph = {
+      kind: "paragraph" as const,
+      id: "t3-outline",
+      pmStart: 0,
+      pmEnd: 0,
+      runs: [],
+      attrs: {
+        defaultFontSize: 18,
+        defaultFontFamily: "Arial",
+      },
+    };
+    const ordinary = measureParagraph(paragraph, 600);
+    const outlined = measureParagraph(
+      {
+        ...paragraph,
+        attrs: {
+          ...paragraph.attrs,
+          outlineLevel: 0,
+          reserveEmptyOutlineHeight: true,
+        },
+      },
+      600,
+    );
+
+    expect(outlined.lines).toHaveLength(1);
+    expect(outlined.lines[0]?.lineHeight).toBeCloseTo((ordinary.lines[0]?.lineHeight ?? 0) * 2, 1);
+    expect(outlined.totalHeight).toBeCloseTo(outlined.lines[0]?.lineHeight ?? 0, 1);
+  });
+
+  test("outline metadata does not change non-empty paragraph height", () => {
+    const base = {
+      kind: "paragraph" as const,
+      id: "t3-outline-content",
+      pmStart: 0,
+      pmEnd: 4,
+      runs: [{ kind: "text" as const, text: "text" }],
+    };
+
+    withFakeTextMeasure(() => {
+      const ordinary = measureParagraph(base, 600);
+      const outlined = measureParagraph({ ...base, attrs: { outlineLevel: 0 } }, 600);
+
+      expect(outlined.totalHeight).toBe(ordinary.totalHeight);
+      expect(outlined.lines).toEqual(ordinary.lines);
+    }, fakeMeasure);
+  });
+
   for (const text of ["", " ", "\u00a0"]) {
     test(`visually empty single text run ${JSON.stringify(text)} includes authored spacing`, () => {
       const measure = measureParagraph(
@@ -186,6 +329,32 @@ describe("empty paragraph line-height floor", () => {
     expect(measure.totalHeight).toBe(0);
     expect(measure.lines[0]?.lineHeight).toBe(0);
   });
+
+  test("uses paragraph mark metrics for blank hard-break lines", () => {
+    withFakeTextMeasure(() => {
+      const measure = measureParagraph(
+        {
+          kind: "paragraph",
+          id: "hard-break-default-metrics",
+          runs: [
+            { kind: "text", text: "first", fontSize: 9, fontFamily: "Times New Roman" },
+            { kind: "lineBreak" },
+            { kind: "lineBreak" },
+            { kind: "text", text: "last", fontSize: 9, fontFamily: "Times New Roman" },
+          ],
+          attrs: {
+            defaultFontSize: 9,
+            defaultFontFamily: "Times New Roman",
+            spacing: { line: 1, lineUnit: "multiplier", lineRule: "auto" },
+          },
+        },
+        600,
+      );
+
+      expect(measure.lines).toHaveLength(3);
+      expect(measure.lines[1]?.lineHeight).toBeCloseTo(measure.lines[0]?.lineHeight ?? 0, 5);
+    }, fakeMeasure);
+  });
 });
 
 describe("measureParagraph cross-run line breaking", () => {
@@ -218,6 +387,73 @@ describe("measureParagraph cross-run line breaking", () => {
 
       expect(lineStartsAtRun(lines, 1)).toBe(false);
     }, fakeMeasure);
+  });
+
+  test("keeps a Czech one-letter preposition with a following formatted run", () => {
+    withFakeTextMeasure(() => {
+      const sameRunWhitespace: Run[] = [
+        { kind: "text", text: "alpha o ", language: { val: "cs-CZ" } },
+        { kind: "text", text: "beta", bold: true, language: { val: "cs-CZ" } },
+      ];
+      const sameRunMeasure = measureParagraph(paragraph(sameRunWhitespace), width("alpha o"));
+
+      expect(lineStartsAt(sameRunMeasure.lines, 0, "alpha ".length)).toBe(true);
+      expect(lineStartsAtRun(sameRunMeasure.lines, 1)).toBe(false);
+
+      const splitCases: { runs: Run[]; followingRun: number }[] = [
+        {
+          runs: [
+            { kind: "text", text: "alpha " },
+            { kind: "text", text: "o", language: { val: "cs-CZ" } },
+            { kind: "text", text: " beta", bold: true },
+          ],
+          followingRun: 2,
+        },
+        {
+          runs: [
+            { kind: "text", text: "alpha " },
+            { kind: "text", text: "o", language: { val: "cs-CZ" } },
+            { kind: "text", text: " " },
+            { kind: "text", text: "beta", bold: true },
+          ],
+          followingRun: 3,
+        },
+        {
+          runs: [
+            { kind: "text", text: "alpha " },
+            { kind: "text", text: "o ", language: { val: "cs-CZ" } },
+            { kind: "text", text: "" },
+            { kind: "text", text: "beta", bold: true },
+          ],
+          followingRun: 3,
+        },
+      ];
+
+      for (const splitCase of splitCases) {
+        const { lines } = measureParagraph(paragraph(splitCase.runs), width("alpha o"));
+
+        expect(lineStartsAtRun(lines, 1)).toBe(true);
+        expect(lineStartsAtRun(lines, splitCase.followingRun)).toBe(false);
+      }
+    }, fakeMeasure);
+  });
+
+  test("bounds protected-break scanning for fragmented Czech runs", () => {
+    withFakeTextMeasure(
+      () => {
+        const runs: Run[] = Array.from({ length: 500 }, () => ({
+          kind: "text",
+          text: "o",
+          language: { val: "cs-CZ" },
+        }));
+        const startedAt = performance.now();
+
+        measureParagraph(paragraph(runs), 10_000);
+
+        expect(performance.now() - startedAt).toBeLessThan(1_500);
+      },
+      { charWidth: fixedCharWidth(1) },
+    );
   });
 
   test("allows a normal wrap when whitespace precedes the footnote marker", () => {
@@ -267,6 +503,65 @@ describe("measureParagraph cross-run line breaking", () => {
       expect(lines).toHaveLength(2);
       expect(lines[1]?.toChar).toBe(text.length);
       expect(lines[1]?.width).toBe(width("efgh"));
+    }, fakeMeasure);
+  });
+
+  test("hard-breaks long words only at grapheme boundaries", () => {
+    withFakeTextMeasure(
+      () => {
+        const family = "👨‍👩‍👧‍👦";
+        const text = `${family}x`;
+        const { lines } = measureParagraph(paragraph([{ kind: "text", text }]), 10);
+
+        expect(lines).toHaveLength(2);
+        expect(lines[0]?.toChar).toBe(family.length);
+        expect(lines[1]).toMatchObject({ fromChar: family.length, toChar: text.length });
+      },
+      { charWidth: fixedCharWidth(5) },
+    );
+  });
+
+  test("does not soft-wrap overflowed preserved spaces onto their own lines", () => {
+    withFakeTextMeasure(() => {
+      const spaces = " ".repeat(12);
+      const text = `alpha${spaces}beta`;
+      const { lines } = measureParagraph(paragraph([{ kind: "text", text }]), width("alpha"));
+
+      expect(lines).toHaveLength(2);
+      expect(lines[0]?.width).toBe(width("alpha"));
+      expect(lines[1]).toMatchObject({
+        fromRun: 0,
+        fromChar: "alpha".length + spaces.length,
+      });
+      expect(lines[1]?.width).toBe(width("beta"));
+    }, fakeMeasure);
+  });
+
+  test("preserves leading and fitting internal spaces", () => {
+    withFakeTextMeasure(() => {
+      const text = "  alpha   beta";
+      const { lines } = measureParagraph(paragraph([{ kind: "text", text }]), width(text));
+
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({ fromRun: 0, fromChar: 0, width: width(text) });
+    }, fakeMeasure);
+  });
+
+  test("preserves leading spaces after an explicit line break", () => {
+    withFakeTextMeasure(() => {
+      const runs: Run[] = [
+        { kind: "text", text: "alpha" },
+        { kind: "lineBreak" },
+        { kind: "text", text: "  beta" },
+      ];
+      const { lines } = measureParagraph(paragraph(runs), width("  beta"));
+
+      expect(lines).toHaveLength(2);
+      expect(lines[1]).toMatchObject({
+        fromRun: 2,
+        fromChar: 0,
+        width: width("  beta"),
+      });
     }, fakeMeasure);
   });
 
@@ -372,44 +667,228 @@ describe("measureParagraph cross-run line breaking", () => {
   });
 });
 
-describe("measureParagraph justified shrink tolerance", () => {
-  const fractionalWidth = (char: string): number => (char === "b" ? 0.6 : 1);
-  const text = `${"a".repeat(99)} bbb`;
+describe("automatic hyphenation", () => {
+  const paragraph = (attrs?: ParagraphBlock["attrs"]): ParagraphBlock => ({
+    kind: "paragraph",
+    id: "automatic-hyphenation",
+    runs: [{ kind: "text", text: "hyphenation", language: { val: "en-US" } }],
+    attrs,
+  });
 
-  test("allows normal justified prose to use Word-style shrink before wrapping", () => {
+  test("uses a dictionary break and accounts for the painted hyphen width", () => {
     withFakeTextMeasure(
       () => {
-        const measure = measureParagraph(
+        const measured = measureParagraph(
+          paragraph({ automaticHyphenation: { enabled: true } }),
+          70,
+        );
+
+        expect(measured.lines).toHaveLength(2);
+        expect(measured.lines[0]).toMatchObject({
+          fromChar: 0,
+          toChar: 6,
+          width: 70,
+          discretionaryHyphen: { runIndex: 0 },
+        });
+        expect(measured.lines[1]).toMatchObject({ fromChar: 6, toChar: 11, width: 50 });
+      },
+      { charWidth: fixedCharWidth(10) },
+    );
+  });
+
+  test("hyphenates one lexical word across formatting runs", () => {
+    withFakeTextMeasure(
+      () => {
+        const measured = measureParagraph(
+          {
+            kind: "paragraph",
+            id: "cross-run-automatic-hyphenation",
+            runs: [
+              { kind: "text", text: "xx inte", language: { val: "en-US" } },
+              {
+                kind: "text",
+                text: "rnationalization",
+                color: "#c00000",
+                language: { val: "en-US" },
+              },
+            ],
+            attrs: { automaticHyphenation: { enabled: true } },
+          },
+          90,
+        );
+
+        expect(measured.lines[0]).toMatchObject({
+          fromRun: 0,
+          fromChar: 0,
+          toRun: 1,
+          toChar: 1,
+          width: 90,
+          discretionaryHyphen: { runIndex: 1 },
+        });
+        expect(measured.lines[1]).toMatchObject({ fromRun: 1, fromChar: 1 });
+      },
+      { charWidth: fixedCharWidth(10) },
+    );
+  });
+
+  test("attempts hyphenation only when line-end whitespace exceeds the document zone", () => {
+    const measureWithZone = (hyphenationZoneTwips?: number) =>
+      measureParagraph(
+        {
+          kind: "paragraph",
+          id: "automatic-hyphenation-zone",
+          runs: [
+            {
+              kind: "text",
+              text: "aaaaaaaaaaaaaaaa hyphenation",
+              language: { val: "en-US" },
+            },
+          ],
+          attrs: {
+            automaticHyphenation: {
+              enabled: true,
+              ...(hyphenationZoneTwips !== undefined ? { hyphenationZoneTwips } : {}),
+            },
+          },
+        },
+        100,
+      );
+
+    withFakeTextMeasure(
+      () => {
+        const defaultZone = measureWithZone();
+        const zeroZone = measureWithZone(0);
+
+        expect(defaultZone.lines[0]).toMatchObject({
+          toChar: "aaaaaaaaaaaaaaaa ".length,
+          width: 80,
+        });
+        expect(defaultZone.lines[0]?.discretionaryHyphen).toBeUndefined();
+        expect(zeroZone.lines[0]).toMatchObject({
+          toChar: "aaaaaaaaaaaaaaaa hy".length,
+          discretionaryHyphen: { runIndex: 0 },
+        });
+      },
+      { charWidth: fixedCharWidth(5) },
+    );
+  });
+
+  test("leaves the source offsets unchanged when automatic hyphenation is suppressed", () => {
+    withFakeTextMeasure(
+      () => {
+        const measured = measureParagraph(
+          paragraph({
+            automaticHyphenation: { enabled: true },
+            suppressAutoHyphens: true,
+          }),
+          70,
+        );
+
+        expect(measured.lines[0]).toMatchObject({ fromChar: 0, toChar: 7, width: 70 });
+        expect(measured.lines[0]?.discretionaryHyphen).toBeUndefined();
+        expect(measured.lines[1]).toMatchObject({ fromChar: 7, toChar: 11, width: 40 });
+      },
+      { charWidth: fixedCharWidth(10) },
+    );
+  });
+
+  test("honors the consecutive-line limit", () => {
+    withFakeTextMeasure(
+      () => {
+        const measured = measureParagraph(
+          {
+            kind: "paragraph",
+            id: "consecutive-hyphen-limit",
+            runs: [{ kind: "text", text: "characteristically", language: { val: "en-US" } }],
+            attrs: {
+              automaticHyphenation: { enabled: true, consecutiveLineLimit: 1 },
+            },
+          },
+          50,
+        );
+
+        expect(measured.lines[0]?.discretionaryHyphen).toEqual({ runIndex: 0 });
+        expect(measured.lines[1]?.discretionaryHyphen).toBeUndefined();
+      },
+      { charWidth: fixedCharWidth(10) },
+    );
+  });
+
+  test("treats the DOCX all-caps transform as capitalized text", () => {
+    withFakeTextMeasure(
+      () => {
+        const measured = measureParagraph(
+          {
+            ...paragraph({
+              automaticHyphenation: { enabled: true, doNotHyphenateCaps: true },
+            }),
+            runs: [
+              {
+                kind: "text",
+                text: "hyphenation",
+                language: { val: "en-US" },
+                allCaps: true,
+              },
+            ],
+          },
+          70,
+        );
+
+        expect(measured.lines[0]?.discretionaryHyphen).toBeUndefined();
+      },
+      { charWidth: fixedCharWidth(10) },
+    );
+  });
+});
+
+describe("measureParagraph justified shrink tolerance", () => {
+  const fractionalWidth = (char: string): number => (char === "b" ? 0.6 : 1);
+  const ordinarySpaceRichWidth = (char: string): number => (char === "b" ? 0.4 : 1);
+  const text = `${"a".repeat(99)} bbb`;
+  const spaceRichText = `${"a ".repeat(20)}${"a".repeat(60)}bbb`;
+
+  test("bases ordinary justified shrink on measured compressible spaces", () => {
+    withFakeTextMeasure(
+      () => {
+        const spaceRichMeasure = measureParagraph(
           {
             kind: "paragraph",
             id: "justified-prose-shrink",
+            runs: [{ kind: "text", text: spaceRichText }],
+            attrs: { alignment: "justify" },
+          },
+          100,
+        );
+        const spacePoorMeasure = measureParagraph(
+          {
+            kind: "paragraph",
+            id: "justified-prose-small-space-budget",
             runs: [{ kind: "text", text }],
             attrs: { alignment: "justify" },
           },
           100,
         );
 
-        expect(measure.lines).toHaveLength(1);
+        expect(spaceRichMeasure.lines).toHaveLength(1);
+        expect(spacePoorMeasure.lines).toHaveLength(2);
       },
       {
-        charWidth: fractionalWidth,
+        charWidth: ordinarySpaceRichWidth,
       },
     );
   });
 
-  test("keeps first-line tabbed legal prose on the conservative shrink tolerance", () => {
+  test("does not count non-breaking spaces toward justified shrink capacity", () => {
+    const fixedSpaceText = `${"a".repeat(99)}\u00a0bbb`;
+
     withFakeTextMeasure(
       () => {
         const measure = measureParagraph(
           {
             kind: "paragraph",
-            id: "justified-tabbed-first-line",
-            runs: [{ kind: "text", text }],
-            attrs: {
-              alignment: "justify",
-              indent: { firstLine: 48 },
-              tabs: [{ val: "start", pos: 360 }],
-            },
+            id: "justified-fixed-space",
+            runs: [{ kind: "text", text: fixedSpaceText }],
+            attrs: { alignment: "justify" },
           },
           100,
         );
@@ -418,6 +897,100 @@ describe("measureParagraph justified shrink tolerance", () => {
       },
       {
         charWidth: fractionalWidth,
+      },
+    );
+  });
+
+  test("keeps regular spaces available for justified shrink beside a fixed space", () => {
+    const mixedSpaceText = `${"a ".repeat(15)}${"a".repeat(68)}\u00a0bbb`;
+
+    withFakeTextMeasure(
+      () => {
+        const measure = measureParagraph(
+          {
+            kind: "paragraph",
+            id: "justified-mixed-spaces",
+            runs: [{ kind: "text", text: mixedSpaceText }],
+            attrs: { alignment: "justify" },
+          },
+          100,
+        );
+
+        expect(measure.lines).toHaveLength(1);
+      },
+      {
+        charWidth: (char) => (char === "b" ? 0.5 : 1),
+      },
+    );
+  });
+
+  test("wraps ordinary prose beyond the constrained shrink capacity", () => {
+    withFakeTextMeasure(
+      () => {
+        const measure = measureParagraph(
+          {
+            kind: "paragraph",
+            id: "justified-prose-shrink-boundary",
+            runs: [{ kind: "text", text }],
+            attrs: { alignment: "justify" },
+          },
+          100,
+        );
+
+        expect(measure.lines).toHaveLength(2);
+      },
+      {
+        charWidth: (char) => (char === "b" ? 0.7 : 1),
+      },
+    );
+  });
+
+  test("bounds ordinary prose contraction at the measured space budget", () => {
+    withFakeTextMeasure(
+      () => {
+        const measure = measureParagraph(
+          {
+            kind: "paragraph",
+            id: "justified-prose-space-contraction-boundary",
+            runs: [{ kind: "text", text: "a a a a a a a b" }],
+            attrs: { alignment: "justify" },
+          },
+          80,
+        );
+
+        expect(measure.lines).toHaveLength(2);
+      },
+      {
+        charWidth: (char) => {
+          if (char === " ") return 1;
+          if (char === "b") return 3.6;
+          return 10;
+        },
+      },
+    );
+  });
+
+  test("ignores unused tab stops when choosing justified prose shrink tolerance", () => {
+    withFakeTextMeasure(
+      () => {
+        const measure = measureParagraph(
+          {
+            kind: "paragraph",
+            id: "justified-unused-tab-stop",
+            runs: [{ kind: "text", text: spaceRichText }],
+            attrs: {
+              alignment: "justify",
+              indent: { firstLine: 48 },
+              tabs: [{ val: "start", pos: 360 }],
+            },
+          },
+          148,
+        );
+
+        expect(measure.lines).toHaveLength(1);
+      },
+      {
+        charWidth: ordinarySpaceRichWidth,
       },
     );
   });
@@ -446,14 +1019,14 @@ describe("measureParagraph justified shrink tolerance", () => {
     );
   });
 
-  test("allows hanging tabbed justified prose a small additional shrink", () => {
+  test("uses measured spaces with configured but unused tab stops", () => {
     withFakeTextMeasure(
       () => {
         const measure = measureParagraph(
           {
             kind: "paragraph",
             id: "justified-hanging-tab",
-            runs: [{ kind: "text", text }],
+            runs: [{ kind: "text", text: spaceRichText }],
             attrs: {
               alignment: "justify",
               indent: { firstLine: 0 },
@@ -466,7 +1039,7 @@ describe("measureParagraph justified shrink tolerance", () => {
         expect(measure.lines).toHaveLength(1);
       },
       {
-        charWidth: fractionalWidth,
+        charWidth: ordinarySpaceRichWidth,
       },
     );
   });
@@ -527,13 +1100,69 @@ describe("measureParagraph justified shrink tolerance", () => {
     );
   });
 
-  test("uses prose shrink tolerance for justified list continuation lines", () => {
+  test("bases default list marker shrink on measured compressible spaces", () => {
     withFakeTextMeasure(
       () => {
-        const measure = measureParagraph(
+        const spaceRichMeasure = measureParagraph(
+          {
+            kind: "paragraph",
+            id: "justified-list-space-budget",
+            runs: [{ kind: "text", text: `${"a ".repeat(15)}bbb` }],
+            attrs: {
+              alignment: "justify",
+              indent: { left: 24, hanging: 24 },
+              listMarker: "1.",
+            },
+          },
+          53,
+        );
+        const spacePoorMeasure = measureParagraph(
+          {
+            kind: "paragraph",
+            id: "justified-list-small-space-budget",
+            runs: [{ kind: "text", text: `${"a".repeat(29)} bbb` }],
+            attrs: {
+              alignment: "justify",
+              indent: { left: 24, hanging: 24 },
+              listMarker: "1.",
+            },
+          },
+          53,
+        );
+
+        expect(spaceRichMeasure.lines).toHaveLength(1);
+        expect(spacePoorMeasure.lines).toHaveLength(2);
+      },
+      {
+        charWidth: fractionalWidth,
+      },
+    );
+  });
+
+  test("bases full-hanging list continuation shrink on measured spaces", () => {
+    withFakeTextMeasure(
+      () => {
+        const spaceRichMeasure = measureParagraph(
           {
             kind: "paragraph",
             id: "justified-list-continuation",
+            runs: [
+              { kind: "text", text: "first line" },
+              { kind: "lineBreak" },
+              { kind: "text", text: spaceRichText },
+            ],
+            attrs: {
+              alignment: "justify",
+              listMarker: "1.",
+              indent: { left: 36, hanging: 36 },
+            },
+          },
+          136,
+        );
+        const spacePoorMeasure = measureParagraph(
+          {
+            kind: "paragraph",
+            id: "justified-list-small-continuation-budget",
             runs: [
               { kind: "text", text: "first line" },
               { kind: "lineBreak" },
@@ -548,7 +1177,8 @@ describe("measureParagraph justified shrink tolerance", () => {
           136,
         );
 
-        expect(measure.lines).toHaveLength(2);
+        expect(spaceRichMeasure.lines).toHaveLength(2);
+        expect(spacePoorMeasure.lines).toHaveLength(3);
       },
       {
         charWidth: fractionalWidth,
@@ -612,7 +1242,7 @@ describe("measureParagraph justified shrink tolerance", () => {
     );
   });
 
-  test("keeps standard-hanging list continuation lines on the conservative tolerance", () => {
+  test("uses the measured-space budget for full-hanging list continuations", () => {
     withFakeTextMeasure(
       () => {
         const measure = measureParagraph(
@@ -622,7 +1252,7 @@ describe("measureParagraph justified shrink tolerance", () => {
             runs: [
               { kind: "text", text: "first line" },
               { kind: "lineBreak" },
-              { kind: "text", text },
+              { kind: "text", text: spaceRichText },
             ],
             attrs: {
               alignment: "justify",
@@ -633,10 +1263,159 @@ describe("measureParagraph justified shrink tolerance", () => {
           124,
         );
 
+        expect(measure.lines).toHaveLength(2);
+      },
+      {
+        charWidth: fractionalWidth,
+      },
+    );
+  });
+
+  test("counts spaces inside opaque field runs but not native math", () => {
+    const opaqueSpaceRichText = `${"a ".repeat(10)}b`;
+    const opaqueSpacePoorText = `${"a".repeat(19)} b`;
+    const measureOpaqueRun = (run: Run) =>
+      measureParagraph(
+        {
+          kind: "paragraph",
+          id: "justified-opaque-run-space-budget",
+          runs: [{ kind: "text", text: "x" }, run],
+          attrs: { alignment: "justify" },
+        },
+        21.3,
+      );
+    const measureResolvedField = () =>
+      measureParagraph(
+        {
+          kind: "paragraph",
+          id: "justified-resolved-field-space-budget",
+          runs: [
+            { kind: "text", text: "x" },
+            {
+              kind: "field",
+              fieldType: "OTHER",
+              fallback: opaqueSpacePoorText,
+              pmStart: 1,
+            },
+          ],
+          attrs: { alignment: "justify" },
+        },
+        21.3,
+        { fieldValues: new Map([[1, opaqueSpaceRichText]]) },
+      );
+
+    withFakeTextMeasure(
+      () => {
+        const fieldRich = measureOpaqueRun({
+          kind: "field",
+          fieldType: "OTHER",
+          fallback: opaqueSpaceRichText,
+        });
+        const fieldPoor = measureOpaqueRun({
+          kind: "field",
+          fieldType: "OTHER",
+          fallback: opaqueSpacePoorText,
+        });
+        const mathRich = measureOpaqueRun({
+          kind: "math",
+          display: "inline",
+          ommlXml:
+            '<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:r><m:t>a b</m:t></m:r></m:oMath>',
+          plainText: opaqueSpaceRichText,
+        });
+
+        expect(fieldRich.lines).toHaveLength(1);
+        expect(fieldPoor.lines).toHaveLength(2);
+        expect(measureResolvedField().lines).toHaveLength(1);
+        expect(mathRich.lines).toHaveLength(2);
+      },
+      { charWidth: fixedCharWidth(1) },
+    );
+  });
+
+  test("keeps shallow full-hanging list continuations on rounding tolerance", () => {
+    withFakeTextMeasure(
+      () => {
+        const measure = measureParagraph(
+          {
+            kind: "paragraph",
+            id: "justified-shallow-list-continuation",
+            runs: [
+              { kind: "text", text: "first line" },
+              { kind: "lineBreak" },
+              { kind: "text", text },
+            ],
+            attrs: {
+              alignment: "justify",
+              listMarker: "1.",
+              indent: { left: 18, hanging: 18 },
+            },
+          },
+          118,
+        );
+
         expect(measure.lines).toHaveLength(3);
       },
       {
         charWidth: fractionalWidth,
+      },
+    );
+  });
+
+  test("keeps inset list continuation lines on the conservative tolerance", () => {
+    withFakeTextMeasure(
+      () => {
+        const measure = measureParagraph(
+          {
+            kind: "paragraph",
+            id: "justified-inset-list-continuation",
+            runs: [
+              { kind: "text", text: "first line" },
+              { kind: "lineBreak" },
+              { kind: "text", text },
+            ],
+            attrs: {
+              alignment: "justify",
+              listMarker: "1.",
+              indent: { left: 36, hanging: 18 },
+            },
+          },
+          136,
+        );
+
+        expect(measure.lines).toHaveLength(3);
+      },
+      {
+        charWidth: fractionalWidth,
+      },
+    );
+  });
+
+  test("wraps a trailing token beyond the inset-list continuation allowance", () => {
+    withFakeTextMeasure(
+      () => {
+        const measure = measureParagraph(
+          {
+            kind: "paragraph",
+            id: "justified-inset-list-boundary",
+            runs: [
+              { kind: "text", text: "x" },
+              { kind: "lineBreak" },
+              { kind: "text", text: `${"a".repeat(89)} bbb` },
+            ],
+            attrs: {
+              alignment: "justify",
+              listMarker: "1.",
+              indent: { left: 20, hanging: 10 },
+            },
+          },
+          110,
+        );
+
+        expect(measure.lines).toHaveLength(3);
+      },
+      {
+        charWidth: (char) => (char === "b" ? 0.465 : 1),
       },
     );
   });
@@ -670,7 +1449,7 @@ describe("measureParagraph document default tab interval", () => {
 });
 
 describe("inline image paragraph measurement", () => {
-  test("image-only line reserves descender room above and below image", () => {
+  test("image-only line uses the authored image footprint", () => {
     const imageHeight = 29;
     const measure = measureParagraph(
       {
@@ -696,9 +1475,9 @@ describe("inline image paragraph measurement", () => {
       600,
     );
 
-    expect(measure.lines[0]?.lineHeight).toBeGreaterThan(imageHeight);
-    expect(measure.lines[0]?.ascent).toBeGreaterThan(imageHeight);
-    expect(measure.lines[0]?.descent).toBeGreaterThan(0);
+    expect(measure.lines[0]?.lineHeight).toBe(imageHeight);
+    expect(measure.lines[0]?.ascent).toBe(imageHeight);
+    expect(measure.lines[0]?.descent).toBe(0);
   });
 
   test("advances floating-zone y offsets by image-inflated line height", () => {
@@ -773,7 +1552,7 @@ describe("inline image paragraph measurement", () => {
     }, fakeMeasure);
   });
 
-  test("image-only line keeps imageH + descent*2 breathing-room band", () => {
+  test("image-only line does not add text descent", () => {
     const imageHeight = 40;
     const measure = measureParagraph(
       {
@@ -797,9 +1576,40 @@ describe("inline image paragraph measurement", () => {
 
     const line = measure.lines.at(0);
     expect(line).toBeDefined();
-    const descent = line?.descent ?? 0;
-    expect(line?.lineHeight).toBe(imageHeight + descent * 2);
-    expect(line?.ascent).toBe(imageHeight + descent);
+    expect(line?.lineHeight).toBe(imageHeight);
+    expect(line?.ascent).toBe(imageHeight);
+    expect(line?.descent).toBe(0);
+  });
+
+  test("embedded-object preview uses its authored box as the exact line height", () => {
+    const imageHeight = 40;
+    const measure = measureParagraph(
+      {
+        kind: "paragraph",
+        id: "object-preview",
+        runs: [
+          {
+            kind: "image",
+            src: "data:image/png;base64,",
+            width: 80,
+            height: imageHeight,
+            exactLineHeight: true,
+          },
+        ],
+        attrs: {
+          defaultFontSize: 11,
+          defaultFontFamily: "Calibri",
+        },
+      },
+      600,
+    );
+
+    expect(measure.lines[0]).toMatchObject({
+      lineHeight: imageHeight,
+      ascent: imageHeight,
+      descent: 0,
+    });
+    expect(measure.totalHeight).toBe(imageHeight);
   });
 
   test("inline image footprint includes its wp:inline distT/distB", () => {
@@ -1153,6 +1963,36 @@ describe("block image rotation measurement", () => {
     expect(measure.lines[0]?.lineHeight).toBeGreaterThanOrEqual(60 + 12);
     expect(measure.lines[0]?.lineHeight).toBeLessThan(120);
   });
+
+  test("positioned top-and-bottom artwork stays out of paragraph flow", () => {
+    withFakeTextMeasure(() => {
+      const measure = measureParagraph(
+        {
+          kind: "paragraph",
+          id: "positioned-band",
+          runs: [
+            {
+              kind: "image",
+              src: "data:image/png;base64,",
+              width: 600,
+              height: 95,
+              displayMode: "block",
+              wrapType: "topAndBottom",
+              position: {
+                horizontal: { relativeTo: "page", posOffset: 0 },
+                vertical: { relativeTo: "page", posOffset: 0 },
+              },
+            },
+            { kind: "text", text: "Body text" },
+          ],
+        },
+        600,
+      );
+
+      expect(measure.lines).toHaveLength(1);
+      expect(measure.lines.at(0)?.lineHeight).toBeLessThan(95);
+    }, fakeMeasure);
+  });
 });
 
 describe("paragraph indentation measurement", () => {
@@ -1336,6 +2176,66 @@ describe("CJK line breaking", () => {
         expect(measure.lines[0]?.toChar).toBe(4);
         expect(measure.lines[1]?.fromRun).toBe(1);
         expect(measure.lines[1]?.fromChar).toBe(0);
+      },
+      { charWidth: fixedCharWidth(10) },
+    );
+  });
+
+  test("defaults to hanging punctuation unless w:overflowPunct is disabled", () => {
+    withFakeTextMeasure(
+      () => {
+        const paragraph = (overflowPunctuation?: boolean): ParagraphBlock => ({
+          kind: "paragraph",
+          id: `cjk-overflow-punctuation-${String(overflowPunctuation)}`,
+          runs: [{ kind: "text", text: "中文。", language: { eastAsia: "zh-CN" } }],
+          ...(overflowPunctuation === undefined ? {} : { attrs: { overflowPunctuation } }),
+        });
+
+        expect(measureParagraph(paragraph(false), 20).lines).toHaveLength(2);
+        for (const hanging of [
+          measureParagraph(paragraph(), 20),
+          measureParagraph(paragraph(true), 20),
+        ]) {
+          expect(hanging.lines).toHaveLength(1);
+          expect(hanging.lines[0]?.width).toBe(30);
+        }
+      },
+      { charWidth: fixedCharWidth(10) },
+    );
+  });
+
+  test("does not hang opening punctuation", () => {
+    withFakeTextMeasure(
+      () => {
+        const paragraph: ParagraphBlock = {
+          kind: "paragraph",
+          id: "cjk-opening-punctuation",
+          runs: [{ kind: "text", text: "中文（", language: { eastAsia: "zh-CN" } }],
+          attrs: { overflowPunctuation: true },
+        };
+
+        expect(measureParagraph(paragraph, 20).lines.length).toBeGreaterThan(1);
+      },
+      { charWidth: fixedCharWidth(10) },
+    );
+  });
+
+  test("hangs a document-specific prohibited line-start character", () => {
+    withFakeTextMeasure(
+      () => {
+        const paragraph: ParagraphBlock = {
+          kind: "paragraph",
+          id: "custom-hanging-punctuation",
+          runs: [{ kind: "text", text: "中文※", language: { eastAsia: "zh-CN" } }],
+          attrs: {
+            overflowPunctuation: true,
+            lineBreakRules: {
+              noLineBreaksBefore: { language: "zh-CN", characters: "※" },
+            },
+          },
+        };
+
+        expect(measureParagraph(paragraph, 20).lines).toHaveLength(1);
       },
       { charWidth: fixedCharWidth(10) },
     );

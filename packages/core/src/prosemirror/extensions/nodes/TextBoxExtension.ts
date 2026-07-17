@@ -6,10 +6,10 @@
  * Supports inline and floating positioning.
  */
 
-import type { ImageWrap } from "../../../types/document";
+import type { ImageWrap, ShapeTextBody } from "../../../types/document";
 import { IMAGE_WRAP_TYPE_VALUES, type OutlineStyleAttr } from "../../../types/documentEnumValues";
 import { expectTextBoxAttrs } from "../../attrs";
-import type { ImagePositionAttrs } from "../../schema/nodes";
+import type { ImagePositionAttrs, TextBoxAttrs as SchemaTextBoxAttrs } from "../../schema/nodes";
 import { createNodeExtension } from "../create";
 
 export type TextBoxAttrs = {
@@ -17,6 +17,8 @@ export type TextBoxAttrs = {
   width?: number;
   /** Height in pixels */
   height?: number;
+  /** Text fitting behavior */
+  autoFit?: ShapeTextBody["autoFit"];
   /** Unique identifier */
   textBoxId?: string;
   /** Fill color as CSS color */
@@ -59,6 +61,8 @@ export type TextBoxAttrs = {
   _docxPlacement?: "standalone" | "inlineWithPrevious";
   /** Original DOCX paragraph group for standalone text-box reconstruction. */
   _docxGroupId?: string;
+  /** Original run-level revision wrapper for save-path reconstruction. */
+  _docxTrackedChange?: SchemaTextBoxAttrs["_docxTrackedChange"];
 };
 
 function parseTextBoxPosition(raw: string | undefined): ImagePositionAttrs | undefined {
@@ -85,6 +89,13 @@ function parseTextBoxWrapType(raw: string | undefined): ImageWrap["type"] | unde
   return undefined;
 }
 
+function parseTextBoxAutoFit(raw: string | undefined): TextBoxAttrs["autoFit"] {
+  if (raw === "none" || raw === "normal" || raw === "shape") {
+    return raw;
+  }
+  return undefined;
+}
+
 export const TextBoxExtension = createNodeExtension({
   name: "textBox",
   schemaNodeName: "textBox",
@@ -96,6 +107,7 @@ export const TextBoxExtension = createNodeExtension({
     attrs: {
       width: { default: 200 },
       height: { default: null },
+      autoFit: { default: null },
       textBoxId: { default: null },
       fillColor: { default: null },
       outlineWidth: { default: null },
@@ -117,6 +129,7 @@ export const TextBoxExtension = createNodeExtension({
       position: { default: null },
       _docxPlacement: { default: null },
       _docxGroupId: { default: null },
+      _docxTrackedChange: { default: null },
     },
     parseDOM: [
       {
@@ -129,9 +142,11 @@ export const TextBoxExtension = createNodeExtension({
           const d = el.dataset;
           const position = parseTextBoxPosition(d["position"]);
           const wrapType = parseTextBoxWrapType(d["wrapType"]);
+          const autoFit = parseTextBoxAutoFit(d["autoFit"]);
           return {
             ...(d["width"] ? { width: Number(d["width"]) } : {}),
             ...(d["height"] ? { height: Number(d["height"]) } : {}),
+            ...(autoFit ? { autoFit } : {}),
             ...(d["textboxId"] ? { textBoxId: d["textboxId"] } : {}),
             ...(d["fillColor"] ? { fillColor: d["fillColor"] } : {}),
             ...(d["outlineWidth"] ? { outlineWidth: Number(d["outlineWidth"]) } : {}),
@@ -183,6 +198,9 @@ export const TextBoxExtension = createNodeExtension({
       }
       if (attrs.height) {
         domAttrs["data-height"] = String(attrs.height);
+      }
+      if (attrs.autoFit) {
+        domAttrs["data-auto-fit"] = attrs.autoFit;
       }
       if (attrs.textBoxId) {
         domAttrs["data-textbox-id"] = attrs.textBoxId;

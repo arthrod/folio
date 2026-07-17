@@ -2,14 +2,72 @@ import { describe, expect, test } from "bun:test";
 import type { Node as PMNode } from "prosemirror-model";
 import { EditorState } from "prosemirror-state";
 
-import type { Document, Paragraph, Table, TableCell } from "../../types/document";
+import type {
+  Document,
+  Paragraph,
+  Run,
+  Table,
+  TableCell,
+  TrackedChangeInfo,
+  TrackedRunChange,
+} from "../../types/document";
 import { pixelsToEmu } from "../../utils/units";
 import { expectHardBreakAttrs, expectParagraphAttrs } from "../attrs";
 import { schema } from "../schema";
-import { fromProseDoc } from "./fromProseDoc";
+import { fromProseDoc, proseDocToBlocks } from "./fromProseDoc";
 import { toProseDoc } from "./toProseDoc";
 
 describe("fromProseDoc", () => {
+  test("round-trips authored table-cell anchor scope through the editor model", () => {
+    const document: Document = {
+      package: {
+        document: {
+          content: [
+            {
+              type: "paragraph",
+              content: [
+                {
+                  type: "run",
+                  content: [
+                    {
+                      type: "drawing",
+                      image: {
+                        type: "image",
+                        rId: "rId1",
+                        size: { width: 914_400, height: 914_400 },
+                        wrap: { type: "square" },
+                        layoutInCell: true,
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    };
+
+    const pmDoc = toProseDoc(document);
+    const imageNode = pmDoc.firstChild?.firstChild;
+    expect(imageNode?.attrs["layoutInCell"]).toBe(true);
+
+    const roundTripped = fromProseDoc(pmDoc, document);
+    const paragraph = roundTripped.package.document.content.at(0);
+    if (paragraph?.type !== "paragraph") {
+      throw new Error("Expected paragraph");
+    }
+    const run = paragraph.content.at(0);
+    if (run?.type !== "run") {
+      throw new Error("Expected run");
+    }
+    const drawing = run.content.at(0);
+    if (drawing?.type !== "drawing" || drawing.image?.type !== "image") {
+      throw new Error("Expected image drawing");
+    }
+    expect(drawing.image.layoutInCell).toBe(true);
+  });
+
   test("rejects malformed paragraph attrs at the conversion boundary", () => {
     const pmDoc = schema.node("doc", null, [
       schema.node("paragraph", { paraId: 12 }, [schema.text("invalid")]),
@@ -88,6 +146,83 @@ describe("fromProseDoc", () => {
     ]);
 
     expect(() => fromProseDoc(pmDoc)).toThrow("sdt.attrs.listItems[0].displayText");
+  });
+
+  test("keeps tracked run changes inside inline content controls", () => {
+    const insertion = schema.mark("insertion", {
+      revisionId: 11,
+      author: "Reviewer",
+      date: "2026-07-14T08:00:00Z",
+      moveKind: null,
+    });
+    const deletion = schema.mark("deletion", {
+      revisionId: 12,
+      author: "Reviewer",
+      date: null,
+      moveKind: null,
+    });
+    const pmDoc = schema.node("doc", null, [
+      schema.node("paragraph", null, [
+        schema.node("sdt", { sdtType: "richText", tag: "reviewed-control" }, [
+          schema.text("added", [insertion]),
+          schema.text("removed", [deletion]),
+        ]),
+      ]),
+    ]);
+
+    const document = fromProseDoc(pmDoc);
+    const paragraph = document.package.document.content.at(0);
+    expect(paragraph?.type).toBe("paragraph");
+    if (paragraph?.type !== "paragraph") {
+      return;
+    }
+    const sdt = paragraph.content.at(0);
+    expect(sdt?.type).toBe("inlineSdt");
+    if (sdt?.type !== "inlineSdt") {
+      return;
+    }
+    expect(sdt.content.map((content) => content.type)).toEqual(["insertion", "deletion"]);
+    expect(sdt.content.at(0)).toMatchObject({
+      type: "insertion",
+      info: { id: 11, author: "Reviewer", date: "2026-07-14T08:00:00Z" },
+    });
+    expect(sdt.content.at(1)).toMatchObject({
+      type: "deletion",
+      info: { id: 12, author: "Reviewer" },
+    });
+  });
+
+  test("round-trips paragraph automatic-hyphenation suppression through ProseMirror", () => {
+    const document: Document = {
+      package: {
+        document: {
+          content: [
+            {
+              type: "paragraph",
+              formatting: { suppressAutoHyphens: true },
+              content: [
+                {
+                  type: "run",
+                  content: [{ type: "text", text: "Keep this paragraph unhyphenated" }],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    };
+
+    const pmDoc = toProseDoc(document);
+    const attrs = expectParagraphAttrs(pmDoc.child(0));
+    const roundTripped = fromProseDoc(pmDoc, document);
+    const block = roundTripped.package.document.content.at(0);
+
+    expect(attrs.suppressAutoHyphens).toBe(true);
+    expect(block?.type).toBe("paragraph");
+    if (block?.type !== "paragraph") {
+      return;
+    }
+    expect(block.formatting?.suppressAutoHyphens).toBe(true);
   });
 
   test("round-trips unedited inherited auto spacing without inlining the style value", () => {
@@ -474,6 +609,36 @@ describe("fromProseDoc", () => {
     }
     expect(run.content).toEqual([{ type: "footnoteRef", id: 1 }]);
     expect(run.formatting?.vertAlign).toBe("subscript");
+  });
+
+  test("keeps a deleted footnote reference inside the tracked-change wrapper", () => {
+    const footnoteRef = schema.mark("footnoteRef", {
+      id: "7",
+      noteType: "footnote",
+      vertAlign: "superscript",
+    });
+    const deletion = schema.mark("deletion", {
+      revisionId: 42,
+      author: "Reviewer",
+      date: null,
+    });
+    const pmDoc = schema.node("doc", null, [
+      schema.node("paragraph", null, [schema.text("7", [footnoteRef, deletion])]),
+    ]);
+
+    const roundTripped = fromProseDoc(pmDoc);
+    const block = roundTripped.package.document.content.at(0);
+
+    expect(block?.type).toBe("paragraph");
+    if (block?.type !== "paragraph") {
+      return;
+    }
+    const trackedChange = block.content.at(0);
+    expect(trackedChange?.type).toBe("deletion");
+    if (trackedChange?.type !== "deletion") {
+      return;
+    }
+    expect(trackedChange.content.at(0)?.content).toEqual([{ type: "footnoteRef", id: 7 }]);
   });
 
   test("round-trips tracked-change image atoms", () => {
@@ -1068,7 +1233,7 @@ describe("fromProseDoc", () => {
 
   test("converts textBox nodes back to DOCX text box shapes", () => {
     const pmDoc = schema.node("doc", null, [
-      schema.node("textBox", { width: 120, height: 60 }, [
+      schema.node("textBox", { width: 120, height: 60, autoFit: "shape" }, [
         schema.node("paragraph", null, [schema.text("Inside")]),
       ]),
     ]);
@@ -1090,6 +1255,33 @@ describe("fromProseDoc", () => {
     }
     expect(firstRunContent.shape.shapeType).toBe("textBox");
     expect(firstRunContent.shape.textBody?.content).toHaveLength(1);
+    expect(firstRunContent.shape.textBody?.autoFit).toBe("shape");
+  });
+
+  test("converts tables inside text boxes back to shape content", () => {
+    const textBoxDoc = schema.node("doc", null, [
+      schema.node("textBox", { width: 160, height: 90, textBoxId: "table-box" }, [
+        schema.node("paragraph", null, [schema.text("Before")]),
+        schema.node("table", null, [
+          schema.node("tableRow", null, [
+            schema.node("tableCell", null, [
+              schema.node("paragraph", null, [schema.text("Cell text")]),
+            ]),
+          ]),
+        ]),
+      ]),
+    ]);
+
+    const blocks = proseDocToBlocks(textBoxDoc);
+    const host = blocks.at(0);
+    const run = host?.type === "paragraph" ? host.content.at(0) : undefined;
+    const shape = run?.type === "run" ? run.content.at(0) : undefined;
+
+    expect(shape?.type).toBe("shape");
+    if (shape?.type !== "shape") {
+      return;
+    }
+    expect(shape.shape.textBody?.content.map(({ type }) => type)).toEqual(["paragraph", "table"]);
   });
 
   test("preserves textBox wrap and position attrs on save", () => {
@@ -1231,6 +1423,58 @@ describe("fromProseDoc", () => {
     }
     expect(firstShapeType(block)).toBe("textBox");
   });
+
+  test.each(["insertion", "deletion", "moveFrom", "moveTo"] as const)(
+    "round-trips a text box inside the %s wrapper",
+    (type) => {
+      const document = documentWithTextBoxParagraph({ includeText: false });
+      const paragraph = document.package.document.content.at(0);
+      if (paragraph?.type !== "paragraph") {
+        throw new Error("Expected paragraph");
+      }
+      const run = paragraph.content.at(0);
+      if (run?.type !== "run") {
+        throw new Error("Expected text-box run");
+      }
+      const info = {
+        id: 41,
+        author: "Reviewer",
+        date: "2026-07-15T12:00:00Z",
+      } satisfies TrackedChangeInfo;
+      paragraph.content = [trackedTextBoxWrapper(type, info, run)];
+
+      const pmDoc = toProseDoc(document);
+      const textBoxNode = pmDoc.firstChild;
+      expect(textBoxNode?.type.name).toBe("textBox");
+      expect(textBoxNode?.attrs["_docxTrackedChange"]).toEqual({ type, info });
+
+      const roundTripped = fromProseDoc(pmDoc, document);
+      const block = roundTripped.package.document.content.at(0);
+      if (block?.type !== "paragraph") {
+        throw new Error("Expected round-tripped paragraph");
+      }
+      const trackedChange = block.content.at(0);
+      expect(trackedChange).toMatchObject({ type, info });
+      if (
+        trackedChange?.type !== "insertion" &&
+        trackedChange?.type !== "deletion" &&
+        trackedChange?.type !== "moveFrom" &&
+        trackedChange?.type !== "moveTo"
+      ) {
+        throw new Error("Expected round-tripped tracked change");
+      }
+      const trackedRun = trackedChange.content.at(0);
+      if (trackedRun?.type !== "run") {
+        throw new Error("Expected round-tripped tracked run");
+      }
+      const trackedShape = trackedRun.content.at(0);
+      expect(trackedShape?.type).toBe("shape");
+      if (trackedShape?.type !== "shape") {
+        throw new Error("Expected round-tripped text-box shape");
+      }
+      expect(trackedShape.shape.shapeType).toBe("textBox");
+    },
+  );
 
   test("keeps empty imported text boxes as text boxes", () => {
     const document = documentWithTextBoxParagraph({
@@ -1816,6 +2060,23 @@ function documentWithTextBoxParagraph({
       },
     },
   };
+}
+
+function trackedTextBoxWrapper(
+  type: TrackedRunChange["type"],
+  info: TrackedChangeInfo,
+  run: Run,
+): TrackedRunChange {
+  if (type === "insertion") {
+    return { type, info, content: [run] };
+  }
+  if (type === "deletion") {
+    return { type, info, content: [run] };
+  }
+  if (type === "moveFrom") {
+    return { type, info, content: [run] };
+  }
+  return { type, info, content: [run] };
 }
 
 function cellWithText(text: string): TableCell {

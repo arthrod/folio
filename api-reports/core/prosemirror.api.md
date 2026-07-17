@@ -225,13 +225,15 @@ export type ImageAttrs = {
     cropRight?: number;
     cropBottom?: number;
     cropLeft?: number; /** Position for floating images (horizontal and vertical alignment) */
-    position?: ImagePositionAttrs; /** Border width in pixels */
+    position?: ImagePositionAttrs; /** Use the containing table cell as the anchor's positioning scope (the OOXML default). */
+    layoutInCell?: boolean; /** Border width in pixels */
     borderWidth?: number; /** Border color as CSS color string */
     borderColor?: string; /** Border style (CSS border-style value) */
     borderStyle?: string; /** Wrap text setting from DOCX (left, right, bothSides, largest) for round-trip */
     wrapText?: NonNullable<import__stll_docx_core_model.ImageWrap["wrapText"]>; /** Hyperlink URL for clickable image */
     hlinkHref?: string; /** Original OOXML for opaque/unsupported DOCX drawings. */
-    _docxRawXml?: string;
+    _docxRawXml?: string; /** Embedded-object previews use their authored box as the exact line height. */
+    _docxObjectPreview?: boolean;
 };
 
 // @public (undocumented)
@@ -283,13 +285,17 @@ export const PAINTABLE_MARK_NAMES: ReadonlySet<string>;
 export type ParagraphAttrs = {
     paraId?: string;
     textId?: string;
-    alignment?: import__stll_docx_core_model.ParagraphAlignment;
+    alignment?: import__stll_docx_core_model.ParagraphAlignment; /** Effective East Asian line-edge policy (`w:kinsoku`). */
+    kinsoku?: boolean; /** Effective hanging-punctuation policy (`w:overflowPunct`). */
+    overflowPunctuation?: boolean; /** Effective paragraph opt-out from document automatic hyphenation. */
+    suppressAutoHyphens?: boolean;
     spaceBefore?: number;
     spaceAfter?: number;
     lineSpacing?: number;
     lineSpacingRule?: import__stll_docx_core_model.LineSpacingRule;
     spacingExplicit?: SpacingExplicit; /** Layout provenance: document defaults survive on empty paragraphs. */
-    spacingFromDocDefaults?: SpacingExplicit;
+    spacingFromDocDefaults?: SpacingExplicit; /** Layout provenance: implicit default-style spacing survives on empty paragraphs. */
+    spacingFromImplicitDefaultStyle?: SpacingExplicit;
     indentLeft?: number;
     indentRight?: number;
     indentFirstLine?: number;
@@ -308,7 +314,9 @@ export type ParagraphAttrs = {
     listMarker?: string; /** Whether the list marker is hidden (w:vanish on numbering level rPr) */
     listMarkerHidden?: boolean; /** Marker font family from numbering level rPr */
     listMarkerFontFamily?: string; /** Marker font size from numbering level rPr, in points */
-    listMarkerFontSize?: number;
+    listMarkerFontSize?: number; /** Marker bold state from numbering level rPr */
+    listMarkerBold?: boolean; /** Horizontal alignment of the marker around the paragraph's list anchor. */
+    listMarkerAlignment?: "left" | "center" | "right";
     listMarkerSuffix?: "tab" | "space" | "nothing"; /** `w:caps` on the numbering level rPr — render marker in upper case. */
     listMarkerAllCaps?: boolean;
     listImplicitChildLevelAdvances?: number;
@@ -329,7 +337,8 @@ export type ParagraphAttrs = {
     shading?: import__stll_docx_core_model.ShadingProperties;
     tabs?: import__stll_docx_core_model.TabStop[];
     pageBreakBefore?: boolean; /** Word's cached rendered-page-break marker; preserved for round-trip only. */
-    renderedPageBreakBefore?: boolean;
+    renderedPageBreakBefore?: boolean; /** Internal import marker for a paragraph whose only run content is a hard page break. */
+    _pageBreakCarrier?: boolean;
     keepNext?: boolean;
     keepLines?: boolean;
     widowControl?: boolean; /** Contextual spacing — suppress space between same-style paragraphs */

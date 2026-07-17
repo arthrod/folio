@@ -8,8 +8,10 @@
 import type {
   ImagePosition,
   ImageWrap,
+  ShapeTextBody,
   SdtProperties,
   SdtType,
+  TableCellFormatting,
   TableWidthType,
 } from "@stll/docx-core/model";
 
@@ -57,6 +59,8 @@ export type RunFormatting = {
    * to `fontFamily`.
    */
   eastAsiaFontFamily?: string;
+  /** Run language metadata resolved from `w:lang`. */
+  language?: { val?: string; eastAsia?: string; bidi?: string };
   fontSize?: number;
   letterSpacing?: number;
   superscript?: boolean;
@@ -205,6 +209,8 @@ export type ImageRun = {
   opacity?: number;
   /** Position for floating/anchored images */
   position?: ImageRunPosition;
+  /** Whether a table-cell anchor uses the cell as its positioning scope. Undefined defaults true. */
+  layoutInCell?: boolean;
   /** Wrap type from DOCX (inline, square, tight, through, topAndBottom, etc.) */
   wrapType?: ImageWrap["type"];
   /** Display mode for CSS rendering */
@@ -216,6 +222,8 @@ export type ImageRun = {
   distBottom?: number;
   distLeft?: number;
   distRight?: number;
+  /** Use the image box as the exact line height for an embedded-object preview. */
+  exactLineHeight?: boolean;
   /**
    * wp:srcRect crop fractions in [0, 1]; emit as CSS `clip-path: inset(...)`
    * to match Word's visible region. eigenpal #424 (image-crop subset).
@@ -369,7 +377,31 @@ export type ListNumPr = {
  */
 export type ParagraphAttrs = {
   alignment?: "left" | "center" | "right" | "justify";
+  /** East Asian first/last-character restrictions (`w:kinsoku`). */
+  kinsoku?: boolean;
+  /** Hanging punctuation (`w:overflowPunct`); defaults to enabled when omitted. */
+  overflowPunctuation?: boolean;
+  /** Exempt this paragraph from document automatic hyphenation. */
+  suppressAutoHyphens?: boolean;
+  /** Document-wide automatic hyphenation controls retained for line layout. */
+  automaticHyphenation?: {
+    enabled: true;
+    doNotHyphenateCaps?: boolean;
+    consecutiveLineLimit?: number;
+    /** Maximum tolerated line-end whitespace before hyphenation, in twips. */
+    hyphenationZoneTwips?: number;
+  };
+  /** Document-wide custom line-edge characters and compatibility behavior. */
+  lineBreakRules?: {
+    noLineBreaksBefore?: { language?: string; characters: string };
+    noLineBreaksAfter?: { language?: string; characters: string };
+    useLegacyEthiopicAmharicRules?: boolean;
+  };
+  /** OOXML outline level (`w:outlineLvl`), where zero is the top level. */
+  outlineLevel?: number;
   spacing?: ParagraphSpacing;
+  /** Spacing sides resolved from OOXML automatic paragraph spacing. */
+  automaticSpacing?: { before?: boolean; after?: boolean };
   /**
    * Tracks which `spacing` sides came from inline (`<w:pPr><w:spacing>`)
    * formatting versus inherited via paragraph style. Word collapses
@@ -379,6 +411,14 @@ export type ParagraphAttrs = {
    * inheritance assumed) when the field is absent.
    */
   spacingExplicit?: { before?: boolean; after?: boolean };
+  /**
+   * Whether an empty paragraph carries direct paragraph formatting in its
+   * source `w:pPr`. Word treats such a blank as authored and keeps its
+   * inherited spacing; a bare empty paragraph still collapses that spacing.
+   */
+  hasDirectParagraphFormatting?: boolean;
+  /** Whether an empty paragraph carries direct formatting on its paragraph mark. */
+  hasDirectParagraphMarkFormatting?: boolean;
   indent?: ParagraphIndent;
   keepNext?: boolean;
   keepLines?: boolean;
@@ -402,6 +442,8 @@ export type ParagraphAttrs = {
   tabs?: TabStop[]; // Custom tab stops
   /** Render structural empty paragraphs as zero-height anchors. */
   suppressEmptyParagraphHeight?: boolean;
+  /** Reserve the reference extra line advance for a story-leading empty level-0 outline paragraph. */
+  reserveEmptyOutlineHeight?: boolean;
   // List properties
   numPr?: ListNumPr;
   listMarker?: string; // Pre-computed marker text (e.g., "1.", "•", "a)")
@@ -409,6 +451,9 @@ export type ParagraphAttrs = {
   listMarkerHidden?: boolean; // w:vanish on numbering level rPr
   listMarkerFontFamily?: string; // from numbering level rPr (w:rFonts)
   listMarkerFontSize?: number; // from numbering level rPr, in points
+  listMarkerBold?: boolean; // from numbering level rPr (w:b)
+  /** Horizontal alignment of the marker around the paragraph's list anchor. */
+  listMarkerAlignment?: "left" | "center" | "right";
   /**
    * `w:suff` (§17.9.25) — what follows the marker before body text.
    * `tab` (default) grows the marker to the next tab stop; `space` adds
@@ -492,6 +537,8 @@ export type CellBorders = {
   bottom?: CellBorderSpec;
   left?: CellBorderSpec;
   right?: CellBorderSpec;
+  topLeftToBottomRight?: CellBorderSpec;
+  topRightToBottomLeft?: CellBorderSpec;
 };
 
 /**
@@ -504,6 +551,7 @@ export type TableCell = {
   rowSpan?: number;
   width?: number;
   verticalAlign?: "top" | "center" | "bottom";
+  textDirection?: NonNullable<TableCellFormatting["textDirection"]>;
   background?: string;
   borders?: CellBorders;
   /** Per-cell padding in pixels (from w:tcMar or table-level w:tblCellMar) */
@@ -522,9 +570,13 @@ export type TableCell = {
 export type TableRow = {
   id: BlockId;
   cells: TableCell[];
+  gridBefore?: number;
+  gridAfter?: number;
   height?: number;
   heightRule?: "auto" | "atLeast" | "exact";
   isHeader?: boolean;
+  /** `w:cantSplit`: keep this row in one flow region. */
+  cantSplit?: boolean;
   hidden?: boolean;
 };
 
@@ -556,6 +608,13 @@ export type TableBlock = {
   width?: number;
   /** Table width type ('auto', 'pct', 'dxa', 'nil'). */
   widthType?: TableWidthType;
+  /**
+   * Table layout algorithm (`w:tblLayout`). "fixed" pins columns to their grid
+   * widths; "autofit" (the default when absent) lets Word size columns to
+   * content. Consulted alongside `widthType` to decide whether `w:noWrap` cells
+   * can be honored (see `tableColumnsArePinned`).
+   */
+  layout?: "fixed" | "autofit";
   /** Table horizontal alignment */
   justification?: "left" | "center" | "right";
   /** Table indent from left margin (in pixels, from w:tblInd) */
@@ -659,7 +718,7 @@ export const DEFAULT_TEXTBOX_MARGINS = { top: 4, bottom: 4, left: 7, right: 7 };
 export const DEFAULT_TEXTBOX_WIDTH = 200;
 
 /**
- * Text box block — positioned container with paragraph content.
+ * Text box block — positioned container with block content.
  */
 export type TextBoxBlock = {
   kind: "textBox";
@@ -668,6 +727,8 @@ export type TextBoxBlock = {
   width: number;
   /** Height in pixels (may be auto-calculated) */
   height?: number;
+  /** Text fitting behavior */
+  autoFit?: ShapeTextBody["autoFit"];
   /** Fill/background color */
   fillColor?: string;
   /** Border width in pixels */
@@ -678,8 +739,8 @@ export type TextBoxBlock = {
   outlineStyle?: OutlineStyleAttr;
   /** Internal padding */
   margins?: { top: number; bottom: number; left: number; right: number };
-  /** Paragraph blocks inside the text box */
-  content: ParagraphBlock[];
+  /** Flow blocks inside the text box */
+  content: (ParagraphBlock | TableBlock)[];
   /** Display mode copied from the ProseMirror text box node. */
   displayMode?: "inline" | "float" | "block";
   /** CSS float direction copied from the ProseMirror text box node. */
@@ -790,6 +851,8 @@ export type MeasuredLine = {
    * as marginTop on the line element; measurement adds it to totalHeight.
    */
   floatSkipBefore?: number;
+  /** Decorative hyphen inserted at a dictionary break without changing source text. */
+  discretionaryHyphen?: { runIndex: number };
 };
 
 /**
@@ -877,8 +940,8 @@ export type TextBoxMeasure = {
   kind: "textBox";
   width: number;
   height: number;
-  /** Pre-measured inner paragraph measures (avoids re-measuring during render) */
-  innerMeasures: ParagraphMeasure[];
+  /** Pre-measured inner content (avoids re-measuring during render) */
+  innerMeasures: (ParagraphMeasure | TableMeasure)[];
 };
 
 /**
@@ -1051,6 +1114,10 @@ export type ColumnLayout = {
   count: number;
   gap: number;
   equalWidth?: boolean;
+  /** Authored widths for unequal-width section columns. */
+  widths?: number[];
+  /** Authored space after each column except the last. */
+  gaps?: number[];
   /** Draw vertical separator line between columns (w:sep). */
   separator?: boolean;
 };
@@ -1123,10 +1190,14 @@ export type LayoutOptions = {
    * same extension.
    */
   firstPageMargins?: PageMargins;
+  /** Per-section body margins used on even section pages. */
+  sectionEvenPageMargins?: (PageMargins | undefined)[];
   /** Body-level final section page size. */
   finalPageSize?: { w: number; h: number };
   /** Body-level final section margins. */
   finalMargins?: PageMargins;
+  /** Body-level final section column configuration. */
+  finalColumns?: ColumnLayout;
   /** Column configuration. */
   columns?: ColumnLayout;
   /** Gap between rendered pages (for UI). */
@@ -1268,7 +1339,8 @@ export type HeaderFooterContent = {
 /**
  * `true` when the image run is anchored at page-level coordinates instead of
  * participating in inline flow. Covers the OOXML floating wrap types
- * (`square`, `tight`, `through`, `behind`, `inFront`) and the legacy
+ * (`square`, `tight`, `through`, `behind`, `inFront`), explicitly positioned
+ * `topAndBottom` artwork, and the legacy
  * `displayMode === "float"` escape hatch used by ProseMirror nodes that
  * pre-date the wrap-type round-trip.
  *
@@ -1277,6 +1349,9 @@ export type HeaderFooterContent = {
  */
 export const isFloatingImageRun = (run: ImageRun): boolean => {
   const wrapType = run.wrapType;
+  if (wrapType === "topAndBottom" && run.position !== undefined) {
+    return true;
+  }
   if (
     wrapType === "square" ||
     wrapType === "tight" ||
@@ -1341,3 +1416,45 @@ export function floatingTextBoxWrapsText(block: TextBoxFlowAttrs): boolean {
 export function floatingTextBoxReservesBand(block: TextBoxFlowAttrs): boolean {
   return isFloatingTextBoxBlock(block) && block.wrapType === "topAndBottom";
 }
+
+/**
+ * A table's columns are pinned when the layout engine cannot widen a column to
+ * fit content that overflows it: either the layout is explicitly fixed
+ * (`w:tblLayout w:type="fixed"`) or an explicit total width (`w:tblW` `dxa`/
+ * `pct`) is fully consumed by the grid.
+ *
+ * In OOXML, `w:noWrap` (§17.4.30) asks Word not to soft-wrap a cell, but Word
+ * can only honor it by widening the column. When the columns are pinned it
+ * cannot, so overflowing content wraps despite `w:noWrap`. An auto-width table
+ * (`w:tblW` `auto`/`nil`/absent with autofit layout) lets Word widen the column
+ * instead, so there `w:noWrap` genuinely keeps content on one line. Measurement
+ * and the painter both consult this so their line count and `white-space` agree.
+ */
+export function tableColumnsArePinned(table: TableBlock): boolean {
+  if (table.layout === "fixed") {
+    return true;
+  }
+  return table.widthType === "dxa" || table.widthType === "pct";
+}
+
+const tableRowOwnsNestedGrid = (row: TableRow): boolean => {
+  const cell = row.cells.length === 1 ? row.cells.at(0) : undefined;
+  if (!cell?.blocks.some((block) => block.kind === "table")) {
+    return false;
+  }
+
+  return cell.blocks.every(
+    (block) => block.kind === "table" || (block.kind === "paragraph" && block.runs.length === 0),
+  );
+};
+
+/** Return the leading visual offset for a row with omitted grid columns. */
+export const getTableRowLeadingWidth = (row: TableRow, columnWidths: readonly number[]): number => {
+  if (tableRowOwnsNestedGrid(row)) {
+    return 0;
+  }
+
+  return columnWidths
+    .slice(0, row.gridBefore ?? 0)
+    .reduce((sum, columnWidth) => sum + columnWidth, 0);
+};

@@ -15,10 +15,10 @@
  * paragraphs in `document.xml` (leaving every untouched part byte-exact), with
  * a full repack as the fallback for structural edits.
  *
- * Scope: BODY blocks. Footnote / endnote note-body apply is intentionally out
- * of scope here and can build on the note serialization work separately.
+ * Scope: main, header, footer, footnote, and endnote blocks.
  */
 
+import { TaggedError } from "better-result";
 import { EditorState } from "prosemirror-state";
 import type { Command } from "prosemirror-state";
 import type { Plugin } from "prosemirror-state";
@@ -41,8 +41,12 @@ import {
   rejectAIEditRevision,
   rejectAllChanges,
 } from "../prosemirror/commands/comments";
-import { updateDocumentContent } from "../prosemirror/conversion/fromProseDoc";
-import { toProseDoc } from "../prosemirror/conversion/toProseDoc";
+import { proseDocToBlocks, updateDocumentContent } from "../prosemirror/conversion/fromProseDoc";
+import {
+  footnoteToProseDoc,
+  headerFooterToProseDoc,
+  toProseDoc,
+} from "../prosemirror/conversion/toProseDoc";
 import {
   getChangedParagraphIds,
   hasStructuralChanges,
@@ -51,13 +55,15 @@ import {
 } from "../prosemirror/extensions/features/ParagraphChangeTrackerExtension";
 import { schema, singletonManager } from "../prosemirror/schema";
 import type { Comment } from "../types/content";
-import type { Document, HeaderFooter } from "../types/document";
+import type { Document, Endnote, Footnote, HeaderFooter } from "../types/document";
 import { deterministicHexId } from "../utils/hexId";
 import {
   applyFolioDocumentOperations,
   FOLIO_DOCUMENT_OPERATION_CONTRACT_VERSION,
   type FolioDocumentOperationBatch,
   type FolioDocumentOperationResult,
+  type FolioDocumentOperationUndoHandle,
+  type FolioDocumentOperationUndoResult,
 } from "../document-operations";
 import { buildAnnotatedBlockText } from "./clean-text";
 import {
@@ -83,6 +89,7 @@ import type {
  * across reviewers created within the same millisecond.
  */
 let commentIdCursor = Date.now();
+let undoHandleCursor = Date.now();
 
 /**
  * Build the note-free comment thread the apply layer references by id.
@@ -102,6 +109,15 @@ const createReviewerComment = (text: string, author: string): Comment => ({
     },
   ],
 });
+
+type FolioDocumentOperationUndoEntry = {
+  undoHandle: FolioDocumentOperationUndoHandle;
+  story: FolioEditableDocumentStoryHandle;
+  beforeState: EditorState;
+  afterState: EditorState;
+  createdCommentsLengthBefore: number;
+  createdCommentsLengthAfter: number;
+};
 
 /**
  * Assign a stable `w14:paraId` to every body paragraph that lacks one (or
@@ -188,14 +204,140 @@ export type FolioGetContentAsTextOptions = {
   annotated?: boolean;
 };
 
+export const FOLIO_REVIEWED_VIEWS = Object.freeze(["original", "current-markup", "final"] as const);
+
+export type FolioReviewedView = (typeof FOLIO_REVIEWED_VIEWS)[number];
+
+export const FOLIO_RESOLVED_REVIEWED_VIEWS = Object.freeze(["original", "final"] as const);
+
+export type FolioResolvedReviewedView = (typeof FOLIO_RESOLVED_REVIEWED_VIEWS)[number];
+
 export type FolioDocumentStoryHandle =
   | { type: "main" }
-  | { type: "header" | "footer"; relationshipId: string }
-  | { type: "footnote" | "endnote"; noteId: number };
+  | { type: "header"; relationshipId: string }
+  | { type: "footer"; relationshipId: string }
+  | { type: "footnote"; noteId: number }
+  | { type: "endnote"; noteId: number };
+
+export type FolioEditableDocumentStoryHandle = FolioDocumentStoryHandle;
 
 export type FolioDocumentStory = {
   handle: FolioDocumentStoryHandle;
   text: string;
+};
+
+export type FolioReadReviewedStoryOptions = {
+  story?: FolioEditableDocumentStoryHandle;
+  view?: FolioReviewedView;
+};
+
+export type FolioResolveReviewedStoryOptions = {
+  story?: FolioEditableDocumentStoryHandle;
+  view: FolioResolvedReviewedView;
+};
+
+export type FolioReviewedStory = {
+  story: FolioEditableDocumentStoryHandle;
+  view: FolioReviewedView;
+  snapshot: FolioAIEditSnapshot;
+  text: string;
+  changes: FolioReviewChange[];
+};
+
+export class UnsupportedFolioReviewedViewError extends TaggedError(
+  "UnsupportedFolioReviewedViewError",
+)<{
+  message: string;
+  receivedView: unknown;
+}>() {}
+
+export class FolioDocumentStoryNotFoundError extends TaggedError(
+  "FolioDocumentStoryNotFoundError",
+)<{
+  message: string;
+  story: FolioEditableDocumentStoryHandle;
+}>() {}
+
+export type FolioApplyDocumentOperationsToStoryOptions = FolioApplyDocumentOperationsOptions & {
+  story: FolioEditableDocumentStoryHandle;
+  batch: FolioDocumentOperationBatch;
+};
+
+type FolioHeaderFooterStoryHandle = Extract<
+  FolioEditableDocumentStoryHandle,
+  { type: "header" | "footer" }
+>;
+
+type FolioNoteStoryHandle = Extract<
+  FolioEditableDocumentStoryHandle,
+  { type: "footnote" | "endnote" }
+>;
+
+type FolioSecondaryStoryHandle = Exclude<FolioEditableDocumentStoryHandle, { type: "main" }>;
+
+type FolioSecondaryStoryState = {
+  handle: FolioSecondaryStoryHandle;
+  initialState: EditorState;
+  state: EditorState;
+};
+
+type ApplyDocumentOperationsInternalOptions = {
+  story: FolioEditableDocumentStoryHandle;
+  batch: FolioDocumentOperationBatch;
+  snapshot?: FolioAIEditSnapshot;
+  createUndoEntry: boolean;
+};
+
+const MAIN_STORY = Object.freeze({ type: "main" } as const);
+
+const headerFooterStoryKey = ({ type, relationshipId }: FolioHeaderFooterStoryHandle): string =>
+  `${type}:${relationshipId}`;
+
+const noteStoryKey = ({ type, noteId }: FolioNoteStoryHandle): string => `${type}:${noteId}`;
+
+const secondaryStoryKey = (story: FolioSecondaryStoryHandle): string =>
+  story.type === "header" || story.type === "footer"
+    ? headerFooterStoryKey(story)
+    : noteStoryKey(story);
+
+export const isFolioReviewedView = (value: unknown): value is FolioReviewedView =>
+  FOLIO_REVIEWED_VIEWS.some((view) => view === value);
+
+export const isFolioResolvedReviewedView = (value: unknown): value is FolioResolvedReviewedView =>
+  FOLIO_RESOLVED_REVIEWED_VIEWS.some((view) => view === value);
+
+const applyCommandToState = (state: EditorState, command: Command): EditorState => {
+  let nextState = state;
+  command(state, (transaction) => {
+    nextState = nextState.apply(transaction);
+  });
+  return nextState;
+};
+
+const resolveReviewedState = (state: EditorState, view: FolioReviewedView): EditorState => {
+  if (view === "current-markup") {
+    return state;
+  }
+  return applyCommandToState(state, view === "original" ? rejectAllChanges() : acceptAllChanges());
+};
+
+const formatStoryStateForLLM = (state: EditorState, annotated: boolean): string => {
+  const snapshot = createFolioAIEditSnapshot(state.doc);
+  if (!annotated) {
+    return snapshot.blocks.map(formatBlockForLLM).join("\n");
+  }
+  const startById = new Map<string, number>();
+  for (const anchor of Object.values(snapshot.anchors)) {
+    startById.set(anchor.id, anchor.from);
+  }
+  return snapshot.blocks
+    .map((block) => {
+      const from = startById.get(block.id);
+      const node = from === undefined ? null : state.doc.nodeAt(from);
+      const text = node ? buildAnnotatedBlockText(node) : block.text;
+      return formatBlockLine(block, text);
+    })
+    .join("\n");
 };
 
 // The change shape and its pure reader now live in `./read` so a live editor
@@ -316,7 +458,9 @@ export class FolioDocxReviewer {
   private readonly baseDocument: Document;
   private readonly originalBuffer: ArrayBuffer;
   private state: EditorState;
+  private readonly secondaryStoryStates = new Map<string, FolioSecondaryStoryState>();
   private readonly createdComments: Comment[] = [];
+  private readonly documentOperationUndoEntries: FolioDocumentOperationUndoEntry[] = [];
   /**
    * Resolved-state overrides recorded by {@link resolveComment}, keyed by
    * comment id. Applied on read ({@link getComments}) and on write
@@ -379,6 +523,69 @@ export class FolioDocxReviewer {
     return createFolioAIEditSnapshot(this.state.doc);
   }
 
+  /** Return parsed package metadata without exposing the mutable document model. */
+  getDocumentProperties(): Readonly<NonNullable<Document["package"]["properties"]>> | null {
+    const properties = this.baseDocument.package.properties;
+    if (!properties) {
+      return null;
+    }
+    return Object.freeze({
+      ...properties,
+      ...(properties.created !== undefined
+        ? { created: new Date(properties.created.getTime()) }
+        : {}),
+      ...(properties.modified !== undefined
+        ? { modified: new Date(properties.modified.getTime()) }
+        : {}),
+    });
+  }
+
+  /** Snapshot one editable story into stable, operation-ready blocks. */
+  snapshotStory(story: FolioEditableDocumentStoryHandle): FolioAIEditSnapshot | null {
+    const state = this.getEditableStoryState(story);
+    return state ? createFolioAIEditSnapshot(state.doc) : null;
+  }
+
+  /** Read one story through an immutable reviewed-view projection. */
+  readReviewedStory(options: FolioReadReviewedStoryOptions = {}): FolioReviewedStory | null {
+    const story = options.story ?? MAIN_STORY;
+    const view = options.view ?? "final";
+    if (!isFolioReviewedView(view)) {
+      throw new UnsupportedFolioReviewedViewError({
+        message: "Unsupported reviewed document view.",
+        receivedView: view,
+      });
+    }
+    const sourceState = this.getEditableStoryState(story);
+    if (!sourceState) {
+      return null;
+    }
+    const state = resolveReviewedState(sourceState, view);
+    return {
+      story,
+      view,
+      snapshot: createFolioAIEditSnapshot(state.doc),
+      text: formatStoryStateForLLM(state, view === "current-markup"),
+      changes: getTrackedChangesFromDoc(state.doc),
+    };
+  }
+
+  /** Resolve one editable story to its original or final state. */
+  resolveReviewedStory({ story = MAIN_STORY, view }: FolioResolveReviewedStoryOptions): boolean {
+    if (!isFolioResolvedReviewedView(view)) {
+      throw new UnsupportedFolioReviewedViewError({
+        message: "Only original and final views can replace editable story state.",
+        receivedView: view,
+      });
+    }
+    const sourceState = this.getEditableStoryState(story);
+    if (!sourceState) {
+      return false;
+    }
+    this.setEditableStoryState(story, resolveReviewedState(sourceState, view));
+    return true;
+  }
+
   /**
    * Apply operations against the current state. Reuses the live-editor applier
    * verbatim via a headless `{ state, dispatch }` seam; the resulting state
@@ -388,16 +595,16 @@ export class FolioDocxReviewer {
     operations: FolioAIEditOperation[],
     options: FolioApplyOperationsOptions = {},
   ): FolioAIEditApplyResult {
-    const { applied, skipped } = this.applyDocumentOperations(
-      {
+    const { applied, skipped } = this.applyDocumentOperationsInternal({
+      story: MAIN_STORY,
+      batch: {
         version: FOLIO_DOCUMENT_OPERATION_CONTRACT_VERSION,
         operations,
         mode: options.mode ?? "tracked-changes",
       },
-      {
-        ...(options.snapshot !== undefined && { snapshot: options.snapshot }),
-      },
-    );
+      ...(options.snapshot !== undefined && { snapshot: options.snapshot }),
+      createUndoEntry: false,
+    });
     return { applied, skipped };
   }
 
@@ -411,8 +618,38 @@ export class FolioDocxReviewer {
     batch: FolioDocumentOperationBatch,
     options: FolioApplyDocumentOperationsOptions = {},
   ): FolioDocumentOperationResult {
+    return this.applyDocumentOperationsInternal({
+      story: MAIN_STORY,
+      batch,
+      ...(options.snapshot !== undefined && { snapshot: options.snapshot }),
+      createUndoEntry: true,
+    });
+  }
+
+  /** Apply a versioned operation batch to one editable document story. */
+  applyDocumentOperationsToStory({
+    story,
+    batch,
+    snapshot,
+  }: FolioApplyDocumentOperationsToStoryOptions): FolioDocumentOperationResult {
+    return this.applyDocumentOperationsInternal({
+      story,
+      batch,
+      ...(snapshot !== undefined && { snapshot }),
+      createUndoEntry: true,
+    });
+  }
+
+  private applyDocumentOperationsInternal({
+    story,
+    batch,
+    snapshot,
+    createUndoEntry,
+  }: ApplyDocumentOperationsInternalOptions): FolioDocumentOperationResult {
+    const beforeState = this.requireEditableStoryState(story);
+    const createdCommentsLengthBefore = this.createdComments.length;
     const view = {
-      state: this.state,
+      state: beforeState,
       dispatch: (transaction: Transaction) => {
         view.state = view.state.apply(transaction);
       },
@@ -420,18 +657,66 @@ export class FolioDocxReviewer {
 
     const result = applyFolioDocumentOperations({
       view,
-      snapshot: options.snapshot ?? this.snapshot(),
+      snapshot: snapshot ?? createFolioAIEditSnapshot(beforeState.doc),
       batch,
+      story: story.type === "main" ? "main" : story,
       author: this.author,
       createCommentId: (text) => {
         const comment = createReviewerComment(text, this.author);
         this.createdComments.push(comment);
         return comment.id;
       },
+      ...(createUndoEntry && {
+        createUndoHandle: () => ({
+          type: "documentOperationUndo",
+          id: `headless-${String(undoHandleCursor++)}`,
+        }),
+      }),
     });
 
-    this.state = view.state;
+    this.setEditableStoryState(story, view.state);
+    if (result.undoHandle !== null) {
+      this.documentOperationUndoEntries.push({
+        undoHandle: result.undoHandle,
+        story,
+        beforeState,
+        afterState: view.state,
+        createdCommentsLengthBefore,
+        createdCommentsLengthAfter: this.createdComments.length,
+      });
+    }
     return result;
+  }
+
+  /** Undo the latest unchanged document-operation batch and its created comments. */
+  undoDocumentOperations(
+    undoHandle: FolioDocumentOperationUndoHandle,
+  ): FolioDocumentOperationUndoResult {
+    const entryIndex = this.documentOperationUndoEntries.findIndex(
+      (entry) => entry.undoHandle.type === undoHandle.type && entry.undoHandle.id === undoHandle.id,
+    );
+    if (entryIndex === -1) {
+      return { status: "rejected", undoHandle, reason: "unknownHandle" };
+    }
+    if (entryIndex !== this.documentOperationUndoEntries.length - 1) {
+      return { status: "rejected", undoHandle, reason: "notLatest" };
+    }
+
+    const entry = this.documentOperationUndoEntries.at(-1);
+    if (!entry) {
+      return { status: "rejected", undoHandle, reason: "unknownHandle" };
+    }
+    if (
+      this.requireEditableStoryState(entry.story) !== entry.afterState ||
+      this.createdComments.length !== entry.createdCommentsLengthAfter
+    ) {
+      return { status: "rejected", undoHandle, reason: "documentChanged" };
+    }
+
+    this.setEditableStoryState(entry.story, entry.beforeState);
+    this.createdComments.length = entry.createdCommentsLengthBefore;
+    this.documentOperationUndoEntries.pop();
+    return { status: "undone", undoHandle };
   }
 
   /**
@@ -455,30 +740,14 @@ export class FolioDocxReviewer {
    * (clean) output flattens tracked changes and is unchanged.
    */
   getContentAsText(options: FolioGetContentAsTextOptions = {}): string {
-    if (!options.annotated) {
-      return this.getContent().map(formatBlockForLLM).join("\n");
-    }
-    const snapshot = this.snapshot();
-    const startById = new Map<string, number>();
-    for (const anchor of Object.values(snapshot.anchors)) {
-      startById.set(anchor.id, anchor.from);
-    }
-    return snapshot.blocks
-      .map((block) => {
-        const from = startById.get(block.id);
-        const node = from === undefined ? null : this.state.doc.nodeAt(from);
-        const text = node ? buildAnnotatedBlockText(node) : block.text;
-        return formatBlockLine(block, text);
-      })
-      .join("\n");
+    return formatStoryStateForLLM(this.state, options.annotated === true);
   }
 
   /**
    * Header / footer and footnote / endnote text as labeled, LLM-ready lines,
    * one per non-empty part: `[header default] …`, `[footer default] …`,
-   * `[footnote #N] …`, `[endnote #N] …`. Read-only — note bodies are outside
-   * the reviewer's body-only apply scope, so this reflects the parsed source.
-   * Empty parts and separator notes are omitted.
+   * `[footnote #N] …`, `[endnote #N] …`. Lines reflect in-memory edits. Empty
+   * parts and separator notes are omitted.
    */
   getNotesAsText(): string {
     const pkg = this.baseDocument.package;
@@ -491,8 +760,9 @@ export class FolioDocxReviewer {
       if (!map) {
         return;
       }
-      for (const hf of map.values()) {
-        const text = normalizeFolioAIBlockText(getHeaderFooterText(hf));
+      for (const [relationshipId, hf] of map) {
+        const handle = { type: label, relationshipId } as const;
+        const text = this.getHeaderFooterStoryText(handle, hf);
         if (text.length > 0) {
           lines.push(`[${label} ${hf.hdrFtrType}] ${text}`);
         }
@@ -506,7 +776,8 @@ export class FolioDocxReviewer {
       if (isSeparatorFootnote(footnote)) {
         continue;
       }
-      const text = normalizeFolioAIBlockText(getFootnoteText(footnote));
+      const handle = { type: "footnote", noteId: footnote.id } as const;
+      const text = this.getNoteStoryText(handle, footnote);
       if (text.length > 0) {
         lines.push(`[footnote #${footnote.id}] ${text}`);
       }
@@ -515,7 +786,8 @@ export class FolioDocxReviewer {
       if (isSeparatorEndnote(endnote)) {
         continue;
       }
-      const text = normalizeFolioAIBlockText(getEndnoteText(endnote));
+      const handle = { type: "endnote", noteId: endnote.id } as const;
+      const text = this.getNoteStoryText(handle, endnote);
       if (text.length > 0) {
         lines.push(`[endnote #${endnote.id}] ${text}`);
       }
@@ -531,30 +803,34 @@ export class FolioDocxReviewer {
       { handle: { type: "main" }, text: this.getContentAsText() },
     ];
     for (const [relationshipId, header] of pkg.headers ?? []) {
+      const handle = { type: "header", relationshipId } as const;
       stories.push({
-        handle: { type: "header", relationshipId },
-        text: normalizeFolioAIBlockText(getHeaderFooterText(header)),
+        handle,
+        text: this.getHeaderFooterStoryText(handle, header),
       });
     }
     for (const [relationshipId, footer] of pkg.footers ?? []) {
+      const handle = { type: "footer", relationshipId } as const;
       stories.push({
-        handle: { type: "footer", relationshipId },
-        text: normalizeFolioAIBlockText(getHeaderFooterText(footer)),
+        handle,
+        text: this.getHeaderFooterStoryText(handle, footer),
       });
     }
     for (const footnote of pkg.footnotes ?? []) {
       if (!isSeparatorFootnote(footnote)) {
+        const handle = { type: "footnote", noteId: footnote.id } as const;
         stories.push({
-          handle: { type: "footnote", noteId: footnote.id },
-          text: normalizeFolioAIBlockText(getFootnoteText(footnote)),
+          handle,
+          text: this.getNoteStoryText(handle, footnote),
         });
       }
     }
     for (const endnote of pkg.endnotes ?? []) {
       if (!isSeparatorEndnote(endnote)) {
+        const handle = { type: "endnote", noteId: endnote.id } as const;
         stories.push({
-          handle: { type: "endnote", noteId: endnote.id },
-          text: normalizeFolioAIBlockText(getEndnoteText(endnote)),
+          handle,
+          text: this.getNoteStoryText(handle, endnote),
         });
       }
     }
@@ -757,6 +1033,7 @@ export class FolioDocxReviewer {
   /** The current document model with edits merged back in. */
   toDocument(): Document {
     const document = updateDocumentContent(this.baseDocument, this.state.doc);
+    this.mergeEditedSecondaryStories(document);
     if (this.createdComments.length > 0 || this.resolvedOverrides.size > 0) {
       document.package.document.comments = this.withResolvedOverrides([
         ...(document.package.document.comments ?? []),
@@ -788,35 +1065,236 @@ export class FolioDocxReviewer {
    * is the graceful handling — no separate error surface is needed here.
    */
   private async trySelectiveSave(document: Document): Promise<ArrayBuffer | null> {
+    const changedParaIds = new Set(getChangedParagraphIds(this.state));
+    let structuralChange = hasStructuralChanges(this.state);
+    let untrackedChanges = hasUntrackedChanges(this.state);
+    for (const entry of this.secondaryStoryStates.values()) {
+      if (entry.handle.type !== "footnote" && entry.handle.type !== "endnote") {
+        continue;
+      }
+      for (const paraId of getChangedParagraphIds(entry.state)) {
+        changedParaIds.add(paraId);
+      }
+      structuralChange ||= hasStructuralChanges(entry.state);
+      untrackedChanges ||= hasUntrackedChanges(entry.state);
+    }
     try {
       return await attemptSelectiveSave(document, this.originalBuffer, {
-        changedParaIds: getChangedParagraphIds(this.state),
-        structuralChange: hasStructuralChanges(this.state),
-        hasUntrackedChanges: hasUntrackedChanges(this.state),
+        changedParaIds,
+        structuralChange,
+        hasUntrackedChanges: untrackedChanges,
       });
     } catch {
       return null;
     }
   }
 
+  private getEditableStoryState(story: FolioEditableDocumentStoryHandle): EditorState | null {
+    if (story.type === "main") {
+      return this.state;
+    }
+    const key = secondaryStoryKey(story);
+    const existing = this.secondaryStoryStates.get(key);
+    if (existing) {
+      return existing.state;
+    }
+    const source =
+      story.type === "header" || story.type === "footer"
+        ? this.getHeaderFooterStory(story)
+        : this.getNoteStory(story);
+    if (!source) {
+      return null;
+    }
+    const conversionOptions = {
+      ...(this.baseDocument.package.styles !== undefined && {
+        styles: this.baseDocument.package.styles,
+      }),
+      ...(this.baseDocument.package.theme !== undefined && {
+        theme: this.baseDocument.package.theme,
+      }),
+    };
+    const state = ensureDeterministicParaIdsInState(
+      EditorState.create({
+        schema,
+        doc:
+          story.type === "header" || story.type === "footer"
+            ? headerFooterToProseDoc(source.content, conversionOptions)
+            : footnoteToProseDoc(source.content, conversionOptions),
+        plugins: singletonManager.getPlugins(),
+      }),
+    );
+    this.secondaryStoryStates.set(key, { handle: story, initialState: state, state });
+    return state;
+  }
+
+  private requireEditableStoryState(story: FolioEditableDocumentStoryHandle): EditorState {
+    const state = this.getEditableStoryState(story);
+    if (state) {
+      return state;
+    }
+    throw new FolioDocumentStoryNotFoundError({
+      message: `Document story ${JSON.stringify(story)} was not found.`,
+      story,
+    });
+  }
+
+  private setEditableStoryState(story: FolioEditableDocumentStoryHandle, state: EditorState): void {
+    if (story.type === "main") {
+      this.state = state;
+      return;
+    }
+    const entry = this.secondaryStoryStates.get(secondaryStoryKey(story));
+    if (!entry) {
+      throw new FolioDocumentStoryNotFoundError({
+        message: `Document story ${JSON.stringify(story)} was not found.`,
+        story,
+      });
+    }
+    entry.state = state;
+  }
+
+  private getHeaderFooterStory(story: FolioHeaderFooterStoryHandle): HeaderFooter | undefined {
+    const stories =
+      story.type === "header"
+        ? this.baseDocument.package.headers
+        : this.baseDocument.package.footers;
+    return stories?.get(story.relationshipId);
+  }
+
+  private getNoteStory(story: FolioNoteStoryHandle): Footnote | Endnote | undefined {
+    if (story.type === "footnote") {
+      return this.baseDocument.package.footnotes?.find(
+        (note) => note.id === story.noteId && !isSeparatorFootnote(note),
+      );
+    }
+    return this.baseDocument.package.endnotes?.find(
+      (note) => note.id === story.noteId && !isSeparatorEndnote(note),
+    );
+  }
+
+  private getHeaderFooterStoryText(
+    story: FolioHeaderFooterStoryHandle,
+    source: HeaderFooter,
+  ): string {
+    const state = this.secondaryStoryStates.get(headerFooterStoryKey(story))?.state;
+    return normalizeFolioAIBlockText(state?.doc.textContent ?? getHeaderFooterText(source));
+  }
+
+  private getNoteStoryText(story: FolioNoteStoryHandle, source: Footnote | Endnote): string {
+    const state = this.secondaryStoryStates.get(noteStoryKey(story))?.state;
+    const sourceText =
+      source.type === "footnote" ? getFootnoteText(source) : getEndnoteText(source);
+    return normalizeFolioAIBlockText(state?.doc.textContent ?? sourceText);
+  }
+
+  private mergeEditedSecondaryStories(document: Document): void {
+    let headers: Map<string, HeaderFooter> | undefined;
+    let footers: Map<string, HeaderFooter> | undefined;
+    let footnotes: Footnote[] | undefined;
+    let endnotes: Endnote[] | undefined;
+    for (const entry of this.secondaryStoryStates.values()) {
+      if (entry.state === entry.initialState) {
+        continue;
+      }
+      if (entry.handle.type === "header" || entry.handle.type === "footer") {
+        const source = this.getHeaderFooterStory(entry.handle);
+        if (!source) {
+          continue;
+        }
+        const edited = { ...source, content: proseDocToBlocks(entry.state.doc) };
+        if (entry.handle.type === "header") {
+          headers ??= new Map(document.package.headers);
+          headers.set(entry.handle.relationshipId, edited);
+          continue;
+        }
+        footers ??= new Map(document.package.footers);
+        footers.set(entry.handle.relationshipId, edited);
+        continue;
+      }
+      if (entry.handle.type === "footnote") {
+        const { noteId } = entry.handle;
+        const source = this.baseDocument.package.footnotes?.find(
+          (note) => note.id === noteId && !isSeparatorFootnote(note),
+        );
+        if (!source) {
+          continue;
+        }
+        const edited = { ...source, content: proseDocToBlocks(entry.state.doc) };
+        footnotes ??= [...(document.package.footnotes ?? [])];
+        const index = footnotes.findIndex((note) => note.id === noteId);
+        if (index !== -1) {
+          footnotes[index] = edited;
+        }
+        continue;
+      }
+      const { noteId } = entry.handle;
+      const source = this.baseDocument.package.endnotes?.find(
+        (note) => note.id === noteId && !isSeparatorEndnote(note),
+      );
+      if (!source) {
+        continue;
+      }
+      const edited = { ...source, content: proseDocToBlocks(entry.state.doc) };
+      endnotes ??= [...(document.package.endnotes ?? [])];
+      const index = endnotes.findIndex((note) => note.id === noteId);
+      if (index !== -1) {
+        endnotes[index] = edited;
+      }
+    }
+    if (headers) {
+      document.package.headers = headers;
+    }
+    if (footers) {
+      document.package.footers = footers;
+    }
+    if (footnotes) {
+      document.package.footnotes = footnotes;
+    }
+    if (endnotes) {
+      document.package.endnotes = endnotes;
+    }
+  }
+
   /**
    * Count every tracked change an accept-all / reject-all sweep resolves: the
-   * inline insertion / deletion groups {@link getChanges} enumerates, plus
-   * paragraph-level changes (`pPrMark`, `_propertyChanges`) that live on
-   * paragraph attrs rather than inline marks.
+   * inline insertion / deletion groups {@link getChanges} enumerates, plus the
+   * property-change records living on node attrs rather than inline marks —
+   * paragraph-level (`pPrMark`, `_propertyChanges`, the inline sectPr's
+   * `propertyChanges`) and table-level (`tblPrChange` / `trPrChange` /
+   * `tcPrChange`).
    */
   private countTrackedChanges(): number {
+    const hasEntries = (value: unknown): boolean => Array.isArray(value) && value.length > 0;
     let count = this.getChanges().length;
     this.state.doc.descendants((node) => {
-      if (node.type.name !== "paragraph") {
+      const typeName = node.type.name;
+      if (typeName === "table" && hasEntries(node.attrs["tblPrChange"])) {
+        count += 1;
+      }
+      if (typeName === "tableRow" && hasEntries(node.attrs["trPrChange"])) {
+        count += 1;
+      }
+      if (
+        (typeName === "tableCell" || typeName === "tableHeader") &&
+        hasEntries(node.attrs["tcPrChange"])
+      ) {
+        count += 1;
+      }
+      if (typeName !== "paragraph") {
         return undefined;
       }
       const pPrMark = node.attrs["pPrMark"];
       if (pPrMark !== null && pPrMark !== undefined) {
         count += 1;
       }
-      const propertyChanges = node.attrs["_propertyChanges"];
-      if (Array.isArray(propertyChanges) && propertyChanges.length > 0) {
+      if (hasEntries(node.attrs["_propertyChanges"])) {
+        count += 1;
+      }
+      const sectionProperties = node.attrs["_sectionProperties"] as
+        | { propertyChanges?: unknown }
+        | null
+        | undefined;
+      if (hasEntries(sectionProperties?.propertyChanges)) {
         count += 1;
       }
       return false;

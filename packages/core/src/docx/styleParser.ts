@@ -31,6 +31,7 @@ import type {
   ShadingProperties,
   TabStop,
   TableBorders,
+  TableCellBorders,
   CellMargins,
   TableLook,
   TableMeasurement,
@@ -283,6 +284,20 @@ function parseRunProperties(
     }
 
     formatting.fontFamily = fontFamily;
+  }
+
+  const lang = findChild(rPr, "w", "lang");
+  if (lang) {
+    const val = getAttribute(lang, "w", "val") || undefined;
+    const eastAsia = getAttribute(lang, "w", "eastAsia") || undefined;
+    const bidi = getAttribute(lang, "w", "bidi") || undefined;
+    if (val || eastAsia || bidi) {
+      formatting.language = {
+        ...(val ? { val } : {}),
+        ...(eastAsia ? { eastAsia } : {}),
+        ...(bidi ? { bidi } : {}),
+      };
+    }
   }
 
   // Character spacing (in twips)
@@ -768,6 +783,16 @@ function parseParagraphProperties(
     formatting.suppressAutoHyphens = parseBooleanElement(suppressAutoHyphens);
   }
 
+  const kinsoku = findChild(pPr, "w", "kinsoku");
+  if (kinsoku) {
+    formatting.kinsoku = parseBooleanElement(kinsoku);
+  }
+
+  const overflowPunct = findChild(pPr, "w", "overflowPunct");
+  if (overflowPunct) {
+    formatting.overflowPunctuation = parseBooleanElement(overflowPunct);
+  }
+
   // Run properties for this paragraph (default run formatting)
   const rPr = findChild(pPr, "w", "rPr");
   if (rPr) {
@@ -841,6 +866,26 @@ function parseTableBorders(tblBorders: XmlElement | null): TableBorders | undefi
   const insideV = parseBorderSpec(findChild(tblBorders, "w", "insideV"));
   if (insideV) {
     borders.insideV = insideV;
+  }
+
+  return Object.keys(borders).length > 0 ? borders : undefined;
+}
+
+/** Parse cell-only diagonal borders in addition to the shared table sides. */
+function parseTableCellBorders(tcBorders: XmlElement | null): TableCellBorders | undefined {
+  if (!tcBorders) {
+    return undefined;
+  }
+
+  const borders: TableCellBorders = { ...parseTableBorders(tcBorders) };
+  const topLeftToBottomRight = parseBorderSpec(findChild(tcBorders, "w", "tl2br"));
+  if (topLeftToBottomRight) {
+    borders.topLeftToBottomRight = topLeftToBottomRight;
+  }
+
+  const topRightToBottomLeft = parseBorderSpec(findChild(tcBorders, "w", "tr2bl"));
+  if (topRightToBottomLeft) {
+    borders.topRightToBottomLeft = topRightToBottomLeft;
   }
 
   return Object.keys(borders).length > 0 ? borders : undefined;
@@ -1134,7 +1179,7 @@ function parseTableCellProperties(
   // Cell borders
   const tcBorders = findChild(tcPr, "w", "tcBorders");
   if (tcBorders) {
-    const bordersResult = parseTableBorders(tcBorders);
+    const bordersResult = parseTableCellBorders(tcBorders);
     if (bordersResult) {
       formatting.borders = bordersResult;
     }

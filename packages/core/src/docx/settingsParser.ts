@@ -3,9 +3,8 @@
  *
  * Extracts document-wide settings the layout pipeline consumes at render
  * time. We deliberately read only the handful of settings that affect
- * layout; the rest of settings.xml (compatibility flags, view state,
- * autoformat options) is preserved opaquely by the rezip step and ignored
- * here.
+ * layout, including the line-breaking compatibility controls Folio supports;
+ * the rest of settings.xml is preserved opaquely by the rezip step.
  *
  * See ECMA-376 §17.15 for the full settings part.
  */
@@ -28,6 +27,8 @@ export const DEFAULT_TAB_STOP_TWIPS = 720;
  * we substitute the OOXML default instead.
  */
 const MAX_TAB_STOP_TWIPS = 31_680;
+const MAX_HYPHENATION_ZONE_TWIPS = 31_680;
+const MAX_CONSECUTIVE_HYPHEN_LIMIT = 255;
 
 export function parseSettings(xml: string | null): FolioDocumentSettings {
   const root = xml ? (parseXmlDocument(xml) as XmlElement | null) : null;
@@ -62,7 +63,100 @@ export function parseSettings(xml: string | null): FolioDocumentSettings {
     };
   }
 
+  const autoHyphenation = parseOnOffSetting(root, "autoHyphenation");
+  if (autoHyphenation !== undefined) {
+    settings.autoHyphenation = autoHyphenation;
+  }
+  const doNotHyphenateCaps = parseOnOffSetting(root, "doNotHyphenateCaps");
+  if (doNotHyphenateCaps !== undefined) {
+    settings.doNotHyphenateCaps = doNotHyphenateCaps;
+  }
+  const consecutiveHyphenLimit = parseIntegerSetting(
+    root,
+    "consecutiveHyphenLimit",
+    MAX_CONSECUTIVE_HYPHEN_LIMIT,
+  );
+  if (consecutiveHyphenLimit !== undefined) {
+    settings.consecutiveHyphenLimit = consecutiveHyphenLimit;
+  }
+  const hyphenationZoneTwips = parseIntegerSetting(
+    root,
+    "hyphenationZone",
+    MAX_HYPHENATION_ZONE_TWIPS,
+  );
+  if (hyphenationZoneTwips !== undefined) {
+    settings.hyphenationZoneTwips = hyphenationZoneTwips;
+  }
+
+  const noLineBreaksBefore = parseKinsokuOverride(root, "noLineBreaksBefore");
+  const noLineBreaksAfter = parseKinsokuOverride(root, "noLineBreaksAfter");
+  const compat = root ? findChild(root, "w", "compat") : null;
+  const splitPageBreakAndParagraphMark = compat
+    ? findChild(compat, "w", "splitPgBreakAndParaMark")
+    : null;
+  if (splitPageBreakAndParagraphMark && parseBooleanElement(splitPageBreakAndParagraphMark)) {
+    settings.splitPageBreakAndParagraphMark = true;
+  }
+  const applyBreakingRules = compat ? findChild(compat, "w", "applyBreakingRules") : null;
+  const useLegacyEthiopicAmharicRules =
+    applyBreakingRules !== null && parseBooleanElement(applyBreakingRules);
+  if (noLineBreaksBefore || noLineBreaksAfter || useLegacyEthiopicAmharicRules) {
+    settings.lineBreakRules = {
+      ...(noLineBreaksBefore ? { noLineBreaksBefore } : {}),
+      ...(noLineBreaksAfter ? { noLineBreaksAfter } : {}),
+      ...(useLegacyEthiopicAmharicRules ? { useLegacyEthiopicAmharicRules: true } : {}),
+    };
+  }
+
   return settings;
+}
+
+type OnOffSettingName = "autoHyphenation" | "doNotHyphenateCaps";
+
+function parseOnOffSetting(root: XmlElement | null, name: OnOffSettingName): boolean | undefined {
+  if (!root) {
+    return undefined;
+  }
+  const element = findChild(root, "w", name);
+  return element ? parseBooleanElement(element) : undefined;
+}
+
+type IntegerSettingName = "consecutiveHyphenLimit" | "hyphenationZone";
+
+function parseIntegerSetting(
+  root: XmlElement | null,
+  name: IntegerSettingName,
+  maximum: number,
+): number | undefined {
+  if (!root) {
+    return undefined;
+  }
+  const element = findChild(root, "w", name);
+  const raw = element ? getAttribute(element, "w", "val") : null;
+  if (raw === null || !/^\d+$/u.test(raw)) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isSafeInteger(parsed) && parsed <= maximum ? parsed : undefined;
+}
+
+function parseKinsokuOverride(
+  root: XmlElement | null,
+  name: "noLineBreaksBefore" | "noLineBreaksAfter",
+): { language?: string; characters: string } | undefined {
+  if (!root) {
+    return undefined;
+  }
+  const element = findChild(root, "w", name);
+  const characters = element ? getAttribute(element, "w", "val") : null;
+  if (!characters) {
+    return undefined;
+  }
+  const language = getAttribute(element, "w", "lang") || undefined;
+  return {
+    characters,
+    ...(language ? { language } : {}),
+  };
 }
 
 function parseDefaultTabStop(root: XmlElement | null): number {

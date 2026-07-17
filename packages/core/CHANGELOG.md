@@ -1,5 +1,473 @@
 # @stll/folio-core
 
+## 0.11.0
+
+### Minor Changes
+
+- [#353](https://github.com/stella/folio/pull/353) [`10f395e`](https://github.com/stella/folio/commit/10f395e216668f4a6779aa652f0d0b783e838f31) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Share find contracts and matching logic across adapters and add a functional Vue find/replace binding.
+
+- [#355](https://github.com/stella/folio/pull/355) [`f2abf34`](https://github.com/stella/folio/commit/f2abf34f20e32d1094f4459ab633720e9712e439) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Share persistent header and footer editing across the React and Vue adapters.
+
+- [#354](https://github.com/stella/folio/pull/354) [`fa23331`](https://github.com/stella/folio/commit/fa233311ff79811818ce11bab7f9854097698c93) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Share collaboration module loading and remote-selection painting, and complete the Vue collaboration pipeline.
+
+- [#350](https://github.com/stella/folio/pull/350) [`860a894`](https://github.com/stella/folio/commit/860a894e4ffe94c1492a04db8aa7fc9736f097df) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add shared rendered-DOM geometry, functional Vue selection and decoration overlays, and document-independent table cell tracking.
+
+## 0.10.0
+
+### Minor Changes
+
+- [#343](https://github.com/stella/folio/pull/343) [`fd5717b`](https://github.com/stella/folio/commit/fd5717b3465d12dd114467106ae552e10df96699) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add auditable privacy transforms for version comparison output.
+
+- [#340](https://github.com/stella/folio/pull/340) [`5b99d1e`](https://github.com/stella/folio/commit/5b99d1ed01d0c10cecce2850dc611fb336e3f725) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add immutable reviewed-view projections for document stories.
+
+- [#341](https://github.com/stella/folio/pull/341) [`21b7e0e`](https://github.com/stella/folio/commit/21b7e0e4ba6be4303cd351195e44e0ed305de105) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Compare document stories with source-specific block handles.
+
+- [#342](https://github.com/stella/folio/pull/342) [`8f8b569`](https://github.com/stella/folio/commit/8f8b569f29a2c5f78001e12c3536d8aa7b4227a5) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add selectable text, formatting, and metadata comparison scopes.
+
+- [#338](https://github.com/stella/folio/pull/338) [`b324ce3`](https://github.com/stella/folio/commit/b324ce3154899d2e311529612d7855840b64afcc) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add story-scoped document operations for footnotes and endnotes.
+
+- [#347](https://github.com/stella/folio/pull/347) [`d2e0c4a`](https://github.com/stella/folio/commit/d2e0c4a774381f5daae028839de9f639b8de2ad6) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add auditable package-metadata privacy rewriting that persists through later saves.
+
+- [#349](https://github.com/stella/folio/pull/349) [`692528b`](https://github.com/stella/folio/commit/692528b42a3da66e425497cb4075f3cd82609524) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add package-metadata privacy options and reports to redline generation.
+
+- [#346](https://github.com/stella/folio/pull/346) [`b2f3885`](https://github.com/stella/folio/commit/b2f3885619c85a29f54a74be13a7d89a6dbee46c) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Generate tracked changes across matched document stories with selectable resolved input views.
+
+### Patch Changes
+
+- [#333](https://github.com/stella/folio/pull/333) [`b77268b`](https://github.com/stella/folio/commit/b77268bb4cb4d57f2c892138ddeba97d8f16b028) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Honor table-cell positioning scope for anchored images.
+
+- [#336](https://github.com/stella/folio/pull/336) [`4a4b10f`](https://github.com/stella/folio/commit/4a4b10ff5b12cdeec66374f32daed84794bf5b9c) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Tighten justified paragraph fitting using common-layout reference endpoints.
+
+- [#344](https://github.com/stella/folio/pull/344) [`d6df33d`](https://github.com/stella/folio/commit/d6df33d7b8fb536cdc4c8125dfbdd39fbd06ef49) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Default omitted paragraph hanging-punctuation settings to enabled during line layout.
+
+- [#339](https://github.com/stella/folio/pull/339) [`2337ae1`](https://github.com/stella/folio/commit/2337ae1b0548982775a93600260adb2f0aaa3ecc) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Honor the document hyphenation zone when choosing automatic line breaks.
+
+## 0.9.0
+
+### Minor Changes
+
+- [#304](https://github.com/stella/folio/pull/304) [`d3c2816`](https://github.com/stella/folio/commit/d3c2816d2bd48d04fea6abe4924d3c93d7d0104c) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Remove the static DOCX capability catalog while retaining document-specific diagnostics.
+
+- [#303](https://github.com/stella/folio/pull/303) [`689dbf5`](https://github.com/stella/folio/commit/689dbf553a028864fef280b5773eeff0fbe40d26) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve and render both OOXML table-cell diagonal border directions.
+
+- [#331](https://github.com/stella/folio/pull/331) [`59a581a`](https://github.com/stella/folio/commit/59a581a7f530e9d1cdc9d35702ad54f1cb5bb2a6) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add story-scoped document operations for headers and footers.
+
+- [#309](https://github.com/stella/folio/pull/309) [`1ec610f`](https://github.com/stella/folio/commit/1ec610f362aab68fc55807edef88974304c22bf4) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add locale-aware DOCX automatic hyphenation and tighter Word hanging-punctuation layout.
+
+- [#306](https://github.com/stella/folio/pull/306) [`9972201`](https://github.com/stella/folio/commit/99722013cdbf2320a0ca90e673a2716d12c91030) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add portable document style sets, the Stella Style drafting preset, sanitized DOCX style extraction, and complete fresh-document style serialization.
+
+- [#287](https://github.com/stella/folio/pull/287) [`fbc7fce`](https://github.com/stella/folio/commit/fbc7fce4c977eabace64a2756c51e42e788c5370) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add replaceable Unicode line breaking with DOCX language, kinsoku, custom line-edge, and compatibility-rule support.
+
+### Patch Changes
+
+- [#301](https://github.com/stella/folio/pull/301) [`2b6f212`](https://github.com/stella/folio/commit/2b6f212ac4aa776c6ef61b51596c4e37e3154dd0) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Render bottom-to-top table cell text in paged layout.
+
+- [#314](https://github.com/stella/folio/pull/314) [`8bd16d0`](https://github.com/stella/folio/commit/8bd16d09599a2bf99f070c5a0ed686db97709d04) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Position vertical OOXML image crops relative to the bitmap height.
+
+- [#283](https://github.com/stella/folio/pull/283) [`79b74e3`](https://github.com/stella/folio/commit/79b74e3a37743cdc1f05af8be11b3c0c2bc3e03e) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Base justified list marker wrapping on measured compressible-space width.
+
+- [#274](https://github.com/stella/folio/pull/274) [`fc01a2d`](https://github.com/stella/folio/commit/fc01a2d1857a9d67378e2441560998c413278397) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Render relationship-backed previews for legacy embedded objects with their authored line height.
+
+- [#312](https://github.com/stella/folio/pull/312) [`9f0ddce`](https://github.com/stella/folio/commit/9f0ddce46fb7541af2640dc42932fc789cdf726e) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve authored table-cell paragraphs and keep paragraph-mark fonts off existing body text.
+
+- [#186](https://github.com/stella/folio/pull/186) [`354ad51`](https://github.com/stella/folio/commit/354ad5151b10bece2a0ef9086b95f1d300605a30) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Accept DOCX comments with missing or empty author metadata.
+
+- [#315](https://github.com/stella/folio/pull/315) [`e476fda`](https://github.com/stella/folio/commit/e476fda883fbcda84b243bb144113d2bc47ef0ff) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Hyphenate words across adjacent inline formatting runs to match Word line endpoints.
+
+- [#299](https://github.com/stella/folio/pull/299) [`c9687eb`](https://github.com/stella/folio/commit/c9687ebd0972a894ea7c96fac7331fd8702315a8) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve inherited language metadata and Czech one-letter preposition wrapping.
+
+- [#275](https://github.com/stella/folio/pull/275) [`cd5d12c`](https://github.com/stella/folio/commit/cd5d12c766ea7c55e745a3f92345e7a9ffc54b22) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Correct Garamond single-line metrics for stable OOXML pagination.
+
+- [#320](https://github.com/stella/folio/pull/320) [`f7a409b`](https://github.com/stella/folio/commit/f7a409b63c12cbbf91b562621d632a79be559f3c) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve authored header and footer colors at full opacity.
+
+- [#294](https://github.com/stella/folio/pull/294) [`76c74e6`](https://github.com/stella/folio/commit/76c74e670d8b7222aee79ff6de1ff6e6832310db) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Resolve explicit first-line paragraph indents ahead of inherited hanging indents.
+
+- [#308](https://github.com/stella/folio/pull/308) [`f56c68c`](https://github.com/stella/folio/commit/f56c68c2b9a1f7c03186617da6da869e80c4e187) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve explicit bold formatting on automatic list markers through parsing, layout, and painting.
+
+- [#182](https://github.com/stella/folio/pull/182) [`d53ceb4`](https://github.com/stella/folio/commit/d53ceb49b8923780335f5cfdb61f9301f6c56c32) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Prevent stale asynchronous overlay projections through a shared framework-neutral request gate.
+
+- [#311](https://github.com/stella/folio/pull/311) [`482e5e7`](https://github.com/stella/folio/commit/482e5e787f226a552bbe272d0816561ba9389877) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Honor break-only paragraph placement and exact image-only line footprints during pagination.
+
+- [#330](https://github.com/stella/folio/pull/330) [`c3077db`](https://github.com/stella/folio/commit/c3077db29aaf7d08c4fc806df8078a4baed228c2) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve cached page-boundary reconciliation across empty carrier paragraphs.
+
+- [#291](https://github.com/stella/folio/pull/291) [`4fb6ebd`](https://github.com/stella/folio/commit/4fb6ebdaef16fb2dd65ad32f0709069770caa15d) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Split break-permitted table rows across flow regions at safe line boundaries.
+
+- [#322](https://github.com/stella/folio/pull/322) [`7bcea45`](https://github.com/stella/folio/commit/7bcea45a7ecd00881696ba8b69d9519cc068c36a) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Resolve inherited and hanging-indent tab stops by their authored positions.
+
+- [#300](https://github.com/stella/folio/pull/300) [`a448210`](https://github.com/stella/folio/commit/a4482101cd301d7f74202f06ed9bdc473ae0fcd9) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Keep zero-size styled table borders visible without inflating row layout.
+
+- [#288](https://github.com/stella/folio/pull/288) [`34a89e2`](https://github.com/stella/folio/commit/34a89e2ac88dd0467faf064ac8f7b16970e2036d) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve authored pair kerning in worker measurement requests.
+
+- [#302](https://github.com/stella/folio/pull/302) [`314b946`](https://github.com/stella/folio/commit/314b9460c021ba9fb9073e3cab78718648eb927f) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Complete every bundled editor locale with translated UI messages.
+
+- [#186](https://github.com/stella/folio/pull/186) [`354ad51`](https://github.com/stella/folio/commit/354ad5151b10bece2a0ef9086b95f1d300605a30) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Generate tracked additions when comparing against an empty document.
+
+- [#297](https://github.com/stella/folio/pull/297) [`e11cb5b`](https://github.com/stella/folio/commit/e11cb5bd0f69d8242cab6181fd3796721eb2544b) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Keep shallow full-hanging justified list continuations within their measured line width.
+
+- [#295](https://github.com/stella/folio/pull/295) [`9ebad67`](https://github.com/stella/folio/commit/9ebad6730ad650fcc58fbe4f06cb70a72cc0f9bc) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Honor the default next-page behavior for omitted section start types.
+
+- [#284](https://github.com/stella/folio/pull/284) [`2c3992f`](https://github.com/stella/folio/commit/2c3992fbfe1a90223a01eab0d39564b78b743ed5) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Respect authored pair-kerning thresholds in layout measurement and rendering.
+
+- [#335](https://github.com/stella/folio/pull/335) [`e69d8b3`](https://github.com/stella/folio/commit/e69d8b3bebdda98b2bdb526869d5cb431e34331a) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Consume redundant empty-paragraph spacing when split table rows continue in a fresh flow region.
+
+- [#319](https://github.com/stella/folio/pull/319) [`5b2a962`](https://github.com/stella/folio/commit/5b2a962b4fe1764f0ab41aaa4233cd355fb7fdf3) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve authored paragraph spacing after section boundaries with cached pagination hints.
+
+- [#186](https://github.com/stella/folio/pull/186) [`354ad51`](https://github.com/stella/folio/commit/354ad5151b10bece2a0ef9086b95f1d300605a30) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve the order of consecutive trailing blocks in generated redlines.
+
+- [#334](https://github.com/stella/folio/pull/334) [`9aeef8e`](https://github.com/stella/folio/commit/9aeef8e1650f0935830299d4f624fba34de6695a) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve authored subpixel border weight and paragraph rule extents.
+
+- [#292](https://github.com/stella/folio/pull/292) [`43bc9c6`](https://github.com/stella/folio/commit/43bc9c6ea4b69ffe26faba85495e515b92b2aea7) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Prevent paragraph-mark emphasis from leaking through character-style references.
+
+- [#329](https://github.com/stella/folio/pull/329) [`9ea3bc3`](https://github.com/stella/folio/commit/9ea3bc353f4c98701b0a150958244b939a02147d) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Match DOCX custom kinsoku replacement lists and adjacent hanging punctuation breaks.
+
+- [#332](https://github.com/stella/folio/pull/332) [`645a61e`](https://github.com/stella/folio/commit/645a61eba27b653e76d7db851a08e263a870ee33) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Render theme-based table cell backgrounds while preserving their source theme metadata.
+
+- [#276](https://github.com/stella/folio/pull/276) [`f5e9744`](https://github.com/stella/folio/commit/f5e97444c4e38c40ff19488dc0e828fc663925cf) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Render grouped shape outline colours supplied by OOXML style references.
+
+- [#310](https://github.com/stella/folio/pull/310) [`eb8f5f5`](https://github.com/stella/folio/commit/eb8f5f5bc84703fb89d73b46a3ffaf65581ca500) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Clip ordinary table-cell content to the visible row slice across page continuations.
+
+- [#328](https://github.com/stella/folio/pull/328) [`166db7f`](https://github.com/stella/folio/commit/166db7fe854ddaac94c7739c7c64caa601313027) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve tracked insertions and deletions inside inline DOCX content controls.
+
+- [#289](https://github.com/stella/folio/pull/289) [`f91757f`](https://github.com/stella/folio/commit/f91757f5c494b15a7f7dc734adaaf6612b69397a) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve cached page boundaries on keep-with-next paragraphs.
+
+- [#324](https://github.com/stella/folio/pull/324) [`3ec2032`](https://github.com/stella/folio/commit/3ec20321c252f664046fdeffc6da5f6509d76b32) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Align table cell measurement, painting, and row splitting around one paragraph-spacing flow.
+
+- [#321](https://github.com/stella/folio/pull/321) [`59a01c7`](https://github.com/stella/folio/commit/59a01c722a2671593fb99f08da53536c89aa37b4) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve page-relative positioning and crop geometry for floating images inside tables.
+
+- [#325](https://github.com/stella/folio/pull/325) [`d8456db`](https://github.com/stella/folio/commit/d8456db16a5b62f4d3effc97a69b082782bc3d03) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Base justified line fitting on measured compressible spaces and preserve Czech one-letter prepositions across formatted runs.
+
+- [#326](https://github.com/stella/folio/pull/326) [`a1bf5ae`](https://github.com/stella/folio/commit/a1bf5ae038e14650ebe944cb4ce21c97d81c0170) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Suppress inherited leading spacing when a cached page boundary follows a section break.
+
+- [#186](https://github.com/stella/folio/pull/186) [`354ad51`](https://github.com/stella/folio/commit/354ad5151b10bece2a0ef9086b95f1d300605a30) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve footnote and endnote references inside tracked insertions and deletions.
+
+- Updated dependencies [[`689dbf5`](https://github.com/stella/folio/commit/689dbf553a028864fef280b5773eeff0fbe40d26), [`f56c68c`](https://github.com/stella/folio/commit/f56c68c2b9a1f7c03186617da6da869e80c4e187), [`482e5e7`](https://github.com/stella/folio/commit/482e5e787f226a552bbe272d0816561ba9389877), [`1ec610f`](https://github.com/stella/folio/commit/1ec610f362aab68fc55807edef88974304c22bf4), [`166db7f`](https://github.com/stella/folio/commit/166db7fe854ddaac94c7739c7c64caa601313027), [`fbc7fce`](https://github.com/stella/folio/commit/fbc7fce4c977eabace64a2756c51e42e788c5370)]:
+  - @stll/docx-core@0.3.0
+
+## 0.8.0
+
+### Minor Changes
+
+- [#277](https://github.com/stella/folio/pull/277) [`70573c1`](https://github.com/stella/folio/commit/70573c1c1d444fc2199308419bbb53fe13bbd415) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Expand the DOCX capability catalog with core document and review features.
+
+- [#278](https://github.com/stella/folio/pull/278) [`ce5e1df`](https://github.com/stella/folio/commit/ce5e1df63388684151841f68c9599b421fcff4da) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Expand the DOCX capability catalog with document structure features.
+
+- [#272](https://github.com/stella/folio/pull/272) [`af10f08`](https://github.com/stella/folio/commit/af10f0840565680b087fd2955ba2ab7c512e628f) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add DOCX conformance detection to parsed and created packages.
+
+- [#163](https://github.com/stella/folio/pull/163) [`3898fb3`](https://github.com/stella/folio/commit/3898fb3b7e060464272bc6311b5cb8890fcd4141) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add `ensureParaIds` to the server entry: a headless, in-place `w14:paraId` backfill for `.docx` buffers (document body, headers, footers, footnotes, endnotes; table-cell and text-box paragraphs included). Deterministic, idempotent, and namespace-aware, so hosts can normalize documents once at ingest and block anchors never fall back to positional `seq-` ids.
+
+- [#233](https://github.com/stella/folio/pull/233) [`8c1bff7`](https://github.com/stella/folio/commit/8c1bff7af7e8a80142b6a97988245b2bafc3718a) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add stable document outlines, bounded section reads, scoped search, live React document navigation, and parity-safe Vue navigation stubs.
+
+- [#267](https://github.com/stella/folio/pull/267) [`93d0c2e`](https://github.com/stella/folio/commit/93d0c2ef49a038f824969870cf7946b4c6e8c6cc) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add profile-aware DOCX compatibility diagnostics.
+
+- [#279](https://github.com/stella/folio/pull/279) [`e86b7e1`](https://github.com/stella/folio/commit/e86b7e14cd972d76d6b18cc3e4145c15721f49a1) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Expand the DOCX capability catalog with embedded and semantic content.
+
+### Patch Changes
+
+- [#257](https://github.com/stella/folio/pull/257) [`209b7dd`](https://github.com/stella/folio/commit/209b7dd924bd641c9992629123282f9046fe58ff) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve inherited spacing on authored blank paragraphs in page furniture.
+
+- [#251](https://github.com/stella/folio/pull/251) [`baa3bde`](https://github.com/stella/folio/commit/baa3bdefc59650dc80893cd8d2ebc0063317a60e) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve inherited spacing on blank paragraphs with directly formatted paragraph marks.
+
+- [#273](https://github.com/stella/folio/pull/273) [`cf05728`](https://github.com/stella/folio/commit/cf05728643717de020f11b581ff87a7541a71e6d) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve interior table border segments when adjacent cells leave shared edges unclaimed.
+
+- [#237](https://github.com/stella/folio/pull/237) [`f82a489`](https://github.com/stella/folio/commit/f82a489b0af3f18cdcd226b2e7b10074c5ce80b1) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve shape-to-text fitting for imported OOXML text boxes.
+
+- [#256](https://github.com/stella/folio/pull/256) [`da0ebd5`](https://github.com/stella/folio/commit/da0ebd5bf5342cfe5ba56397c3d0b31670394e5d) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Measure blank hard-break lines using paragraph mark typography.
+
+- [#245](https://github.com/stella/folio/pull/245) [`417f33d`](https://github.com/stella/folio/commit/417f33d457986be0302addfcb95472aae6a5f0e7) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Drop inherited list positioning when direct formatting disables numbering.
+
+- [#266](https://github.com/stella/folio/pull/266) [`f25eab8`](https://github.com/stella/folio/commit/f25eab8586322afa2ea6f5e2c857ce2df6a6b450) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Place wide in-flow tables below active floating exclusions when they cannot fit beside them.
+
+- [#242](https://github.com/stella/folio/pull/242) [`58c1073`](https://github.com/stella/folio/commit/58c10730458e021fceab21640aa2ddc2627b1f87) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve positioned paragraph frames during layout and pagination.
+
+- [#244](https://github.com/stella/folio/pull/244) [`ef9b7a6`](https://github.com/stella/folio/commit/ef9b7a6797ab288bf446265e71c87abf759e08fc) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve OOXML paragraph-frame spacing, keep drop caps in normal flow, and retain side wrapping for single frames.
+
+- [#271](https://github.com/stella/folio/pull/271) [`06adc8d`](https://github.com/stella/folio/commit/06adc8dff272e2272a87c28886f456b8c74e1bd0) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve omitted table grid columns and use them when measuring row cells.
+
+- [#248](https://github.com/stella/folio/pull/248) [`5db781a`](https://github.com/stella/folio/commit/5db781a85c7e2fae2aef3b96be6a76fa883411a7) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Render bounded solid VML artwork as safe SVG previews.
+
+- [#265](https://github.com/stella/folio/pull/265) [`70ccf0e`](https://github.com/stella/folio/commit/70ccf0ec4e69dd0735a9e9e39427c816c37f475e) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Move page-fitting table rows intact to the next flow region.
+
+- [#263](https://github.com/stella/folio/pull/263) [`9cac2df`](https://github.com/stella/folio/commit/9cac2dfbd976594bd0ecdad3fa1c4e13be8eafb7) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Keep paragraph-mark vertical alignment from changing visible text runs.
+
+- [#246](https://github.com/stella/folio/pull/246) [`76b2a73`](https://github.com/stella/folio/commit/76b2a736f90b31bf476bb00dca5ad7bcf57abc56) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Honor blank even-page header and footer slots when separate odd/even page furniture is enabled.
+
+- [#149](https://github.com/stella/folio/pull/149) [`20bf228`](https://github.com/stella/folio/commit/20bf2281523fc69bccc5c4673701178e80e43775) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Move the initial-layout font-readiness logic (`collectInitialLayoutFontFaces`, `collectInitialLayoutFontFamilies`, `documentFontsAreLoaded`, `getDocumentFontSet`, `waitForInitialLayoutFonts`) out of React's `PagedEditor.tsx` into a framework-neutral `@stll/folio-core/controller/fontReadiness` module. First slice of extracting orchestration from the React God component into the core controller; behavior is unchanged (the existing font-collection test moves to core alongside the code). No public API change.
+
+- [#268](https://github.com/stella/folio/pull/268) [`ef6e0e7`](https://github.com/stella/folio/commit/ef6e0e793fd723b12e43a3c50c561fa3055a1385) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Constrain justified prose shrink allowance for more faithful line wrapping.
+
+- [#235](https://github.com/stella/folio/pull/235) [`3305967`](https://github.com/stella/folio/commit/3305967b2b60cb2366388747f28612df799882b9) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Keep body content above the in-flow extent of page footers.
+
+- [#282](https://github.com/stella/folio/pull/282) [`48c8978`](https://github.com/stella/folio/commit/48c8978d7594aa89d91575307f983cd51deff068) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Treat stale cached pagination markers as advisory after document reflow.
+
+- [#241](https://github.com/stella/folio/pull/241) [`becca9c`](https://github.com/stella/folio/commit/becca9c26cb4f032c18731e2c5b412461c5dd85c) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve numbering-level marker alignment through parsing and layout.
+
+- [#250](https://github.com/stella/folio/pull/250) [`820b90e`](https://github.com/stella/folio/commit/820b90ee7c9394719040ebbe8742e9dcb44d08cc) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Use each section's content width when measuring positioned text-box exclusion.
+
+- [#261](https://github.com/stella/folio/pull/261) [`e6781d3`](https://github.com/stella/folio/commit/e6781d35334ab739b5a2b4d87409b99619e24f1e) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Continue adjacent compatible list instances after an explicit numbering restart.
+
+- [#193](https://github.com/stella/folio/pull/193) [`20c8dac`](https://github.com/stella/folio/commit/20c8dac1eca50d8f0e70882c4c258de25a4ebf65) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Harden the paraId lifecycle: duplicate resolution in the allocator now maps the original paragraph's position through the transaction (pasting a copy above its source no longer steals the source's id), allocation transactions are excluded from paragraph change tracking, and the hex id generators can no longer mint the reserved `00000000` value.
+
+- [#259](https://github.com/stella/folio/pull/259) [`d2dcfd3`](https://github.com/stella/folio/commit/d2dcfd37df5f46a48f814719a41feb050fb4ad7a) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve fractional section geometry and tighten justified inset-list wrapping.
+
+- [#252](https://github.com/stella/folio/pull/252) [`e4c8718`](https://github.com/stella/folio/commit/e4c871889604546377fd14b15e2c181868171913) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Position top-and-bottom image artwork using its authored page anchors.
+
+- [#260](https://github.com/stella/folio/pull/260) [`27d4664`](https://github.com/stella/folio/commit/27d4664ded29f74ee2fa3d7444d90f9d69d3b2b5) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Keep paintless header and footer stories out of body margin clearance.
+
+- [#243](https://github.com/stella/folio/pull/243) [`a75286d`](https://github.com/stella/folio/commit/a75286ddb8485bece3167b853fc0e6af88f14a06) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Keep style-bridged numbering streams in sequence.
+
+- [#264](https://github.com/stella/folio/pull/264) [`b8373b8`](https://github.com/stella/folio/commit/b8373b85cb1c321f7d3b698902567d81134b44b5) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Render positioned legacy text boxes and keep inherited section header and footer references active across framework adapters.
+
+- [#239](https://github.com/stella/folio/pull/239) [`c57e8a1`](https://github.com/stella/folio/commit/c57e8a1d007ab3f646e3caf96df12325cb3d3ace) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Use the final section start mode when scheduling terminal OOXML section boundaries.
+
+- [#270](https://github.com/stella/folio/pull/270) [`3971bad`](https://github.com/stella/folio/commit/3971bad5e98f35516233b8ef3382f252132f9444) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Keep cached pagination markers within naturally reflowed tabbed paragraph sequences.
+
+- [#234](https://github.com/stella/folio/pull/234) [`175a090`](https://github.com/stella/folio/commit/175a0903b5a5a69e3d02d61060ca54f3c9751ffa) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Apply measured header and footer clearance to section-specific body margins.
+
+- [#240](https://github.com/stella/folio/pull/240) [`c03e665`](https://github.com/stella/folio/commit/c03e665edd1ac441f57f66b0cc8ae243ad3e6e48) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Keep non-rendering numbering levels from painting synthesized decimal markers.
+
+- [#231](https://github.com/stella/folio/pull/231) [`4d271b0`](https://github.com/stella/folio/commit/4d271b0adf996b1e5f0bb07028e62b1e3f5a9e6e) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve authored first-line list positions when deriving layout indentation.
+
+- [#247](https://github.com/stella/folio/pull/247) [`1a979cb`](https://github.com/stella/folio/commit/1a979cb80999ac52725d42e008b8d38887d58973) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve paragraph-style boolean formatting when paragraph-mark properties differ.
+
+- [#269](https://github.com/stella/folio/pull/269) [`91af5d7`](https://github.com/stella/folio/commit/91af5d72af7c739f52d3fa0cf8f80bd8cbcbd12d) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Keep vertical cell insets outside minimum table-row content heights.
+
+- [#253](https://github.com/stella/folio/pull/253) [`7895f41`](https://github.com/stella/folio/commit/7895f411079974576d84ffebc850b727089d269a) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Prevent repeated terminal empty markers from creating a body-empty page.
+
+- [#238](https://github.com/stella/folio/pull/238) [`5ec1b97`](https://github.com/stella/folio/commit/5ec1b978b0ca23f5d451d3b07b97d12886852f5c) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve authored paragraph spacing inside text boxes.
+
+- Updated dependencies [[`f82a489`](https://github.com/stella/folio/commit/f82a489b0af3f18cdcd226b2e7b10074c5ce80b1), [`ef9b7a6`](https://github.com/stella/folio/commit/ef9b7a6797ab288bf446265e71c87abf759e08fc), [`af10f08`](https://github.com/stella/folio/commit/af10f0840565680b087fd2955ba2ab7c512e628f), [`06adc8d`](https://github.com/stella/folio/commit/06adc8dff272e2272a87c28886f456b8c74e1bd0), [`becca9c`](https://github.com/stella/folio/commit/becca9c26cb4f032c18731e2c5b412461c5dd85c)]:
+  - @stll/docx-core@0.2.0
+
+## 0.7.0
+
+### Minor Changes
+
+- [#232](https://github.com/stella/folio/pull/232) [`d249b94`](https://github.com/stella/folio/commit/d249b94c0e0d5d9c3d26bef4abaad2747ad3a151) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add structured DOCX text extraction to the server API.
+
+### Patch Changes
+
+- [#211](https://github.com/stella/folio/pull/211) [`d34a999`](https://github.com/stella/folio/commit/d34a9999f20981d61cf9e8196f110e8b3fd27b55) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve inherited spacing on empty paragraphs with direct paragraph formatting.
+
+- [#228](https://github.com/stella/folio/pull/228) [`fb6ddd0`](https://github.com/stella/folio/commit/fb6ddd0588c6700bec8a04f173a8b64ad9cc9d07) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Suppress automatic paragraph gaps inside continuous numbered sequences.
+
+- [#202](https://github.com/stella/folio/pull/202) [`c10c424`](https://github.com/stella/folio/commit/c10c424f10d108363187da60d641e38800bd925f) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Balance short paragraph-only continuous multi-column sections across their columns.
+
+- [#222](https://github.com/stella/folio/pull/222) [`c375fd4`](https://github.com/stella/folio/commit/c375fd40477832a9cb52baebfa7237f744eaa5ff) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Match reference leading empty-outline height and avoid replaying cached page breaks after a natural paragraph continuation.
+
+- [#217](https://github.com/stella/folio/pull/217) [`3019259`](https://github.com/stella/folio/commit/30192590594b90c85c29ae655f5417a1f16fe2f5) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Keep trailing table separators with following page content.
+
+- [#221](https://github.com/stella/folio/pull/221) [`58879bd`](https://github.com/stella/folio/commit/58879bd0a162d99eb78fcf1aeed85d926b701e1c) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Coalesce cached page markers with pages opened by keep-next chains and paragraph continuations.
+
+- [#210](https://github.com/stella/folio/pull/210) [`a16bc87`](https://github.com/stella/folio/commit/a16bc87d9a06f861474ed8fada3391b6b15058c0) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Align explicitly indented table borders with reference DOCX layout.
+
+- [#215](https://github.com/stella/folio/pull/215) [`7d09ea8`](https://github.com/stella/folio/commit/7d09ea889078646c16153de2196de16bf8dca2f6) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve hanging-indent body tab positions during line wrapping.
+
+- [#205](https://github.com/stella/folio/pull/205) [`073f521`](https://github.com/stella/folio/commit/073f5216ce51871b6fc422cb220cf02524f93435) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve authored zero table indentation through style resolution and layout.
+
+- [#214](https://github.com/stella/folio/pull/214) [`2225367`](https://github.com/stella/folio/commit/22253678fa469806ba3a75c5c3df219f8d814ac7) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Collapse paintless trailing spaces when positioning aligned paragraph lines.
+
+- [#219](https://github.com/stella/folio/pull/219) [`ae636c8`](https://github.com/stella/folio/commit/ae636c8ea0fc87caed45fe680cf5ee79081c5216) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Collapse paintless ordinary spaces at soft-wrapped line starts.
+
+- [#227](https://github.com/stella/folio/pull/227) [`b6442f5`](https://github.com/stella/folio/commit/b6442f50658c11267144980b65ac2a0f662abea3) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Render grouped OOXML pictures within their authored coordinate system and extent.
+
+- [#229](https://github.com/stella/folio/pull/229) [`43ddcd4`](https://github.com/stella/folio/commit/43ddcd43a10b6ede1c66192bf0bb09538ee9bac3) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Keep body content below the in-flow extent of default headers.
+
+- [#224](https://github.com/stella/folio/pull/224) [`e346c20`](https://github.com/stella/folio/commit/e346c20bbac92b84399a2c8f6e17b9d09e146b78) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Exclude non-breaking spaces from the shrink capacity of justified prose.
+
+- [#213](https://github.com/stella/folio/pull/213) [`2de1c11`](https://github.com/stella/folio/commit/2de1c1157c448fccb522f3a02de5c4e2bcf226be) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Use normal justified prose wrapping when tab-stop metadata has no corresponding tab content.
+
+- [#226](https://github.com/stella/folio/pull/226) [`621e1c4`](https://github.com/stella/folio/commit/621e1c4aafd37ed7d83dbc60e415fada4a5917af) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Keep justified inset list continuations within their authored body width.
+
+- [#218](https://github.com/stella/folio/pull/218) [`20cbba3`](https://github.com/stella/folio/commit/20cbba3f8846378b4391cf565e7d17df869aff94) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve valid sub-pixel advances when positioning aligned tab content.
+
+- [#223](https://github.com/stella/folio/pull/223) [`15f021a`](https://github.com/stella/folio/commit/15f021a1f337c75ea7434d6cda461224f9cb4ec9) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Allow numeric floating-table offsets to extend into page margins.
+
+- [#203](https://github.com/stella/folio/pull/203) [`655b698`](https://github.com/stella/folio/commit/655b6983942a0afac930f84386a3824eaf5e068c) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Match prose justification tolerance on numbered-list continuation lines.
+
+- [#216](https://github.com/stella/folio/pull/216) [`5ed7452`](https://github.com/stella/folio/commit/5ed7452ffc1ead26da2ecb5403b364cb389ba9ba) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Prevent paintless terminal table anchors from creating blank pages.
+
+- [#208](https://github.com/stella/folio/pull/208) [`2e8fe27`](https://github.com/stella/folio/commit/2e8fe27d0ad031a0d5ebd81402171a9118aaae5c) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Honor leading authored column breaks and resume continuous-section content below the tallest column.
+
+- [#220](https://github.com/stella/folio/pull/220) [`43c9bc7`](https://github.com/stella/folio/commit/43c9bc7d251ecad3a1558e6682ca3bb57e90f224) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Avoid whitespace-only lines when preserved spaces overflow a soft wrap.
+
+- [#209](https://github.com/stella/folio/pull/209) [`4e479e2`](https://github.com/stella/folio/commit/4e479e2d0d7c6f9f48d25ae4a4d511143e6ce834) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Avoid painting an extra blank line for empty structural section-break paragraphs.
+
+- [#204](https://github.com/stella/folio/pull/204) [`1e8aff9`](https://github.com/stella/folio/commit/1e8aff947b9bca3c58ab997b25687e31d43bf6a3) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Render automatic paragraph spacing using the reference 14pt gap.
+
+## 0.6.1
+
+### Patch Changes
+
+- [#192](https://github.com/stella/folio/pull/192) [`ee6d2ef`](https://github.com/stella/folio/commit/ee6d2ef6f750664e662f2931c81f3f3e0e400312) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Keep justified zero-left hanging list lines within the authored right margin.
+
+- [#198](https://github.com/stella/folio/pull/198) [`8712941`](https://github.com/stella/folio/commit/87129417ad86a0f9f6579410b259f9f2b4775b46) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve and paint anchored text boxes and images inside table cells.
+
+- [#191](https://github.com/stella/folio/pull/191) [`5200874`](https://github.com/stella/folio/commit/5200874a57875acfbfbda11002a2e8bb8d79b943) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve standalone column breaks and authored unequal section columns during layout.
+
+- [#194](https://github.com/stella/folio/pull/194) [`caa171b`](https://github.com/stella/folio/commit/caa171b36ac892ef7690db69b741ea89bcf99777) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Honor vertical page and margin anchors for positioned header and footer text boxes.
+
+- [#195](https://github.com/stella/folio/pull/195) [`cd53605`](https://github.com/stella/folio/commit/cd5360527e34fadd3cb7fe58b7192258e5ace0e5) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Align the leading text edge of unindented tables with the document content margin.
+
+- [#199](https://github.com/stella/folio/pull/199) [`e7fbc8d`](https://github.com/stella/folio/commit/e7fbc8d46f7973abb46e5593e6db7466e214515b) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve autofit table grids that exceed their preferred width.
+
+- [#188](https://github.com/stella/folio/pull/188) [`3a2052e`](https://github.com/stella/folio/commit/3a2052e01e742f2a00a8dcfe1990abc85e679685) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Position zero-left hanging list markers in the page margin.
+
+- Updated dependencies [[`46c6730`](https://github.com/stella/folio/commit/46c6730ebf29daccdfac64c72fcf07702709e70f)]:
+  - @stll/docx-core@0.1.1
+
+## 0.6.0
+
+### Minor Changes
+
+- [#183](https://github.com/stella/folio/pull/183) [`e2e8b99`](https://github.com/stella/folio/commit/e2e8b99ea804c7446dda7fbed13a758032981a39) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add typed undo handles for committed document-operation batches.
+
+### Patch Changes
+
+- [#178](https://github.com/stella/folio/pull/178) [`c573ddf`](https://github.com/stella/folio/commit/c573ddface0e3826324171e3a11a6c2000e13b7a) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Every user-facing string in the React editor now goes through use-intl. ~173 hardcoded English JSX literals (concentrated in the dialogs: image position/properties, page setup, footnotes, watermark, tables, hyperlinks, header/footer editing) were wired to the locale catalogs — many onto existing keys the components weren't using, ~50 new keys added to en.json and synced to all locales. Visible English output is unchanged. A new `no-untranslated-jsx-literal` oxlint rule enforces this in CI so untranslatable copy cannot land again.
+
+- [#185](https://github.com/stella/folio/pull/185) [`f67fc55`](https://github.com/stella/folio/commit/f67fc555d1db65429555232ffabde4c55b20973c) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Measure vertically merged table cells against their combined row height.
+
+- [#180](https://github.com/stella/folio/pull/180) [`0ac0260`](https://github.com/stella/folio/commit/0ac02600744994e77238b9a0a92de09656f64e3c) Thanks [@jan-kubica](https://github.com/jan-kubica)! - i18n quality gate and terminology glossary. A new `i18n-lint` stage in `check:i18n` verifies every translated catalog string for placeholder parity with the English source, ICU MessageFormat validity, CLDR plural-category completeness per locale, dropped plurals/exact selectors, and glossary terminology (with a ratchet baseline for future debt; the current catalogs are clean). New `glossary.json` term base mimics Microsoft Word's localized terminology (LibreOffice divergences documented), covering 46 word-processing concepts across 16 locales with forbidden nonstandard variants; three existing translations were corrected to canonical Word terms (pt-BR "Recortar", tr "Açıklama").
+
+- [#184](https://github.com/stella/folio/pull/184) [`938fe2b`](https://github.com/stella/folio/commit/938fe2b4f4070a34fbaafe04fdeb609552860aa4) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Render and reserve footnotes referenced from table cells.
+
+## 0.5.0
+
+### Minor Changes
+
+- [#132](https://github.com/stella/folio/pull/132) [`6d136cf`](https://github.com/stella/folio/commit/6d136cf795b9f088e726e0524f936b3a5135db85) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add dry-run previews for document operation batches.
+
+- [#140](https://github.com/stella/folio/pull/140) [`b90687b`](https://github.com/stella/folio/commit/b90687b2bf6907de8cef2c7156d8691db7df45d8) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add range comments and constrained inline formatting operations.
+
+- [#166](https://github.com/stella/folio/pull/166) [`2234792`](https://github.com/stella/folio/commit/223479229acfa7f51185cf18408528a0e3df9790) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add typed affected-target receipts to document operation results.
+
+- [#107](https://github.com/stella/folio/pull/107) [`7cfef90`](https://github.com/stella/folio/commit/7cfef90a1e3bc4d7324d13025eeb72bfccf7f4ee) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Report supported mutation modes for each document operation type.
+
+- [#123](https://github.com/stella/folio/pull/123) [`2eb96d5`](https://github.com/stella/folio/commit/2eb96d5d8d0bf3c7cfa933201c6310184f673825) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add serialized block text preconditions to document operations.
+
+- [#152](https://github.com/stella/folio/pull/152) [`95aca77`](https://github.com/stella/folio/commit/95aca7790f864974de8857b23e25ffcf732ead89) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add structured diagnostics to document operation results.
+
+- [#143](https://github.com/stella/folio/pull/143) [`8f0701e`](https://github.com/stella/folio/commit/8f0701ed1f2b527ba21820f71a82c623b473d322) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Hoist the `getPageTextFromLayout` and AI-edit block-range helpers (`resolveFolioAIBlockRange`, `clampRangeToDocSize`) into framework-neutral core modules (`@stll/folio-core/paged-layout/pageText`, `@stll/folio-core/ai-edits/blockRange`). Both were previously duplicated verbatim in the React and Vue adapters; they now share one implementation (and one test suite) in core, so the two adapters can never drift on page-text extraction or block-range resolution.
+
+- [#136](https://github.com/stella/folio/pull/136) [`750a137`](https://github.com/stella/folio/commit/750a1378c644314b7e478b593b76d41a1dbdb4cf) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add stable text-range handles and exact range replacement operations.
+
+- [#106](https://github.com/stella/folio/pull/106) [`0f6f547`](https://github.com/stella/folio/commit/0f6f5472c858a1e67135ed9205b1600b62a61314) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Validate serialized document operation batches before execution.
+
+- [#100](https://github.com/stella/folio/pull/100) [`685ee93`](https://github.com/stella/folio/commit/685ee93fac2b5cb573c9569cd85b9c98fe3c9bca) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add versioned document operation batches and capability discovery.
+
+- [#138](https://github.com/stella/folio/pull/138) [`502f114`](https://github.com/stella/folio/commit/502f1140ba3fedb6b15544c85c1244ca50d0c28c) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Port the Insert Symbol dialog to the React adapter, reaching full parity with Vue. The symbol catalog and search now live in a shared framework-neutral `@stll/folio-core/symbols` module (six categories, `filterSymbols`); the Vue dialog is refactored onto it so both adapters share one source of truth instead of duplicating the catalog. React gains `InsertSymbolDialog` (exported from the package root), an "Insert Symbol" toolbar button (`onInsertSymbol`), and inserts the chosen character at the cursor.
+
+- [#174](https://github.com/stella/folio/pull/174) [`9af69ca`](https://github.com/stella/folio/commit/9af69ca2d63fab2f6795b388184f031b61a87545) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Version comparison upgrades and a redline generator. `compareDocxVersions` now detects relocated blocks (`movedFrom`/`movedTo` pairs sharing a `moveGroupId`) instead of reporting them as unrelated delete + insert, and reports text-equal blocks whose run formatting differs as `formatChanged` with the changed property names. New `generateRedlineDocx(base, revised)` produces a third `.docx` whose base → revised differences are recorded as real Word tracked changes (`w:ins`/`w:del`), reusing the comparer alignment and the headless tracked-changes apply path. `formatVersionDiffForLLM` renders the new change types.
+
+- [#109](https://github.com/stella/folio/pull/109) [`dc188a4`](https://github.com/stella/folio/commit/dc188a42f21db9cccdd92f292a979c71d8be358b) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Report unsupported document operation modes separately from unsupported blocks.
+
+- [#156](https://github.com/stella/folio/pull/156) [`4de7540`](https://github.com/stella/folio/commit/4de75406dea5e63b96cbf1620429b198ec6f9a33) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Expose document version comparison from folio-core while preserving the agents API.
+
+- [#141](https://github.com/stella/folio/pull/141) [`0ee5fba`](https://github.com/stella/folio/commit/0ee5fba1231d11f638b56c2b78c63c8479a1fed5) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add typed discovery and reads for document stories.
+
+- [#126](https://github.com/stella/folio/pull/126) [`fbaed88`](https://github.com/stella/folio/commit/fbaed88a605dd796795a221c61390448e8e77736) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Unify the reachable zoom range across adapters. A new `@stll/folio-core/utils/zoom` module exports the canonical `ZOOM_MIN` (0.25), `ZOOM_MAX` (4), and `ZOOM_STEP` (0.1); React and Vue now source their clamp from it. The Vue adapter previously clamped zoom to 0.5-2x and now matches React at 0.25-4x. Each adapter's curated toolbar zoom-level dropdown (50-200%) is unchanged and remains an intentional subset of the reachable range.
+
+- [#130](https://github.com/stella/folio/pull/130) [`317fa96`](https://github.com/stella/folio/commit/317fa96ab0b3254b9780ca621935b6c38787a204) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add optional atomic document operation batches.
+
+### Patch Changes
+
+- [#139](https://github.com/stella/folio/pull/139) [`33d2d04`](https://github.com/stella/folio/commit/33d2d04797f26c5391753feaddd942a84db53f96) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Honor authored document default tab intervals in paragraph layout and painting.
+
+- [#160](https://github.com/stella/folio/pull/160) [`30b086e`](https://github.com/stella/folio/commit/30b086eb4e9779767fc94828633a0a15de8de0e4) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Fix justified spacing on hanging first lines that contain tabs.
+
+- [#134](https://github.com/stella/folio/pull/134) [`50990a0`](https://github.com/stella/folio/commit/50990a0da74086f8c283bc99a68cc7db2bfaed82) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Keep authored body margins independent from header/footer paint bounds and carry keep-with-next chains across empty separators.
+
+- [#139](https://github.com/stella/folio/pull/139) [`33d2d04`](https://github.com/stella/folio/commit/33d2d04797f26c5391753feaddd942a84db53f96) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve standard list continuation wrapping while matching custom hanging indents.
+
+- [#151](https://github.com/stella/folio/pull/151) [`33538c6`](https://github.com/stella/folio/commit/33538c633d1bd206996260de8f618ed40629f2c5) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Reduce DOCX parsing time by skipping unused XML callback paths.
+
+- [#117](https://github.com/stella/folio/pull/117) [`7bd5dd8`](https://github.com/stella/folio/commit/7bd5dd8a623d5dfae28c5b43e507c4ab4c005507) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Honor authored numbering starts when a document begins at a nested list level.
+
+- [#175](https://github.com/stella/folio/pull/175) [`d4a40b2`](https://github.com/stella/folio/commit/d4a40b2e28ed37390dc0a8ffbc759ba1d068eb4f) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Property-change tracked revisions now resolve fully. Rejecting a `w:pPrChange` restores the stored old paragraph properties wholesale within CT_PPrBase scope (properties the change added are cleared, out-of-scope attrs like the inline `sectPr` still preserved). `w:sectPrChange` and table property changes (`w:tblPrChange`/`w:trPrChange`/`w:tcPrChange`) — previously display-only — now accept and reject: accept keeps live values and clears the record, reject restores the stored previous properties (section rejects keep live header/footer references, which CT_SectPrBase cannot carry). Table property-change records also survive the ProseMirror round-trip instead of being dropped on save, and `acceptAll()`/`rejectAll()` counts include section and table property changes.
+
+- [#158](https://github.com/stella/folio/pull/158) [`bf8e841`](https://github.com/stella/folio/commit/bf8e8411e6e812f7dba5ccb998960e869607507e) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Fix paragraph-style font-size inheritance for directly formatted DOCX runs.
+
+- [#167](https://github.com/stella/folio/pull/167) [`63eee6c`](https://github.com/stella/folio/commit/63eee6ca8b0188283255c8a6cb69551016b2d5dc) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve anchored text boxes hosted by otherwise empty paragraphs.
+
+- [#161](https://github.com/stella/folio/pull/161) [`823b172`](https://github.com/stella/folio/commit/823b172cfa3fcb3b7339fcf60b6705db7b3662cb) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Ignore collapsible break spaces when deciding whether visible text fits on a line.
+
+- [#146](https://github.com/stella/folio/pull/146) [`58e66c3`](https://github.com/stella/folio/commit/58e66c3ec5e56b7809c8694249c6c69509e9830a) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Improve list continuation, tab-stop precision, and justified hanging-list layout.
+
+- [#120](https://github.com/stella/folio/pull/120) [`c864d1c`](https://github.com/stella/folio/commit/c864d1c0071cb5c7fec1fd59b68aba22def02083) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Keep hard page breaks distinct from cached Word pagination hints.
+
+- [#157](https://github.com/stella/folio/pull/157) [`7fcb7d7`](https://github.com/stella/folio/commit/7fcb7d7242edbf61dac44aefcad3aa6990a13b71) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Coalesce empty rendered page-break markers after natural paragraph overflow.
+
+- [#124](https://github.com/stella/folio/pull/124) [`411f5e4`](https://github.com/stella/folio/commit/411f5e433c69cb04bc3c2ea4b8d141faa791d80b) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Reduce typing latency by coalescing incremental layout on the next animation frame.
+
+- [#126](https://github.com/stella/folio/pull/126) [`fbaed88`](https://github.com/stella/folio/commit/fbaed88a605dd796795a221c61390448e8e77736) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Narrow clipboard copy/read failures with an `instanceof Error` check instead of an unchecked `as Error` cast, so `onError` callbacks always receive a real `Error` even when a non-Error value is thrown.
+
+- [#98](https://github.com/stella/folio/pull/98) [`7bdd026`](https://github.com/stella/folio/commit/7bdd026483d29adcc1b57d5916d4e850c2e270d5) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Suppress empty hidden list paragraphs and their markers during layout.
+
+- [#95](https://github.com/stella/folio/pull/95) [`50b61d1`](https://github.com/stella/folio/commit/50b61d195834f00c1f07c27b3867a78803e02a91) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Improve Word parity for tabbed legal paragraphs and splittable keep-next chains.
+
+- [#97](https://github.com/stella/folio/pull/97) [`f0d1cba`](https://github.com/stella/folio/commit/f0d1cba5ca7a1830aae7703e226e731fae76524b) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Prevent paragraph-mark character spacing from compressing directly formatted text runs.
+
+- [#127](https://github.com/stella/folio/pull/127) [`f7de365`](https://github.com/stella/folio/commit/f7de36526d276f4c2d5e684da3a468990c075ac4) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Keep default tab stops anchored to the document text-area grid after paragraph indents.
+
+- [#164](https://github.com/stella/folio/pull/164) [`f6d6a7c`](https://github.com/stella/folio/commit/f6d6a7caab18a10b354e60dcae845d77f3a7d8a0) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Honor mirrored left and right margins on facing document pages.
+
+- [#114](https://github.com/stella/folio/pull/114) [`3958226`](https://github.com/stella/folio/commit/3958226cf7047b9b16d506f4e18548ecf23950e3) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Avoid blank pages when Word's cached page-break hint matches natural paragraph overflow.
+
+- [#142](https://github.com/stella/folio/pull/142) [`1a278bf`](https://github.com/stella/folio/commit/1a278bfe33aeab6f9c4b92923223712d82617547) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve final-section page geometry and clear overflowing first-page headers.
+
+- [#101](https://github.com/stella/folio/pull/101) [`1742abe`](https://github.com/stella/folio/commit/1742abeb2f00f3215767bc3898110463844e279a) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Honor Word rendered-page-break hints during pagination without duplicating structural breaks.
+
+- [#135](https://github.com/stella/folio/pull/135) [`8d9808c`](https://github.com/stella/folio/commit/8d9808c9fd621011b4f73a3bf9ac6e7ee3391a80) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Match Word contextual paragraph spacing and cached rendered page-break placement.
+
+- [#165](https://github.com/stella/folio/pull/165) [`6997eee`](https://github.com/stella/folio/commit/6997eee34255bfa28ef3048e7c8bcb443c0ac091) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Apply left-aligned table indents to the first cell text edge.
+
+- [#172](https://github.com/stella/folio/pull/172) [`f1cf28b`](https://github.com/stella/folio/commit/f1cf28bccb5fd5742e45ccdcd651b500c1234950) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Fix list marker position for paragraphs with a negative left indent and a hanging indent (`w:ind w:left="-180" w:hanging="360"`). The marker was painted at the left indent instead of `left - hanging`, shifting it one hanging-indent (e.g. 18pt) too far right and mis-indenting continuation lines. The negative left indent is now realized by the line's own `margin-left`, and the marker's remaining negative offset rides on its `margin-left`; positive and zero left-indent lists are unchanged.
+
+- [#103](https://github.com/stella/folio/pull/103) [`3130e5f`](https://github.com/stella/folio/commit/3130e5f616254e6bb127e4c410871c05f6bb386f) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add optional DOCX parsing and layout-start performance instrumentation.
+
+- [#173](https://github.com/stella/folio/pull/173) [`2f1a8cb`](https://github.com/stella/folio/commit/2f1a8cbf922b6ddf4fd93f105bbdc95d3ac0faa4) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Wrap `w:noWrap` table cells whose content overflows a pinned column. When the
+  table layout is fixed or an explicit `w:tblW` (`dxa`/`pct`) width pins the
+  columns, Word cannot honor `w:noWrap` by widening the column, so it wraps the
+  content. Measurement now measures such cells at their real column width (instead
+  of an unbounded width), and the painter drops `white-space: nowrap` for them so
+  the painted height matches. Auto-width tables still keep `w:noWrap` cells on a
+  single line. This corrects under-measured rows that previously let extra rows
+  fit per page and dropped a page.
+
+- [#155](https://github.com/stella/folio/pull/155) [`8a3888c`](https://github.com/stella/folio/commit/8a3888c71c6f68970342a6c6cde9af7baf4c1565) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Move oversized keep-with-next chains to a fresh page before paginating them naturally.
+
+- [#133](https://github.com/stella/folio/pull/133) [`d736b57`](https://github.com/stella/folio/commit/d736b57f07953e8faf8793d3324912fa2b8e52f0) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Reduce DOCX parsing allocations while converting ordered XML trees.
+
+- [#116](https://github.com/stella/folio/pull/116) [`476fa19`](https://github.com/stella/folio/commit/476fa1918f041d3c9ffcf097b0609d1b0d37b069) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Improve Aptos document layout and preserve document-default spacing on empty paragraphs.
+
+- [#169](https://github.com/stella/folio/pull/169) [`1fc3f2f`](https://github.com/stella/folio/commit/1fc3f2f748f4330838a56af20f7a3dbf5e5d8959) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Suppress redundant trailing empty paragraph height in populated table cells.
+
+- [#113](https://github.com/stella/folio/pull/113) [`1f74701`](https://github.com/stella/folio/commit/1f74701d3fc2e788a078f8620f006c294c6b8b4e) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Keep named paragraph style fonts on unformatted runs when the paragraph mark has separate formatting.
+
+- [#105](https://github.com/stella/folio/pull/105) [`9697a47`](https://github.com/stella/folio/commit/9697a47eb1c5b93acb374e3ed53e1bdbda47b65e) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve zero-sized Word image dimensions during layout conversion.
+
+- [#148](https://github.com/stella/folio/pull/148) [`a5d496f`](https://github.com/stella/folio/commit/a5d496f460c56eec6c7d5c3dd45f528f13f3c144) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Ignore source-less shape placeholders when constructing paragraph image runs.
+
+- [#102](https://github.com/stella/folio/pull/102) [`c01b5b0`](https://github.com/stella/folio/commit/c01b5b0f70ad38c9ff878f8396a418de563ff06a) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Render WordprocessingGroup drawings as safe SVG previews while preserving their OOXML.
+
+- [#115](https://github.com/stella/folio/pull/115) [`41bc093`](https://github.com/stella/folio/commit/41bc093036e312971532f481d4320e3c63c57f51) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Measure empty paragraphs with their direct paragraph-mark font metrics.
+
+- [#153](https://github.com/stella/folio/pull/153) [`174d0ce`](https://github.com/stella/folio/commit/174d0ce25de076e9a51963547bb37b059b5b21d3) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve spacing from explicitly selected paragraph styles on empty paragraphs.
+
+- [#171](https://github.com/stella/folio/pull/171) [`f03fa89`](https://github.com/stella/folio/commit/f03fa8966bcee91ed03e33a1bc9f17513960b471) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Add horizontal cell borders on top of a table row's `atLeast`/`auto` minimum height instead of absorbing them. When an explicit row height (ECMA-376 §17.4.81 `w:trHeight` without an `hRule`, or `hRule="atLeast"`) exceeds the cell content, the border thickness now extends the row as Word renders it, fixing cumulative vertical drift in tables of short, bordered rows.
+
+- [#162](https://github.com/stella/folio/pull/162) [`0caa2e6`](https://github.com/stella/folio/commit/0caa2e680e0fe125811215ad7ac4a38194ffa673) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Position text-anchored floating tables from their text cursor and keep following text outside full-width table bands.
+
+- [#168](https://github.com/stella/folio/pull/168) [`ffc12e6`](https://github.com/stella/folio/commit/ffc12e6142b03abd4ce27983019b9256719c7b2b) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Use Montserrat's real line metrics for single-spaced document layout.
+
+- [#119](https://github.com/stella/folio/pull/119) [`4377bf0`](https://github.com/stella/folio/commit/4377bf0db4e7390c409a232852b4d20a533edc08) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Measure collapsed table borders consistently with the table painter.
+
+- [#108](https://github.com/stella/folio/pull/108) [`c7690f9`](https://github.com/stella/folio/commit/c7690f9e77b1a048d8ea6c77676436e3cd191bad) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Preserve paragraph run defaults when runs override individual text properties.
+
+- [#137](https://github.com/stella/folio/pull/137) [`1bea7a9`](https://github.com/stella/folio/commit/1bea7a9a4a4ebf8ff263735460a27c2d3ec1241b) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Match Word's justification of numbered-list continuation lines.
+
+- [#174](https://github.com/stella/folio/pull/174) [`9af69ca`](https://github.com/stella/folio/commit/9af69ca2d63fab2f6795b388184f031b61a87545) Thanks [@jan-kubica](https://github.com/jan-kubica)! - Footnote and endnote body reference marks now display the sequential reference-order number (1, 2, 3…) instead of the raw `w:id`, matching Word for documents with non-contiguous or out-of-order note ids. The body marker and the footnote-area number derive from one shared display-number map, and reserved notes (separators, continuation notices at positive ids) no longer shift numbering.
+
 ## 0.4.0
 
 ### Minor Changes

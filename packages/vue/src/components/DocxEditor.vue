@@ -6,8 +6,7 @@
   by `DocxEditorRef` via `useDocxEditorRefApi`.
 
   Responsibilities (mirrors React's `DocxEditor`):
-   1. Owns the two template refs the pipeline paints against: `hiddenPmRef` (the
-      off-screen ProseMirror host) and `pagesRef` (the painted-pages
+   1. Owns the body and header/footer ProseMirror hosts plus `pagesRef` (the painted-pages
       `HTMLDivElement`).
    2. Drives loading from prop watchers on `documentBuffer` / `document` (via
       `useDocumentLifecycle`), calling `loadBuffer` / `loadDocument`.
@@ -24,16 +23,9 @@
   comment/tracked-change sidebar (`useTrackedChanges` + `useCommentSidebarItems`
   inside `UnifiedSidebar`), and the table context toolbar (`TableToolbar`).
 
-  PORT-BLOCKED (fork has not ported the backing composable/component yet):
-   - externalPlugins / i18n-locale props: not on the fork's `DocxEditorProps`, so
-     `externalPlugins` is `[]` and the locale defaults to `en`.
-   - colorMode prop + useColorMode: dark mode is fixed light here.
-   - Comment lifecycle/management (add/reply/resolve): `useCommentManagement` is
-     absent, so the sidebar renders comments/tracked changes but its mutation
-     emits are inert; document comment extraction is not ported either.
-   - Header/footer inline editing, decoration/anonymization overlays, and
-     rulers: not ported, so those chrome affordances stay inert. The title-bar
-     MenuBar is wired (File/Format/Insert/Help), including the insert flow
+  Remaining adapter-specific surfaces:
+   - externalPlugins are not on `DocxEditorProps`, so the host plugin list is empty.
+   - The title-bar MenuBar is wired (File/Format/Insert/Help), including the insert flow
      (image/table/page-break/TOC via host props or core view-level helpers);
      the watermark item stays inert (no watermark dialog ported).
 -->
@@ -43,7 +35,7 @@
       'docx-editor-vue ep-root paged-editor',
       className,
       displayModeClass,
-      { 'paged-editor--readonly': readOnly },
+      { dark: isDark, 'paged-editor--readonly': readOnly },
     ]"
     :style="style"
   >
@@ -60,7 +52,7 @@
 
       <Toolbar
         v-if="showToolbar"
-        :view="editorView"
+        :view="activeEditorView"
         :get-commands="getCommands"
         :state-tick="stateTick"
         :zoom-percent="zoomPercent"
@@ -97,10 +89,11 @@
       >
         <template #table-context>
           <TableToolbar
-            :view="editorView"
+            :view="activeEditorView"
             :get-commands="getCommands"
             :state-tick="stateTick"
             :theme="theme ?? null"
+            @open-table-properties="showTableProperties = true"
           />
         </template>
         <template v-if="$slots['toolbar-extra'] || toolbarExtra" #toolbar-extra>
@@ -117,14 +110,18 @@
       v-model:show-insert-symbol="showInsertSymbol"
       v-model:show-image-properties="showImageProperties"
       v-model:show-page-setup="showPageSetup"
-      :view="editorView"
+      v-model:show-table-properties="showTableProperties"
+      :view="activeEditorView"
+      :scroll-visible-position-into-view="scrollVisiblePositionIntoView"
       :bookmarks="bookmarks"
       :selected-image-pm-pos="selectedImage?.pmPos ?? null"
       :section-properties="currentSectionProps"
+      :table-properties="currentTableProperties"
       @insert-symbol="handleInsertSymbol"
       @hyperlink-submit="handleHyperlinkSubmit"
       @hyperlink-remove="handleHyperlinkRemove"
       @page-setup-apply="handlePageSetupApply"
+      @table-properties-apply="handleTablePropertiesApply"
     />
 
     <div v-if="parseError" class="docx-editor-vue__error">{{ parseError }}</div>
@@ -142,6 +139,7 @@
     </div>
 
     <div ref="hiddenPmRef" class="docx-editor-vue__hidden-pm paged-editor__hidden-pm" />
+    <div ref="hiddenHfPmRef" class="docx-editor-vue__hidden-pm paged-editor__hidden-hf-pm" />
 
     <div ref="editorScrollRef" class="docx-editor-vue__editor-scroll" @scroll="handleEditorScroll">
       <div class="docx-editor-vue__editor-area">
@@ -189,6 +187,7 @@
           @mousedown="handlePagesMouseDown"
           @mousemove="handlePagesMouseMove"
           @click="handlePagesClick"
+          @dblclick="handlePagesDoubleClick"
           @contextmenu.prevent="handleContextMenu"
         >
           <div
@@ -202,8 +201,17 @@
           >
             <div
               ref="pagesRef"
-              class="docx-editor-vue__pages paged-editor__pages"
+              :class="[
+                'docx-editor-vue__pages paged-editor__pages',
+                hfEdit ? `paged-editor--hf-editing paged-editor--editing-${hfEdit.position}` : '',
+              ]"
               :style="pagesContainerStyle"
+            />
+
+            <HeaderFooterSelectionOverlay
+              :pages-container="pagesRef"
+              :selection="activeHeaderFooterSelection"
+              :zoom="zoom"
             />
 
             <!-- Decoration origin: the coordinate anchor core's range projection
@@ -237,13 +245,28 @@
                 :blocks="blocks"
                 :measures="measures"
               />
+              <DecorationLayer
+                :get-view="() => editorView"
+                :get-pages-container="() => pagesRef"
+                :zoom="zoom"
+                :transaction-version="stateTick"
+                :sync-coordinator="syncCoordinator"
+              />
             </div>
           </div>
+
+          <InlineHeaderFooterEditor
+            v-if="hfEdit"
+            :edit="hfEdit"
+            :get-view="getActiveHeaderFooterView"
+            @close="handleHfSave"
+            @remove="handleHfRemove"
+          />
 
           <ImageSelectionOverlay
             :image-info="selectedImage"
             :zoom="zoom"
-            :view="editorView"
+            :view="activeEditorView"
             @deselect="selectedImage = null"
             @interact-start="imageInteracting = true"
             @interact-end="imageInteracting = false"
@@ -359,6 +382,7 @@
       @close-image-context-menu="imageContextMenu = null"
       @open-image-properties="showImageProperties = true"
     />
+    <ContentControlWidgetsOverlay :view="editorView" />
   </div>
 </template>
 
@@ -381,6 +405,7 @@ import {
   insertTableInView,
   insertTableOfContentsInView,
 } from "@stll/folio-core/prosemirror";
+import { getTableContext } from "@stll/folio-core/prosemirror/extensions/nodes/TableExtension";
 import { extractSelectionContext } from "@stll/folio-core/prosemirror/plugins/selectionTracker";
 import { inspectDocxCompatibility } from "@stll/folio-core/docx/compatibility";
 import {
@@ -395,6 +420,8 @@ import type { HeadingInfo } from "@stll/folio-core/utils/headingCollector";
 
 import AnonymizationRectsOverlay from "./AnonymizationRectsOverlay.vue";
 import CommentMarginMarkers from "./CommentMarginMarkers.vue";
+import ContentControlWidgetsOverlay from "./ContentControlWidgetsOverlay.vue";
+import DecorationLayer from "./DecorationLayer.vue";
 import DocumentOutline from "./DocumentOutline.vue";
 import DocxEditorDialogs from "./DocxEditor/DocxEditorDialogs.vue";
 import DocxEditorMenuBar from "./DocxEditor/DocxEditorMenuBar.vue";
@@ -406,6 +433,8 @@ import {
 } from "@stll/folio-core/managers/EditorModeManager";
 import type { DisplayMode } from "@stll/folio-core/managers/EditorModeManager";
 import ImageSelectionOverlay from "./ImageSelectionOverlay.vue";
+import HeaderFooterSelectionOverlay from "./HeaderFooterSelectionOverlay.vue";
+import InlineHeaderFooterEditor from "./InlineHeaderFooterEditor.vue";
 import OutlineToggleButton from "./OutlineToggleButton.vue";
 import PageIndicator from "./PageIndicator.vue";
 import TemplateDirectivesOverlay from "./TemplateDirectivesOverlay.vue";
@@ -420,6 +449,7 @@ import UnifiedSidebar from "./UnifiedSidebar.vue";
 
 import { useCommentLifecycle } from "../composables/useCommentLifecycle";
 import { useCommentManagement } from "../composables/useCommentManagement";
+import { useColorMode } from "../composables/useColorMode";
 import { useContextMenus } from "../composables/useContextMenus";
 import { useDocumentLifecycle } from "../composables/useDocumentLifecycle";
 import { useDocxEditor } from "../composables/useDocxEditor";
@@ -431,13 +461,15 @@ import { useKeyboardShortcuts } from "../composables/useKeyboardShortcuts";
 import { useOutlineSidebar } from "../composables/useOutlineSidebar";
 import { usePageSetupControls } from "../composables/usePageSetupControls";
 import { usePagesPointer } from "../composables/usePagesPointer";
+import { useRemoteSelectionSync } from "../composables/useRemoteSelectionSync";
+import { useSelectionSync } from "../composables/useSelectionSync";
 import { provideDocxPortalClass } from "../composables/usePortalClass";
 import { useTableResize } from "../composables/useTableResize";
 import { useTrackedChanges } from "../composables/useTrackedChanges";
 import { useZoom } from "../composables/useZoom";
 import type { FontOption } from "../utils/fontOptions";
 import { loadHostFontFaces, removeFontFaces } from "../utils/hostFonts";
-import { provideLocale, useTranslation } from "../i18n";
+import { useTranslation } from "../i18n";
 import { provideFolioUI } from "../ui/folio-ui";
 
 const props = withDefaults(defineProps<DocxEditorProps>(), {
@@ -453,6 +485,7 @@ const props = withDefaults(defineProps<DocxEditorProps>(), {
   showOutline: false,
   className: "",
   showTableInsert: true,
+  showHeaderFooterEditing: true,
 });
 
 const emit = defineEmits<{
@@ -466,15 +499,15 @@ const emit = defineEmits<{
   (e: "comments-change", comments: Comment[]): void;
 }>();
 
-// PORT-BLOCKED: no i18n/locale prop on the fork's DocxEditorProps yet — default to `en`.
-provideLocale();
 // Provide the consumer's UI-injection overrides (or the built-in defaults) to
 // the chrome subtree. Descendant chrome (Toolbar, FormattingBar) resolves the
 // injected primitives via `useFolioUI`, so `components.ColorPicker` etc. take
 // effect. Provided once at setup; the prop is not expected to change identity.
 provideFolioUI(props.components);
-// PORT-BLOCKED: no colorMode prop; share a fixed-light token scope with teleported chrome.
-const isDark = ref(false);
+// Inherit the host's reactive light/dark/system setting. With no provider the
+// composable preserves the editor's existing light default. Teleported chrome
+// receives the same resolved mode through the portal-class provider.
+const isDark = useColorMode();
 provideDocxPortalClass(isDark);
 
 const editorMode = ref<EditorMode>(props.mode);
@@ -545,6 +578,7 @@ watch(hasDocumentInput, (hasInput) => {
 
 // ---- Template refs (paint targets) --------------------------------------
 const hiddenPmRef = ref<HTMLElement | null>(null);
+const hiddenHfPmRef = ref<HTMLElement | null>(null);
 const pagesRef = ref<HTMLElement | null>(null);
 const pagesViewportRef = ref<HTMLElement | null>(null);
 const editorScrollRef = ref<HTMLElement | null>(null);
@@ -558,15 +592,17 @@ const rulerVisible = computed(() => props.showRuler ?? false);
 const stateTick = ref(0);
 const showFindReplace = ref(false);
 const showHyperlink = ref(false);
-// PORT-BLOCKED: no KeyboardShortcutsDialog component ported yet, so F1 / Ctrl+/
-// toggle inert local state (mirrors the colorMode / externalPlugins stubs above).
+// The keyboard-shortcuts dialog is not available yet, so F1 / Ctrl+/ only
+// preserves the intended open state for the future dialog surface.
 const showKeyboardShortcuts = ref(false);
 const showInsertSymbol = ref(false);
 const showImageProperties = ref(false);
 const showPageSetup = ref(false);
+const showTableProperties = ref(false);
 const showOutline = ref(props.showOutline);
 const showSidebar = ref(false);
 const activeSidebarItem = ref<string | null>(null);
+const activeHeaderFooterRId = ref<string | null>(null);
 const bookmarks = shallowRef<{ name: string; label?: string }[]>([]);
 
 // Populated by `useOutlineSidebar` — collected lazily on outline open and
@@ -613,29 +649,36 @@ const {
   editor,
   editorView,
   editorState,
+  remoteSelections,
+  headerFooterSelection,
   isReady,
   isDirty,
   parseError,
   layout,
   blocks,
   measures,
+  syncCoordinator,
   loadBuffer,
   loadDocument,
   save,
   getDocument,
+  setDocument,
+  getHeaderFooterView,
+  syncHeaderFooterViews,
   getCommands,
   focus,
   reLayout,
 } = useDocxEditor({
   hiddenContainer: hiddenPmRef,
+  hiddenHeaderFooterContainer: hiddenHfPmRef,
   pagesContainer: pagesRef,
   readOnly,
   editorMode,
   author: () => props.author,
   password: () => props.password,
   documentKey: () => props.documentKey,
-  // PORT-BLOCKED: no externalPlugins prop on the fork's DocxEditorProps yet.
   externalPlugins: [],
+  collaboration: () => props.collaboration,
   // Anonymization highlights + template directives are driven by the overlay
   // components below; these thread the plugin callbacks and the directive gate.
   onAnonymizationMatchesChange: (matches) => props.onAnonymizationMatchesChange?.(matches),
@@ -663,6 +706,9 @@ const {
     }
   },
   onEditorViewReady: (view) => props.onEditorViewReady?.(view),
+  onCopy: () => props.onCopy?.(),
+  onCut: () => props.onCut?.(),
+  onPaste: () => props.onPaste?.(),
   onReadOnlyEditAttempt: () => props.onReadonlyEditAttempt?.(),
   // Selective-save feature flags + tripwire observability, mirroring React's
   // DocxEditor save path. Read fresh on each save() so prop updates are honored.
@@ -675,6 +721,12 @@ const {
     ? (result) => props.onSelectiveSaveTripwire?.(result)
     : undefined,
 });
+
+const activeEditorView = computed(
+  () =>
+    (activeHeaderFooterRId.value ? getHeaderFooterView(activeHeaderFooterRId.value) : null) ??
+    editorView.value,
+);
 
 // Show the loading interstitial while a document is loading, EXCEPT when the host
 // opted into `preserveDocumentWhileLoading` and a prior document is already
@@ -714,13 +766,14 @@ watch(
     void loadHostFontFaces(fonts).then((faces) => {
       if (cancelled) {
         removeFontFaces(faces);
-        return;
+        return undefined;
       }
       registered = faces;
       if (faces.length === 0) {
-        return;
+        return undefined;
       }
       remeasureForFontChange();
+      return undefined;
     });
     onCleanup(() => {
       cancelled = true;
@@ -741,7 +794,23 @@ const {
   imageToolbarContext,
   handleToolbarImageWrap,
   handleImageTransform,
-} = useImageActions({ editorView, zoom, stateTick, getCommands });
+} = useImageActions({ editorView: activeEditorView, zoom, stateTick, getCommands });
+
+const selectionSync = useSelectionSync({
+  editorView,
+  pagesRef,
+  zoom,
+  selectedImage,
+  syncCoordinator,
+  imageInteracting,
+});
+
+useRemoteSelectionSync({
+  pagesRef,
+  remoteSelections,
+  syncCoordinator,
+  zoom,
+});
 
 const {
   hyperlinkPopupData,
@@ -750,15 +819,13 @@ const {
   handleHyperlinkPopupNavigate,
   handleHyperlinkPopupEdit,
   handleHyperlinkPopupRemove,
-} = useHyperlinkManagement({ editorView, getCommands });
+} = useHyperlinkManagement({ editorView: activeEditorView, getCommands });
 
 const tableResize = useTableResize();
 
-// Pages-area pointer gestures. Header/footer double-click is intentionally
-// omitted: the fork has no inline HF editor or persistent HF PMs, so the HF
-// `emit` (change) path and its handlers stay unused here.
 const {
   tableInsertButton,
+  hfEdit,
   scrollPageInfo,
   resolvePos,
   setPmSelection,
@@ -766,7 +833,10 @@ const {
   handlePagesMouseDown,
   handlePagesMouseMove,
   handlePagesClick,
+  handlePagesDoubleClick,
   handleTableInsertClick,
+  handleHfSave,
+  handleHfRemove,
 } = usePagesPointer({
   editorView,
   pagesRef,
@@ -775,6 +845,7 @@ const {
   imageInteracting,
   hyperlinkPopupData,
   readOnly,
+  showHeaderFooterEditing: computed(() => props.showHeaderFooterEditing),
   zoom,
   layout,
   tableResize: {
@@ -783,10 +854,36 @@ const {
   },
   getCommands,
   getDocument,
+  getHfPmView: getHeaderFooterView,
+  syncHfPMs: syncHeaderFooterViews,
+  setDocument,
   reLayout,
-  emit: () => {},
-  clearOverlay: () => {},
+  onDocumentChange: (doc) => {
+    props.onChange?.(doc);
+    emit("change", doc);
+    emit("update:document", doc);
+  },
+  clearOverlay: selectionSync.clearOverlay,
 });
+
+const getActiveHeaderFooterView = () =>
+  hfEdit.value?.rId ? getHeaderFooterView(hfEdit.value.rId) : null;
+
+const activeHeaderFooterSelection = computed(() => {
+  const edit = hfEdit.value;
+  const selection = headerFooterSelection.value;
+  if (!edit?.rId || !selection || selection.rId !== edit.rId) return null;
+  return { ...selection, pageNumber: edit.pageNumber };
+});
+
+watch(
+  hfEdit,
+  (edit) => {
+    activeHeaderFooterRId.value = edit?.rId ?? null;
+    if (edit) selectionSync.clearOverlay();
+  },
+  { immediate: true },
+);
 
 // Document Outline: heading collection + navigate-to-heading, driven off the
 // visible pages viewport (the hidden PM is off-screen — see
@@ -814,12 +911,12 @@ const {
   handleImageWrapSelect,
   handleContextMenuAction,
 } = useContextMenus({
-  editorView,
+  editorView: activeEditorView,
   selectedImage,
   zoom,
   showImageProperties,
   getCommands,
-  clearOverlay: () => {},
+  clearOverlay: selectionSync.clearOverlay,
   setPmSelection,
   resolvePos,
   // Host `custom:` entries perform edits, so drop them in read-only mode —
@@ -827,6 +924,9 @@ const {
   // readOnly and never surfaces the custom list.
   customContextMenuItems: () => (readOnly.value ? undefined : props.customContextMenuItems),
   onCustomContextAction: (id, range) => props.onCustomContextAction?.(id, range),
+  onCopy: () => props.onCopy?.(),
+  onCut: () => props.onCut?.(),
+  onPaste: () => props.onPaste?.(),
 });
 
 // Tracked-change sidebar cards: derive entries from the live editor state via
@@ -882,6 +982,32 @@ const currentSectionProps = computed<SectionProperties | null>(() => {
   return body.finalSectionProperties ?? body.sections?.[0]?.properties ?? null;
 });
 
+const currentTableProperties = computed(() => {
+  void stateTick.value;
+  const view = editorView.value;
+  if (!view) {
+    return {};
+  }
+  const table = getTableContext(view.state).table;
+  if (!table) {
+    return {};
+  }
+  const current: { width?: number; widthType?: string; justification?: string } = {};
+  const width = table.attrs["width"];
+  const widthType = table.attrs["widthType"];
+  const justification = table.attrs["justification"];
+  if (typeof width === "number") {
+    current.width = width;
+  }
+  if (typeof widthType === "string") {
+    current.widthType = widthType;
+  }
+  if (typeof justification === "string") {
+    current.justification = justification;
+  }
+  return current;
+});
+
 // Optional Toolbar props that must be OMITTED (not passed as `undefined`) under
 // exactOptionalPropertyTypes: bind via `v-bind` so an absent value drops the key.
 const toolbarDynamicProps = computed(() => {
@@ -923,7 +1049,7 @@ const {
   handleInsertSectionBreakNextPage,
   handleInsertSectionBreakContinuous,
 } = useFormattingActions({
-  editorView,
+  editorView: activeEditorView,
   getDocument,
 });
 
@@ -935,7 +1061,7 @@ function handleInsertImageAction(): void {
     props.onInsertImage();
     return;
   }
-  const view = editorView.value;
+  const view = activeEditorView.value;
   if (!view) {
     return;
   }
@@ -964,7 +1090,7 @@ function handleInsertTableAction(rows: number, cols: number): void {
     props.onInsertTable(rows, cols);
     return;
   }
-  const view = editorView.value;
+  const view = activeEditorView.value;
   if (!view) {
     return;
   }
@@ -1032,7 +1158,7 @@ const {
 // Mirrors React's `state.paragraph*` ruler inputs.
 const paragraphIndent = computed(() => {
   void stateTick.value;
-  const view = editorView.value;
+  const view = activeEditorView.value;
   const pf = view ? extractSelectionContext(view.state).paragraphFormatting : {};
   return {
     indentLeft: pf.indentLeft ?? 0,
@@ -1098,6 +1224,23 @@ function handleMenuAction(action: string): void {
 // it honors the host `onInsertTable` prop or falls back to the core helper.
 function handleMenuTableInsert(rows: number, cols: number): void {
   handleInsertTableAction(rows, cols);
+}
+
+type TablePropertiesUpdate = {
+  width?: number | null;
+  widthType?: string | null;
+  justification?: "left" | "center" | "right" | null;
+};
+
+function handleTablePropertiesApply(properties: TablePropertiesUpdate): void {
+  const view = editorView.value;
+  const factory = getCommands()["setTableProperties"];
+  if (!view || !factory) {
+    return;
+  }
+  const command = factory(properties);
+  command(view.state, (transaction) => view.dispatch(transaction), view);
+  view.focus();
 }
 
 // ---- Loading + lifecycle -------------------------------------------------
@@ -1250,8 +1393,11 @@ const { exposed } = useDocxEditorRefApi({
     commentManagement.pushComment(comment);
     return comment.id;
   },
+  getComments: () => commentManagement.comments.value,
+  setComments: commentManagement.setComments,
   focus,
   getDocument,
+  getHeaderFooterView,
   setZoom,
   save,
   loadDocument,
@@ -1310,6 +1456,19 @@ defineExpose(exposed);
   height: 100%;
   pointer-events: none;
   z-index: 1;
+}
+@keyframes folio-caret-blink {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  50%,
+  95% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
 }
 .docx-editor-vue__table-insert-btn {
   position: absolute;

@@ -26,12 +26,14 @@
  */
 
 import type {
+  BlockContent,
   TextBox,
   Paragraph,
   Table,
   ImageSize,
   ImagePosition,
   ImageWrap,
+  ShapeTextBody,
   Theme,
   RelationshipMap,
   MediaFile,
@@ -51,6 +53,7 @@ import {
   getAttribute,
   parseNumericAttribute,
   findByFullName,
+  findChildByLocalName,
   findChildrenByLocalName,
 } from "./xmlParser";
 import type { XmlElement } from "./xmlParser";
@@ -72,12 +75,24 @@ const DEFAULT_MARGIN_EMU = 91_440;
  */
 function parseBodyProperties(bodyPr: XmlElement | null): {
   margins?: TextBox["margins"];
+  autoFit?: ShapeTextBody["autoFit"];
 } {
   if (!bodyPr) {
     return {};
   }
 
-  const result: { margins?: TextBox["margins"] } = {};
+  const result: {
+    margins?: TextBox["margins"];
+    autoFit?: ShapeTextBody["autoFit"];
+  } = {};
+
+  if (findChildByLocalName(bodyPr, "spAutoFit")) {
+    result.autoFit = "shape";
+  } else if (findChildByLocalName(bodyPr, "normAutofit")) {
+    result.autoFit = "normal";
+  } else if (findChildByLocalName(bodyPr, "noAutofit")) {
+    result.autoFit = "none";
+  }
 
   // Margins (insets) in EMUs
   const lIns = parseNumericAttribute(bodyPr, null, "lIns");
@@ -127,7 +142,8 @@ export type ParagraphParserFn = (
   styles: StyleMap | null,
   theme: Theme | null,
   numbering: NumberingMap | null,
-  rels?: RelationshipMap | null,
+  rels: RelationshipMap | null,
+  media: Map<string, MediaFile> | null,
 ) => Paragraph;
 
 /**
@@ -138,8 +154,8 @@ export type TableParserFn = (
   styles: StyleMap | null,
   theme: Theme | null,
   numbering: NumberingMap | null,
-  rels?: RelationshipMap | null,
-  media?: Map<string, MediaFile>,
+  rels: RelationshipMap | null,
+  media: Map<string, MediaFile> | null,
 ) => Table;
 
 /**
@@ -153,14 +169,14 @@ export function parseTextBoxContent(
   styles: StyleMap | null,
   theme: Theme | null,
   numbering: NumberingMap | null,
-  rels?: RelationshipMap | null,
-  _media?: Map<string, MediaFile>,
-): Paragraph[] {
+  rels: RelationshipMap | null,
+  media: Map<string, MediaFile> | null,
+): (Paragraph | Table)[] {
   if (!txbxContent) {
     return [];
   }
 
-  const paragraphs: Paragraph[] = [];
+  const blocks: (Paragraph | Table)[] = [];
   const children = getChildElements(txbxContent);
 
   for (const child of children) {
@@ -170,16 +186,14 @@ export function parseTextBoxContent(
 
     if (localName === "p") {
       // Parse paragraph
-      const paragraph = parseParagraph(child, styles, theme, numbering, rels);
-      paragraphs.push(paragraph);
+      const paragraph = parseParagraph(child, styles, theme, numbering, rels, media);
+      blocks.push(paragraph);
     } else if (localName === "tbl" && parseTable) {
-      // Tables in text boxes - we can't directly include them in paragraphs array
-      // but we could store them separately. For now, skip (most text boxes don't have tables)
-      // Future enhancement: support BlockContent[] instead of just Paragraph[]
+      blocks.push(parseTable(child, styles, theme, numbering, rels, media));
     }
   }
 
-  return paragraphs;
+  return blocks;
 }
 
 // ============================================================================
@@ -324,6 +338,9 @@ export function parseTextBox(drawingEl: XmlElement): TextBox | null {
   if (bodyProps.margins) {
     textBox.margins = bodyProps.margins;
   }
+  if (bodyProps.autoFit) {
+    textBox.autoFit = bodyProps.autoFit;
+  }
 
   // Parse position for anchored text boxes
   if (isAnchor) {
@@ -409,6 +426,9 @@ export function parseTextBoxFromShape(
   }
   if (bodyProps.margins) {
     textBox.margins = bodyProps.margins;
+  }
+  if (bodyProps.autoFit) {
+    textBox.autoFit = bodyProps.autoFit;
   }
   if (position) {
     textBox.position = position;
@@ -501,26 +521,35 @@ export function hasTextBoxContent(textBox: TextBox): boolean {
  * Get plain text from text box (helper for search/indexing)
  */
 export function getTextBoxText(textBox: TextBox): string {
-  // This would require getParagraphText utility
-  // For now, just join paragraph content
-  const parts: string[] = [];
+  return textBox.content.map(getTextBoxBlockText).join("\n");
+}
 
-  for (const paragraph of textBox.content) {
+const getTextBoxBlockText = (block: BlockContent): string => {
+  if (block.type === "paragraph") {
     const runTexts: string[] = [];
-    for (const item of paragraph.content) {
-      if (item.type === "run") {
-        for (const content of item.content) {
-          if (content.type === "text") {
-            runTexts.push(content.text);
-          }
+    for (const item of block.content) {
+      if (item.type !== "run") {
+        continue;
+      }
+      for (const content of item.content) {
+        if (content.type === "text") {
+          runTexts.push(content.text);
         }
       }
     }
-    parts.push(runTexts.join(""));
+    return runTexts.join("");
   }
 
-  return parts.join("\n");
-}
+  if (block.type === "table") {
+    return block.rows
+      .map((row) =>
+        row.cells.map((cell) => cell.content.map(getTextBoxBlockText).join("\n")).join("\t"),
+      )
+      .join("\n");
+  }
+
+  return block.content.map(getTextBoxBlockText).join("\n");
+};
 
 /**
  * Resolve fill color to CSS color string

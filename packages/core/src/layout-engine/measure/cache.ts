@@ -6,6 +6,8 @@
  */
 
 import type { ParagraphBlock, ParagraphMeasure } from "../types";
+import { lineBreakPolicyCacheParts } from "./effectiveLineBreakPolicy";
+import { getLineBreakProviderGeneration } from "./lineBreakProvider";
 
 // =============================================================================
 // TEXT WIDTH CACHE
@@ -281,17 +283,19 @@ const paragraphMeasureCache = new Map<string, ParagraphMeasureEntry>();
  */
 export function hashParagraphBlock(block: ParagraphBlock): string {
   // Simple hash based on runs content
-  const parts: string[] = [];
+  const parts: string[] = [`lbp:${getLineBreakProviderGeneration()}`];
 
   for (const run of block.runs) {
     if (run.kind === "text") {
       parts.push(
-        `t:${run.text}|${run.fontFamily}|${run.eastAsiaFontFamily}|${run.fontSize}|${run.bold}|${run.italic}|${run.allCaps}|${run.smallCaps}|${run.horizontalScale}|${run.letterSpacing}`,
+        `t:${run.text}|${run.fontFamily}|${run.eastAsiaFontFamily}|${run.fontSize}|${run.bold}|${run.italic}|${run.allCaps}|${run.smallCaps}|${run.horizontalScale}|${run.letterSpacing}|${run.language?.val}|${run.language?.eastAsia}|${run.language?.bidi}`,
       );
     } else if (run.kind === "tab") {
       parts.push(`tab:${run.width}`);
     } else if (run.kind === "image") {
-      parts.push(`img:${run.width}x${run.height}`);
+      parts.push(
+        `img:${run.width}x${run.height}:${run.exactLineHeight === true ? "exact" : "text"}`,
+      );
     } else if (run.kind === "lineBreak") {
       parts.push("br");
     }
@@ -302,6 +306,9 @@ export function hashParagraphBlock(block: ParagraphBlock): string {
   if (attrs) {
     if (attrs.alignment) {
       parts.push(`align:${attrs.alignment}`);
+    }
+    if (attrs.outlineLevel !== undefined) {
+      parts.push(`outline:${attrs.outlineLevel}`);
     }
     if (attrs.indent) {
       parts.push(
@@ -324,6 +331,10 @@ export function hashParagraphBlock(block: ParagraphBlock): string {
     if (attrs.suppressEmptyParagraphHeight) {
       parts.push("sup");
     }
+    if (attrs.reserveEmptyOutlineHeight) {
+      parts.push("outline-empty-reserve");
+    }
+    parts.push(...lineBreakPolicyCacheParts(attrs));
     const borders = attrs.borders;
     if (borders) {
       const signature = (border?: { width?: number; style?: string; color?: string }): string =>

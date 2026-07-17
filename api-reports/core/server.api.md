@@ -22,11 +22,14 @@ export type ApplyFolioAIEditsToBufferResult = FolioAIEditApplyResult & {
     buffer: ArrayBuffer;
 };
 
+// @public
+export const applyFolioVersionDiffPrivacy: (diff: FolioVersionDiff, options: FolioVersionDiffPrivacyOptions) => FolioVersionDiff;
+
 // @public (undocumented)
 export const assertSupportedFolioDocumentOperationVersion: (value: unknown) => typeof FOLIO_DOCUMENT_OPERATION_CONTRACT_VERSION;
 
 // @public
-export const compareDocxVersions: (base: ArrayBuffer, revised: ArrayBuffer) => Promise<FolioVersionDiff>;
+export const compareDocxVersions: (base: ArrayBuffer, revised: ArrayBuffer, options?: FolioCompareDocxVersionsOptions) => Promise<FolioVersionDiff>;
 
 // @public (undocumented)
 export type CreateCommentReplyInput = {
@@ -42,20 +45,17 @@ export function createDocx(doc: import__stll_docx_core_model.Document): Promise<
 // @public
 export function createEmptyDocument(options?: CreateEmptyDocumentOptions): import__stll_docx_core_model.Document;
 
-// @public
-export type CreateEmptyDocumentOptions = {
-    pageWidth?: number; /** Page height in twips (default: 15840 = 11 inches) */
-    pageHeight?: number; /** Page orientation (default: 'portrait') */
-    orientation?: "portrait" | "landscape"; /** Top margin in twips (default: 1440 = 1 inch) */
-    marginTop?: number; /** Bottom margin in twips (default: 1440 = 1 inch) */
-    marginBottom?: number; /** Left margin in twips (default: 1440 = 1 inch) */
-    marginLeft?: number; /** Right margin in twips (default: 1440 = 1 inch) */
-    marginRight?: number; /** Initial text content (default: empty string) */
-    initialText?: string;
-};
+// @public (undocumented)
+export type CreateEmptyDocumentOptions = CreateEmptyDocumentBaseOptions & CreateEmptyDocumentStyleOptions;
 
 // @public (undocumented)
 export const createFolioAITextRangeHandle: (input: CreateFolioAITextRangeHandleOptions) => FolioAITextRangeHandle | null;
+
+// @public (undocumented)
+export const createStellaStyleDocumentPreset: () => DocumentPreset;
+
+// @public
+export const createStellaStyleSet: () => DocumentStyleSet;
 
 // @public (undocumented)
 export const deriveBlockId: (input: DeriveBlockIdInput) => FolioBlockId;
@@ -66,6 +66,110 @@ export type DeriveBlockIdInput = {
     index: number;
     taken: ReadonlySet<string>;
 };
+
+// @public (undocumented)
+export const DOCUMENT_PRESET_VERSION: 1;
+
+// @public (undocumented)
+export const DOCUMENT_STYLE_SET_VERSION: 1;
+
+// @public
+export type DocumentPreset = {
+    version: typeof DOCUMENT_PRESET_VERSION;
+    name: string;
+    styleSet: DocumentStyleSet;
+    sectionProperties: import__stll_docx_core_model.SectionProperties;
+};
+
+// @public (undocumented)
+export type DocumentStyleCatalog = {
+    defaultParagraphStyleId?: string;
+    styles: DocumentStyleCatalogEntry[];
+};
+
+// @public (undocumented)
+export type DocumentStyleCatalogEntry = {
+    styleId: string;
+    name: string;
+    type: import__stll_docx_core_model.Style["type"];
+    role: "default" | "quick" | "available" | "supporting";
+    dependencies: string[];
+    numberingId?: number;
+};
+
+// @public
+export type DocumentStyleSet = {
+    version: typeof DOCUMENT_STYLE_SET_VERSION;
+    name: string;
+    initialParagraphStyleId: string;
+    styles: import__stll_docx_core_model.StyleDefinitions;
+    numbering?: import__stll_docx_core_model.NumberingDefinitions;
+    theme?: import__stll_docx_core_model.Theme;
+    fontTable?: import__stll_docx_core_model.FontTable;
+    settings?: import__stll_docx_core_model.DocumentSettings;
+};
+
+// @public
+export class DocxArchiveError extends DocxArchiveError_base {}
+
+// @public
+export type DocxParagraphSource = "header" | "body" | "footer";
+
+// @public
+export const ensureParaIds: (docx: Uint8Array | ArrayBuffer, options?: EnsureParaIdsOptions) => Promise<EnsureParaIdsResult>;
+
+// @public
+export class EnsureParaIdsError extends EnsureParaIdsError_base {}
+
+// @public
+export type EnsureParaIdsOptions = {
+    allowSignedPackageMutation?: boolean;
+};
+
+// @public
+export type EnsureParaIdsResult = {
+    docx: Uint8Array; /** Paragraphs that received a paraId (missing or all-zero before). */
+    assigned: number; /** Duplicate paraIds reassigned (the first occurrence keeps the id). */
+    deduplicated: number; /** True when the input already had full, unique coverage. */
+    alreadyComplete: boolean;
+};
+
+// @public
+export const extractDocumentStyleSet: (document: import__stll_docx_core_model.Document, options: ExtractDocumentStyleSetOptions) => DocumentStyleSet;
+
+// @public (undocumented)
+export const extractDocumentStyleSetFromDocx: (input: DocxInput, options: ExtractDocumentStyleSetOptions) => Promise<DocumentStyleSet>;
+
+// @public (undocumented)
+export type ExtractDocumentStyleSetOptions = {
+    name: string; /** Style IDs selected by the user. Omit to extract every style. */
+    styleIds?: readonly string[]; /** Defaults to the source document's default paragraph style. */
+    initialParagraphStyleId?: string;
+};
+
+// @public
+export const extractDocxText: (bytes: ArrayBuffer | Uint8Array) => Promise<ExtractedDocxText>;
+
+// @public
+export type ExtractedDocxParagraph = {
+    index: number;
+    text: string;
+    source: DocxParagraphSource;
+    style?: string;
+    bold?: boolean;
+    fontSize?: number;
+    alignment?: "left" | "center" | "right" | "both";
+};
+
+// @public
+export type ExtractedDocxText = {
+    paragraphs: ExtractedDocxParagraph[];
+    charCount: number;
+    view: "accepted";
+};
+
+// @public (undocumented)
+export const FOLIO_DOCUMENT_METADATA_PROPERTIES: readonly ["title", "subject", "creator", "keywords", "description", "lastModifiedBy", "revision", "created", "modified"];
 
 // @public (undocumented)
 export const FOLIO_DOCUMENT_OPERATION_BATCH_MODES: readonly ["best-effort", "atomic"];
@@ -88,22 +192,42 @@ export const FOLIO_DOCUMENT_OPERATION_MODES_BY_TYPE: Readonly<{
     readonly deleteBlock: readonly ["direct", "tracked-changes"];
     readonly commentOnBlock: readonly ["direct", "tracked-changes"];
     readonly insertSignatureTable: readonly ["direct"];
+    readonly insertTableRow: readonly ["direct"];
+    readonly deleteTableRow: readonly ["direct"];
+    readonly insertTableColumn: readonly ["direct"];
+    readonly deleteTableColumn: readonly ["direct"];
 }>;
 
 // @public (undocumented)
 export const FOLIO_DOCUMENT_OPERATION_PRECONDITIONS: readonly ["blockTextHash"];
 
 // @public (undocumented)
-export const FOLIO_DOCUMENT_OPERATION_STORIES: readonly ["main"];
+export const FOLIO_DOCUMENT_OPERATION_STORIES: readonly ["main", "header", "footer", "footnote", "endnote"];
 
 // @public (undocumented)
-export const FOLIO_DOCUMENT_OPERATION_TYPES: readonly ["replaceInBlock", "replaceRange", "commentOnRange", "formatRange", "insertAfterBlock", "insertBeforeBlock", "replaceBlock", "deleteBlock", "commentOnBlock", "insertSignatureTable"];
+export const FOLIO_DOCUMENT_OPERATION_TYPES: readonly ["replaceInBlock", "replaceRange", "commentOnRange", "formatRange", "insertAfterBlock", "insertBeforeBlock", "replaceBlock", "deleteBlock", "commentOnBlock", "insertSignatureTable", "insertTableRow", "deleteTableRow", "insertTableColumn", "deleteTableColumn"];
+
+// @public (undocumented)
+export const FOLIO_DOCUMENT_PRIVACY_TRANSFORMS: readonly ["remove-attribution", "remove-timestamps", "remove-descriptive-metadata"];
+
+// @public (undocumented)
+export const FOLIO_RESOLVED_REVIEWED_VIEWS: readonly ["original", "final"];
+
+// @public (undocumented)
+export const FOLIO_REVIEWED_VIEWS: readonly ["original", "current-markup", "final"];
+
+// @public (undocumented)
+export const FOLIO_VERSION_COMPARISON_PRIVACY_TRANSFORMS: readonly ["remove-attribution", "remove-timestamps", "remove-descriptive-metadata"];
+
+// @public
+export const FOLIO_VERSION_COMPARISON_SCOPES: readonly ["text", "formatting", "metadata"];
 
 // @public (undocumented)
 export type FolioAIBlock = {
     id: string;
     kind: FolioAIBlockKind;
-    text: string;
+    text: string; /** One-based heading depth when the block has outline semantics. */
+    headingLevel?: number;
     displayLabel?: string;
     styleId?: string;
     previewRuns?: FolioAIBlockPreviewRun[];
@@ -210,6 +334,26 @@ export type FolioAIEditOperation = FolioAIEditReviewMeta & {
     position?: "after" | "before";
     parties: FolioAISignatureParty[];
     comment?: FolioAIComment;
+} | {
+    id: string;
+    type: "insertTableRow"; /** Stable paragraph anchor inside the row that receives the new sibling. */
+    blockId: string;
+    position?: "after" | "before"; /** Initial text for each physical cell in source order; omitted cells stay empty. */
+    cellTexts?: string[];
+} | {
+    id: string;
+    type: "deleteTableRow"; /** Stable paragraph anchor inside the row to delete. */
+    blockId: string;
+} | {
+    id: string;
+    type: "insertTableColumn"; /** Stable paragraph anchor inside the cell that receives the new sibling column. */
+    blockId: string;
+    position?: "after" | "before"; /** Initial text for newly created physical cells in row order. */
+    cellTexts?: string[];
+} | {
+    id: string;
+    type: "deleteTableColumn"; /** Stable paragraph anchor inside the column to delete. */
+    blockId: string;
 });
 
 // @public (undocumented)
@@ -220,7 +364,8 @@ export type FolioAIEditPrecondition = {
 // @public (undocumented)
 export type FolioAIEditSnapshot = {
     blocks: FolioAIBlock[];
-    anchors: Record<string, FolioAIBlockAnchor>;
+    anchors: Record<string, FolioAIBlockAnchor>; /** Hidden empty paragraph used to anchor insertions when `blocks` is empty. */
+    emptyDocumentAnchorId?: string;
 };
 
 // @public (undocumented)
@@ -243,6 +388,12 @@ export type FolioAITextRangeHandle = {
 // @public
 export type FolioApplyDocumentOperationsOptions = Omit<FolioApplyOperationsOptions, "mode">;
 
+// @public (undocumented)
+export type FolioApplyDocumentOperationsToStoryOptions = FolioApplyDocumentOperationsOptions & {
+    story: FolioEditableDocumentStoryHandle;
+    batch: FolioDocumentOperationBatch;
+};
+
 // @public
 export type FolioApplyOperationsOptions = {
     mode?: FolioAIEditApplyMode;
@@ -255,16 +406,42 @@ export type FolioBlockDiff = {
     blockId: string;
     kind: string;
     text: string;
+    revisedHandle: FolioVersionBlockHandle;
 } | {
     type: "deleted";
     blockId: string;
     kind: string;
     text: string;
+    baseHandle: FolioVersionBlockHandle;
 } | {
     type: "modified";
     blockId: string;
     kind: string;
     segments: FolioVersionDiffSegment[];
+    baseHandle: FolioVersionBlockHandle;
+    revisedHandle: FolioVersionBlockHandle;
+} | {
+    type: "formatChanged";
+    blockId: string;
+    kind: string;
+    text: string;
+    changedProperties: FolioFormatProperty[];
+    baseHandle: FolioVersionBlockHandle;
+    revisedHandle: FolioVersionBlockHandle;
+} | {
+    type: "movedFrom";
+    blockId: string;
+    kind: string;
+    text: string;
+    moveGroupId: number;
+    baseHandle: FolioVersionBlockHandle;
+} | {
+    type: "movedTo";
+    blockId: string;
+    kind: string;
+    text: string;
+    moveGroupId: number;
+    revisedHandle: FolioVersionBlockHandle;
 };
 
 // @public
@@ -273,27 +450,57 @@ export type FolioBlockId = string & {
 };
 
 // @public (undocumented)
+export type FolioCompareDocxVersionsOptions = {
+    include?: readonly FolioVersionComparisonScope[]; /** Optional output-only privacy transforms. Source buffers are never mutated. */
+    privacy?: FolioVersionDiffPrivacyOptions;
+};
+
+// @public (undocumented)
+export type FolioDocumentMetadataProperty = (typeof FOLIO_DOCUMENT_METADATA_PROPERTIES)[number];
+
+// @public (undocumented)
+export type FolioDocumentMetadataValue = string | number | null;
+
+// @public (undocumented)
+export type FolioDocumentNavigationTarget = {
+    type: "block";
+    story: "main";
+    blockId: string;
+} | FolioAITextRangeHandle;
+
+// @public (undocumented)
 export type FolioDocumentOperation = FolioAIEditOperation;
 
 // @public
 export type FolioDocumentOperationAffectedTarget = {
     type: "block";
-    story: "main";
+    story: FolioDocumentOperationStory;
     blockId: string;
     effect: "updated" | "deleted" | "commented";
 } | {
     type: "textRange";
     range: FolioAITextRangeHandle;
     effect: "formatted" | "commented";
+    story?: Exclude<FolioDocumentOperationStory, "main">;
 } | {
     type: "insertion";
-    story: "main";
+    story: FolioDocumentOperationStory;
     anchorBlockId: string;
     position: "before" | "after";
-    content: "block" | "signatureTable";
+    content: "block" | "signatureTable" | "tableRow" | "tableColumn";
 } | {
     type: "comment";
     commentId: number;
+} | {
+    type: "tableRow";
+    story: FolioDocumentOperationStory;
+    anchorBlockId: string;
+    effect: "deleted";
+} | {
+    type: "tableColumn";
+    story: FolioDocumentOperationStory;
+    anchorBlockId: string;
+    effect: "deleted";
 };
 
 // @public (undocumented)
@@ -350,14 +557,106 @@ export type FolioDocumentOperationResult = {
     applied: FolioAIEditAppliedOperation[];
     skipped: FolioAIEditSkippedOperation[];
     issues: FolioDocumentOperationIssue[]; /** Successful effects in input-operation order; skipped operations are omitted. */
-    receipts: FolioDocumentOperationReceipt[];
+    receipts: FolioDocumentOperationReceipt[]; /** Present when the execution surface can undo this committed batch. */
+    undoHandle: FolioDocumentOperationUndoHandle | null;
 };
 
 // @public (undocumented)
 export type FolioDocumentOperationStatus = "committed" | "previewed" | "rejected";
 
 // @public (undocumented)
+export type FolioDocumentOperationStory = "main" | {
+    type: "header";
+    relationshipId: string;
+} | {
+    type: "footer";
+    relationshipId: string;
+} | {
+    type: "footnote";
+    noteId: number;
+} | {
+    type: "endnote";
+    noteId: number;
+};
+
+// @public (undocumented)
 export type FolioDocumentOperationType = FolioDocumentOperation["type"];
+
+// @public (undocumented)
+export type FolioDocumentOperationUndoFailureReason = "unknownHandle" | "notLatest" | "documentChanged";
+
+// @public
+export type FolioDocumentOperationUndoHandle = {
+    type: "documentOperationUndo";
+    id: string;
+};
+
+// @public (undocumented)
+export type FolioDocumentOperationUndoResult = {
+    status: "undone";
+    undoHandle: FolioDocumentOperationUndoHandle;
+} | {
+    status: "rejected";
+    undoHandle: FolioDocumentOperationUndoHandle;
+    reason: FolioDocumentOperationUndoFailureReason;
+};
+
+// @public (undocumented)
+export type FolioDocumentOutline = {
+    sections: FolioDocumentOutlineEntry[];
+};
+
+// @public (undocumented)
+export type FolioDocumentOutlineEntry = {
+    handle: FolioDocumentSectionHandle;
+    headingBlockId: string;
+    text: string; /** One-based heading depth. */
+    level: number;
+    parentHandle?: FolioDocumentSectionHandle;
+};
+
+// @public (undocumented)
+export class FolioDocumentPrivacyArchiveError extends FolioDocumentPrivacyArchiveError_base {}
+
+// @public (undocumented)
+export type FolioDocumentPrivacyOptions = {
+    transforms: readonly FolioDocumentPrivacyTransform[];
+};
+
+// @public (undocumented)
+export type FolioDocumentPrivacyReport = {
+    appliedTransforms: FolioDocumentPrivacyTransform[];
+    removedMetadataProperties: FolioDocumentMetadataProperty[];
+};
+
+// @public (undocumented)
+export type FolioDocumentPrivacyTransform = (typeof FOLIO_DOCUMENT_PRIVACY_TRANSFORMS)[number];
+
+// @public (undocumented)
+export type FolioDocumentSection = {
+    handle: FolioDocumentSectionHandle;
+    heading: FolioDocumentOutlineEntry; /** Heading block followed by every block in its logical section. */
+    blocks: FolioAIBlock[];
+};
+
+// @public
+export type FolioDocumentSectionHandle = {
+    type: "headingSection";
+    story: "main";
+    headingBlockId: string;
+    headingTextHash: string; /** One-based depth used to detect structural section-boundary changes. */
+    headingLevel: number;
+};
+
+// @public (undocumented)
+export type FolioDocumentSectionReadResult = {
+    status: "found";
+    section: FolioDocumentSection;
+} | {
+    status: "missing";
+} | {
+    status: "stale";
+};
 
 // @public (undocumented)
 export type FolioDocumentStory = {
@@ -369,18 +668,28 @@ export type FolioDocumentStory = {
 export type FolioDocumentStoryHandle = {
     type: "main";
 } | {
-    type: "header" | "footer";
+    type: "header";
     relationshipId: string;
 } | {
-    type: "footnote" | "endnote";
+    type: "footer";
+    relationshipId: string;
+} | {
+    type: "footnote";
+    noteId: number;
+} | {
+    type: "endnote";
     noteId: number;
 };
+
+// @public (undocumented)
+export class FolioDocumentStoryNotFoundError extends FolioDocumentStoryNotFoundError_base {}
 
 // @public
 export class FolioDocxReviewer {
     acceptAll(): number;
     acceptChange(target: FolioReviewChange | number): boolean;
     applyDocumentOperations(batch: FolioDocumentOperationBatch, options?: FolioApplyDocumentOperationsOptions): FolioDocumentOperationResult;
+    applyDocumentOperationsToStory(input: FolioApplyDocumentOperationsToStoryOptions): FolioDocumentOperationResult;
     applyOperations(operations: FolioAIEditOperation[], options?: FolioApplyOperationsOptions): FolioAIEditApplyResult;
     readonly author: string;
     static fromBuffer(buffer: ArrayBuffer, options?: FolioDocxReviewerOptions): Promise<FolioDocxReviewer>;
@@ -388,8 +697,10 @@ export class FolioDocxReviewer {
     getComments(filter?: FolioReviewCommentFilter): FolioReviewComment[];
     getContent(): FolioAIBlock[];
     getContentAsText(options?: FolioGetContentAsTextOptions): string;
+    getDocumentProperties(): Readonly<NonNullable<import__stll_docx_core_model.Document["package"]["properties"]>> | null;
     getNotesAsText(): string;
     listStories(): FolioDocumentStory[];
+    readReviewedStory(options?: FolioReadReviewedStoryOptions): FolioReviewedStory | null;
     readStory(handle: FolioDocumentStoryHandle): FolioDocumentStory | null;
     rejectAll(): number;
     rejectChange(target: FolioReviewChange | number): boolean;
@@ -397,15 +708,46 @@ export class FolioDocxReviewer {
     resolveComment(commentId: string, options?: {
         resolved?: boolean;
     }): boolean;
+    resolveReviewedStory(input: FolioResolveReviewedStoryOptions): boolean;
     snapshot(): FolioAIEditSnapshot;
+    snapshotStory(story: FolioEditableDocumentStoryHandle): FolioAIEditSnapshot | null;
     toBuffer(): Promise<ArrayBuffer>;
     toDocument(): import__stll_docx_core_model.Document;
+    undoDocumentOperations(undoHandle: FolioDocumentOperationUndoHandle): FolioDocumentOperationUndoResult;
 }
 
 // @public
 export type FolioDocxReviewerOptions = {
     author?: string; /** Password for Agile-encrypted .docx files (Office 2010+). */
     password?: string | undefined;
+};
+
+// @public (undocumented)
+export type FolioEditableDocumentStoryHandle = FolioDocumentStoryHandle;
+
+// @public
+export type FolioFormatProperty = (typeof FORMAT_PROPERTIES)[number];
+
+// @public (undocumented)
+export type FolioMetadataDiff = {
+    property: FolioDocumentMetadataProperty;
+    baseValue: FolioDocumentMetadataValue;
+    revisedValue: FolioDocumentMetadataValue;
+};
+
+// @public (undocumented)
+export type FolioReadReviewedStoryOptions = {
+    story?: FolioEditableDocumentStoryHandle;
+    view?: FolioReviewedView;
+};
+
+// @public (undocumented)
+export type FolioResolvedReviewedView = (typeof FOLIO_RESOLVED_REVIEWED_VIEWS)[number];
+
+// @public (undocumented)
+export type FolioResolveReviewedStoryOptions = {
+    story?: FolioEditableDocumentStoryHandle;
+    view: FolioResolvedReviewedView;
 };
 
 // @public
@@ -453,6 +795,18 @@ export type FolioReviewCommentReply = {
     text: string;
 };
 
+// @public (undocumented)
+export type FolioReviewedStory = {
+    story: FolioEditableDocumentStoryHandle;
+    view: FolioReviewedView;
+    snapshot: FolioAIEditSnapshot;
+    text: string;
+    changes: FolioReviewChange[];
+};
+
+// @public (undocumented)
+export type FolioReviewedView = (typeof FOLIO_REVIEWED_VIEWS)[number];
+
 // @public
 export type FolioReviewReplyInput = {
     text: string; /** Reply author; defaults to the reviewer's author. */
@@ -461,18 +815,80 @@ export type FolioReviewReplyInput = {
 };
 
 // @public
-export type FolioVersionDiff = {
-    changes: FolioBlockDiff[]; /** Counts across every paired/unpaired block, including the unchanged blocks `changes` omits. */
-    summaryCounts: {
-        added: number;
-        deleted: number;
-        modified: number;
-        unchanged: number;
-    };
+export type FolioStoryDiff = {
+    baseStory: FolioDocumentStoryHandle | null;
+    revisedStory: FolioDocumentStoryHandle | null;
+    changes: FolioBlockDiff[];
+    summaryCounts: FolioVersionDiffSummaryCounts;
 };
 
 // @public
+export type FolioVersionBlockHandle = {
+    story: FolioDocumentStoryHandle;
+    blockId: string;
+};
+
+// @public (undocumented)
+export type FolioVersionComparisonPrivacyTransform = FolioDocumentPrivacyTransform;
+
+// @public (undocumented)
+export type FolioVersionComparisonScope = (typeof FOLIO_VERSION_COMPARISON_SCOPES)[number];
+
+// @public
+export type FolioVersionDiff = {
+    changes: FolioBlockDiff[]; /** Per-story results in base order followed by stories added in the revised document. */
+    stories: FolioStoryDiff[]; /** Changed package metadata fields in stable property order. */
+    metadataChanges: FolioMetadataDiff[]; /** Applied privacy policy and the fields it removed from this result. */
+    privacyReport: FolioVersionDiffPrivacyReport; /** Counts across every paired/unpaired block, including the unchanged blocks `changes` omits. `moved` counts pairs, not entries. */
+    summaryCounts: FolioVersionDiffSummaryCounts;
+};
+
+// @public (undocumented)
+export type FolioVersionDiffPrivacyOptions = FolioDocumentPrivacyOptions;
+
+// @public (undocumented)
+export type FolioVersionDiffPrivacyReport = FolioDocumentPrivacyReport;
+
+// @public
 export type FolioVersionDiffSegment = WordDiffSegment;
+
+// @public (undocumented)
+export type FolioVersionDiffSummaryCounts = {
+    added: number;
+    deleted: number;
+    modified: number;
+    formatChanged: number;
+    moved: number;
+    metadataChanged: number;
+    unchanged: number;
+};
+
+// @public
+export const generateRedlineDocx: (base: ArrayBuffer, revised: ArrayBuffer, options?: GenerateRedlineDocxOptions) => Promise<GenerateRedlineDocxResult>;
+
+// @public
+export type GenerateRedlineDocxOptions = {
+    author?: string; /** Resolved base input state. (default: `"final"`) */
+    baseView?: FolioResolvedReviewedView; /** Resolved revised input state. (default: `"final"`) */
+    revisedView?: FolioResolvedReviewedView; /** Optional output-only package-metadata privacy transforms. */
+    privacy?: FolioDocumentPrivacyOptions;
+};
+
+// @public
+export type GenerateRedlineDocxResult = {
+    buffer: ArrayBuffer; /** Operations applied across every matched story. */
+    applied: FolioAIEditAppliedOperation[]; /** Block operations that could not be applied. */
+    skipped: FolioAIEditSkippedOperation[]; /** Package parts that could not be represented as story-scoped text edits. */
+    unprocessedStories: GenerateRedlineUnprocessedStory[]; /** Privacy transforms applied to the generated package. */
+    privacyReport: FolioDocumentPrivacyReport;
+};
+
+// @public (undocumented)
+export type GenerateRedlineUnprocessedStory = {
+    baseStory: FolioDocumentStoryHandle | null;
+    revisedStory: FolioDocumentStoryHandle | null;
+    reason: "missing-base-story" | "missing-revised-story";
+};
 
 // @public (undocumented)
 export const getFolioDocumentOperationCapabilities: () => FolioDocumentOperationCapabilities;
@@ -484,16 +900,49 @@ export const getFolioDocumentOperationIssues: (operations: readonly FolioDocumen
 export const getFolioDocumentOperationReceipts: (operations: readonly FolioDocumentOperation[], applied: readonly FolioAIEditAppliedOperation[]) => FolioDocumentOperationReceipt[];
 
 // @public
+export const getFolioDocumentOutline: (snapshot: FolioAIEditSnapshot) => FolioDocumentOutline;
+
+// @public
 export const getFolioParaIdFromBlockId: (id: string) => string | null;
 
 // @public (undocumented)
+export const inspectDocumentStyles: (document: import__stll_docx_core_model.Document) => DocumentStyleCatalog;
+
+// @public (undocumented)
+export const inspectDocumentStylesFromDocx: (input: DocxInput) => Promise<DocumentStyleCatalog>;
+
+// @public (undocumented)
 export class InvalidFolioDocumentOperationBatchError extends InvalidFolioDocumentOperationBatchError_base {}
+
+// @public (undocumented)
+export class InvalidFolioDocumentPrivacyOptionsError extends InvalidFolioDocumentPrivacyOptionsError_base {}
+
+// @public (undocumented)
+export class InvalidFolioVersionComparisonOptionsError extends InvalidFolioVersionComparisonOptionsError_base {}
+
+// @public (undocumented)
+export class InvalidGenerateRedlineDocxOptionsError extends InvalidGenerateRedlineDocxOptionsError_base {}
 
 // @public
 export const isFolioBlockId: (value: unknown) => value is FolioBlockId;
 
 // @public (undocumented)
 export const isFolioDocumentOperationModeSupported: (operationType: FolioDocumentOperationType, mode: FolioDocumentOperationMode) => boolean;
+
+// @public (undocumented)
+export const isFolioDocumentPrivacyTransform: (value: unknown) => value is FolioDocumentPrivacyTransform;
+
+// @public (undocumented)
+export const isFolioResolvedReviewedView: (value: unknown) => value is FolioResolvedReviewedView;
+
+// @public (undocumented)
+export const isFolioReviewedView: (value: unknown) => value is FolioReviewedView;
+
+// @public (undocumented)
+export const isFolioVersionComparisonPrivacyTransform: (value: unknown) => value is FolioVersionComparisonPrivacyTransform;
+
+// @public (undocumented)
+export const isFolioVersionComparisonScope: (value: unknown) => value is FolioVersionComparisonScope;
 
 // @public (undocumented)
 export const isSequentialFolioBlockId: (id: string) => boolean;
@@ -505,10 +954,28 @@ export const isSupportedFolioDocumentOperationVersion: (value: unknown) => value
 export const parseFolioDocumentOperationBatch: (value: unknown) => FolioDocumentOperationBatch;
 
 // @public
+export const readFolioDocumentSection: (snapshot: FolioAIEditSnapshot, handle: FolioDocumentSectionHandle) => FolioDocumentSectionReadResult;
+
+// @public
 export const replyToComment: (doc: import__stll_docx_core_model.Document, parentCommentId: number, input: CreateCommentReplyInput) => import__stll_docx_core_model.Comment | null;
+
+// @public
+export const rewriteDocxMetadataPrivacy: (buffer: ArrayBuffer, input: FolioDocumentPrivacyOptions) => Promise<RewriteDocxMetadataPrivacyResult>;
+
+// @public (undocumented)
+export type RewriteDocxMetadataPrivacyResult = {
+    buffer: ArrayBuffer;
+    privacyReport: FolioDocumentPrivacyReport;
+};
+
+// @public (undocumented)
+export const STELLA_STYLE_SET_NAME = "Stella Style";
 
 // @public (undocumented)
 export class UnsupportedFolioDocumentOperationVersionError extends UnsupportedFolioDocumentOperationVersionError_base {}
+
+// @public (undocumented)
+export class UnsupportedFolioReviewedViewError extends UnsupportedFolioReviewedViewError_base {}
 
 // (No @packageDocumentation comment for this package)
 

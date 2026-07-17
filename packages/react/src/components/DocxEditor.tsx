@@ -36,6 +36,7 @@ import {
 // Paginated editor
 import type { Mark } from "prosemirror-model";
 import type { EditorView } from "prosemirror-view";
+import { closeHistory } from "prosemirror-history";
 import { useTranslations } from "use-intl";
 
 import {
@@ -47,6 +48,8 @@ import {
   getFolioDocumentOperationIssues,
   getTrackedChangesFromDoc,
   type FolioDocumentOperationStatus,
+  type FolioDocumentOperationUndoHandle,
+  type FolioDocumentOperationUndoResult,
 } from "@stll/folio-core/ai-edits";
 import { normalizeBaseDirection } from "@stll/folio-core/docx/normalizeBaseDirection";
 import { getCachedNumberingMap } from "@stll/folio-core/docx/numberingParser";
@@ -195,6 +198,7 @@ import { containedHandler } from "../utils/contained-handler";
 import {
   clampRangeToDocSize,
   resolveFolioAIBlockRange,
+  resolveFolioAITextRange,
 } from "@stll/folio-core/ai-edits/blockRange";
 import { resolveCommentCreationRange } from "./commentAnchors";
 import { getPageTextFromLayout } from "@stll/folio-core/paged-layout/pageText";
@@ -290,6 +294,15 @@ const DISPLAY_MODE_LABEL_KEYS = {
 } as const satisfies Record<DisplayMode, string>;
 
 const preventMouseDownDefault = (event: React.MouseEvent) => event.preventDefault();
+
+type LiveDocumentOperationUndoEntry = {
+  undoHandle: FolioDocumentOperationUndoHandle;
+  afterState: EditorView["state"];
+  commentsBefore: Comment[];
+  commentsAfter: Comment[];
+};
+
+let documentOperationUndoHandleCursor = Date.now();
 
 function isDisplayMode(value: unknown): value is DisplayMode {
   return typeof value === "string" && DISPLAY_MODES.some((mode) => mode === value);
@@ -407,6 +420,7 @@ function areActiveTrackedChangesEqual(
 /**
  * DocxEditor - Complete DOCX editor component
  */
+/* eslint-disable prefer-arrow-callback -- preserve the component name in React DevTools without reindenting this large component. */
 export const DocxEditor = forwardRef<DocxEditorRef, DocxEditorProps>(function DocxEditor(
   {
     documentBuffer,
@@ -451,9 +465,9 @@ export const DocxEditor = forwardRef<DocxEditorRef, DocxEditorProps>(function Do
     showTableInsert = true,
     onInsertPageBreak,
     onInsertTOC,
-    onCopy: _onCopy,
-    onCut: _onCut,
-    onPaste: _onPaste,
+    onCopy,
+    onCut,
+    onPaste,
     mode: modeProp,
     onModeChange,
     onReadonlyEditAttempt,
@@ -895,6 +909,7 @@ export const DocxEditor = forwardRef<DocxEditorRef, DocxEditorProps>(function Do
     commentsProp,
     onCommentsChange,
   });
+  const documentOperationUndoEntriesRef = useRef<LiveDocumentOperationUndoEntry[]>([]);
   // Cache style resolver to avoid recreating on every selection change
   const styleResolverCacheRef = useRef<{
     styles: unknown;
@@ -2402,14 +2417,16 @@ export const DocxEditor = forwardRef<DocxEditorRef, DocxEditorProps>(function Do
           // Copy selected text to clipboard, then delete selection
           const { from, to } = view.state.selection;
           const text = view.state.doc.textBetween(from, to, "\n");
-          void navigator.clipboard.writeText(text);
+          void navigator.clipboard.writeText(text).catch(() => undefined);
           view.dispatch(view.state.tr.deleteSelection());
+          onCut?.();
           break;
         }
         case "copy": {
           const { from: cf, to: ct } = view.state.selection;
           const copied = view.state.doc.textBetween(cf, ct, "\n");
-          void navigator.clipboard.writeText(copied);
+          void navigator.clipboard.writeText(copied).catch(() => undefined);
+          onCopy?.();
           break;
         }
         case "paste": {
@@ -2449,6 +2466,7 @@ export const DocxEditor = forwardRef<DocxEditorRef, DocxEditorProps>(function Do
               const text = await navigator.clipboard.readText();
               if (text) {
                 view.dispatch(view.state.tr.insertText(text));
+                onPaste?.();
               }
             } catch {
               // Clipboard access denied
@@ -2466,6 +2484,7 @@ export const DocxEditor = forwardRef<DocxEditorRef, DocxEditorProps>(function Do
               // insertText would flatten them into one paragraph.
               const slice = buildPlainTextSlice(text, view.state.schema);
               view.dispatch(view.state.tr.replaceSelection(slice).scrollIntoView());
+              onPaste?.();
             }
           } catch {
             // Surface the failure instead of leaving a dead menu action.
@@ -2566,6 +2585,9 @@ export const DocxEditor = forwardRef<DocxEditorRef, DocxEditorProps>(function Do
       getActiveEditorView,
       focusActiveEditor,
       onCustomContextAction,
+      onCopy,
+      onCut,
+      onPaste,
       readOnly,
       contextMenu.selectionRange.from,
       contextMenu.selectionRange.to,
@@ -2830,12 +2852,29 @@ export const DocxEditor = forwardRef<DocxEditorRef, DocxEditorProps>(function Do
             skipped,
             issues: getFolioDocumentOperationIssues(batch.operations, skipped),
             receipts: [],
+            undoHandle: null,
           };
         }
 
+        const existingUndoEntry = documentOperationUndoEntriesRef.current.at(-1);
+        if (
+          existingUndoEntry &&
+          (!view.state.doc.eq(existingUndoEntry.afterState.doc) ||
+            commentsRef.current !== existingUndoEntry.commentsAfter)
+        ) {
+          documentOperationUndoEntriesRef.current.length = 0;
+        }
+        const commentsBefore = commentsRef.current;
         const createdComments: Comment[] = [];
+        const operationView = {
+          state: view.state,
+          dispatch: (transaction: Parameters<EditorView["dispatch"]>[0]) => {
+            view.dispatch(closeHistory(transaction));
+            operationView.state = view.state;
+          },
+        };
         const result = applyFolioDocumentOperations({
-          view,
+          view: operationView,
           snapshot,
           batch,
           author: operationAuthor,
@@ -2844,13 +2883,59 @@ export const DocxEditor = forwardRef<DocxEditorRef, DocxEditorProps>(function Do
             createdComments.push(comment);
             return comment.id;
           },
+          createUndoHandle: () => ({
+            type: "documentOperationUndo",
+            id: `react-${String(documentOperationUndoHandleCursor++)}`,
+          }),
         });
 
         if (createdComments.length > 0) {
           updateComments((currentComments) => [...currentComments, ...createdComments]);
         }
 
+        if (result.undoHandle !== null) {
+          documentOperationUndoEntriesRef.current.push({
+            undoHandle: result.undoHandle,
+            afterState: view.state,
+            commentsBefore,
+            commentsAfter: commentsRef.current,
+          });
+        }
+
         return result;
+      },
+      undoDocumentOperations: (undoHandle): FolioDocumentOperationUndoResult => {
+        const entries = documentOperationUndoEntriesRef.current;
+        const entryIndex = entries.findIndex(
+          (entry) =>
+            entry.undoHandle.type === undoHandle.type && entry.undoHandle.id === undoHandle.id,
+        );
+        if (entryIndex === -1) {
+          return { status: "rejected", undoHandle, reason: "unknownHandle" };
+        }
+        if (entryIndex !== entries.length - 1) {
+          return { status: "rejected", undoHandle, reason: "notLatest" };
+        }
+
+        const entry = entries.at(-1);
+        const view = pagedEditorRef.current?.getView();
+        if (!entry || !view) {
+          return { status: "rejected", undoHandle, reason: "unknownHandle" };
+        }
+        if (
+          !view.state.doc.eq(entry.afterState.doc) ||
+          commentsRef.current !== entry.commentsAfter
+        ) {
+          return { status: "rejected", undoHandle, reason: "documentChanged" };
+        }
+        if (!(pagedEditorRef.current?.undo() ?? false)) {
+          return { status: "rejected", undoHandle, reason: "documentChanged" };
+        }
+
+        replaceComments(entry.commentsBefore);
+        entries.pop();
+        requestAnimationFrame(refreshBodyHistoryAvailability);
+        return { status: "undone", undoHandle };
       },
       applyAIEditOperations: ({
         snapshot,
@@ -2979,6 +3064,31 @@ export const DocxEditor = forwardRef<DocxEditorRef, DocxEditorProps>(function Do
         });
         return true;
       },
+      showInDocument: (target, snapshot) => {
+        const view = pagedEditorRef.current?.getView();
+        if (!view) {
+          return false;
+        }
+        const range =
+          target.type === "textRange"
+            ? resolveFolioAITextRange({ range: target, doc: view.state.doc, snapshot })
+            : resolveFolioAIBlockRange({
+                blockId: target.blockId,
+                doc: view.state.doc,
+                snapshot,
+              });
+        if (range === null) {
+          return false;
+        }
+        const { from, to } = range;
+        const $from = view.state.doc.resolve(from);
+        const $to = view.state.doc.resolve(to);
+        view.dispatch(view.state.tr.setSelection(TextSelection.between($from, $to)));
+        requestAnimationFrame(() => {
+          pagedEditorRef.current?.scrollToPosition(from);
+        });
+        return true;
+      },
       getTrackedChanges: () => {
         const view = pagedEditorRef.current?.getView();
         return view ? getTrackedChangesFromDoc(view.state.doc) : [];
@@ -2998,6 +3108,24 @@ export const DocxEditor = forwardRef<DocxEditorRef, DocxEditorProps>(function Do
         }
         const layout = pagedEditorRef.current?.getEditor()?.getLayout() ?? null;
         return getPageTextFromLayout(layout, view.state.doc, page);
+      },
+      getTargetPage: (target, snapshot) => {
+        const view = pagedEditorRef.current?.getView();
+        if (!view) {
+          return null;
+        }
+        const range =
+          target.type === "textRange"
+            ? resolveFolioAITextRange({ range: target, doc: view.state.doc, snapshot })
+            : resolveFolioAIBlockRange({
+                blockId: target.blockId,
+                doc: view.state.doc,
+                snapshot,
+              });
+        if (range === null) {
+          return null;
+        }
+        return pagedEditorRef.current?.getPageNumberForPmPos(range.from) ?? null;
       },
       getContentControls: (filter = {}) => {
         const view = pagedEditorRef.current?.getView();
@@ -3079,6 +3207,8 @@ export const DocxEditor = forwardRef<DocxEditorRef, DocxEditorProps>(function Do
       loadParsedDocument,
       loadBuffer,
       updateComments,
+      replaceComments,
+      commentsRef,
       commentsDirtyRef,
       hfEditPosition,
       refreshBodyHistoryAvailability,
@@ -3962,7 +4092,7 @@ export const DocxEditor = forwardRef<DocxEditorRef, DocxEditorProps>(function Do
                     <div
                       ref={editorContentRef}
                       style={{ position: "relative", flex: 1, minWidth: 0 }}
-                      onMouseDown={containedHandler(editorContentRef, (e) => {
+                      onMouseDown={containedHandler((e: React.MouseEvent) => {
                         // Focus editor when clicking on the background area (not the editor itself)
                         // Using mouseDown for immediate response before focus can be lost
                         if (e.target === e.currentTarget) {
@@ -4025,6 +4155,9 @@ export const DocxEditor = forwardRef<DocxEditorRef, DocxEditorProps>(function Do
                         readOnly={readOnly}
                         onDocumentChange={handleDocumentChange}
                         extensionManager={extensionManager}
+                        {...(onCopy !== undefined ? { onCopy } : {})}
+                        {...(onCut !== undefined ? { onCut } : {})}
+                        {...(onPaste !== undefined ? { onPaste } : {})}
                         {...(onReadonlyEditAttempt !== undefined
                           ? { onReadOnlyEditAttempt: onReadonlyEditAttempt }
                           : {})}
@@ -4217,7 +4350,10 @@ export const DocxEditor = forwardRef<DocxEditorRef, DocxEditorProps>(function Do
                     aria-live="polite"
                     role="status"
                   >
-                    {scrollPageInfo.currentPage} of {scrollPageInfo.totalPages}
+                    {t("viewer.pageOfTotal", {
+                      current: String(scrollPageInfo.currentPage),
+                      total: String(scrollPageInfo.totalPages),
+                    })}
                   </div>
                 )}
 
@@ -4291,6 +4427,7 @@ export const DocxEditor = forwardRef<DocxEditorRef, DocxEditorProps>(function Do
     </FolioUIProvider>
   );
 });
+/* eslint-enable prefer-arrow-callback */
 
 type MenuCheckboxItemComponent = typeof DEFAULT_COMPONENTS.Menu.CheckboxItem;
 

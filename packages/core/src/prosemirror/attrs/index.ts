@@ -36,6 +36,7 @@ import type {
   EmphasisMarkAttrs,
   FieldAttrs,
   FontFamilyAttrs,
+  LanguageAttrs,
   FontSizeAttrs,
   FootnoteRefAttrs,
   HighlightAttrs,
@@ -82,6 +83,12 @@ const IMAGE_DISPLAY_MODES = ["inline", "float", "block"] as const satisfies read
 const IMAGE_CSS_FLOATS = ["left", "right", "none"] as const satisfies readonly NonNullable<
   ImageAttrs["cssFloat"]
 >[];
+
+const TEXT_BOX_AUTO_FIT_VALUES = [
+  "none",
+  "normal",
+  "shape",
+] as const satisfies readonly NonNullable<TextBoxAttrs["autoFit"]>[];
 
 const FIELD_KINDS = ["simple", "complex"] as const satisfies readonly FieldAttrs["fieldKind"][];
 
@@ -151,6 +158,13 @@ const TRACKED_CHANGE_MOVE_KINDS = ["moveTo", "moveFrom"] as const satisfies read
   TrackedChangeMarkAttrs["moveKind"]
 >[];
 
+const TEXT_BOX_TRACKED_CHANGE_TYPES = [
+  "insertion",
+  "deletion",
+  "moveFrom",
+  "moveTo",
+] as const satisfies readonly NonNullable<TextBoxAttrs["_docxTrackedChange"]>["type"][];
+
 const HARD_BREAK_TYPES = ["column"] as const satisfies readonly NonNullable<
   HardBreakAttrs["breakType"]
 >[];
@@ -214,6 +228,7 @@ const highlightAttrsCache = new WeakMap<Mark, HighlightAttrs>();
 const runShadingAttrsCache = new WeakMap<Mark, RunShadingAttrs>();
 const fontSizeAttrsCache = new WeakMap<Mark, FontSizeAttrs>();
 const fontFamilyAttrsCache = new WeakMap<Mark, FontFamilyAttrs>();
+const languageAttrsCache = new WeakMap<Mark, LanguageAttrs>();
 const characterSpacingAttrsCache = new WeakMap<Mark, CharacterSpacingAttrs>();
 const characterStyleAttrsCache = new WeakMap<Mark, CharacterStyleAttrs>();
 const emphasisMarkAttrsCache = new WeakMap<Mark, EmphasisMarkAttrs>();
@@ -239,6 +254,9 @@ export const readParagraphAttrs = (node: PMNode): ReadProseMirrorAttrsResult<Par
     PARAGRAPH_ALIGNMENT_VALUES,
   );
   optionalString(attrs, "styleId", "paragraph.attrs.styleId", issues);
+  optionalBoolean(attrs, "kinsoku", "paragraph.attrs.kinsoku", issues);
+  optionalBoolean(attrs, "overflowPunctuation", "paragraph.attrs.overflowPunctuation", issues);
+  optionalBoolean(attrs, "suppressAutoHyphens", "paragraph.attrs.suppressAutoHyphens", issues);
   optionalNumber(attrs, "spaceBefore", "paragraph.attrs.spaceBefore", issues);
   optionalNumber(attrs, "spaceAfter", "paragraph.attrs.spaceAfter", issues);
   optionalNumber(attrs, "lineSpacing", "paragraph.attrs.lineSpacing", issues);
@@ -261,6 +279,12 @@ export const readParagraphAttrs = (node: PMNode): ReadProseMirrorAttrsResult<Par
   optionalBoolean(attrs, "listMarkerHidden", "paragraph.attrs.listMarkerHidden", issues);
   optionalString(attrs, "listMarkerFontFamily", "paragraph.attrs.listMarkerFontFamily", issues);
   optionalNumber(attrs, "listMarkerFontSize", "paragraph.attrs.listMarkerFontSize", issues);
+  optionalBoolean(attrs, "listMarkerBold", "paragraph.attrs.listMarkerBold", issues);
+  optionalOneOf(attrs, "listMarkerAlignment", "paragraph.attrs.listMarkerAlignment", issues, [
+    "left",
+    "center",
+    "right",
+  ]);
   optionalString(attrs, "listMarkerSuffix", "paragraph.attrs.listMarkerSuffix", issues);
   optionalBoolean(attrs, "listMarkerAllCaps", "paragraph.attrs.listMarkerAllCaps", issues);
   optionalNumber(
@@ -316,6 +340,12 @@ export const readParagraphAttrs = (node: PMNode): ReadProseMirrorAttrsResult<Par
   optionalTabStops(attrs, "tabs", "paragraph.attrs.tabs", issues);
   optionalRecord(attrs, "spacingExplicit", "paragraph.attrs.spacingExplicit", issues);
   optionalRecord(attrs, "spacingFromDocDefaults", "paragraph.attrs.spacingFromDocDefaults", issues);
+  optionalRecord(
+    attrs,
+    "spacingFromImplicitDefaultStyle",
+    "paragraph.attrs.spacingFromImplicitDefaultStyle",
+    issues,
+  );
   optionalTextFormatting(
     attrs,
     "defaultTextFormatting",
@@ -434,6 +464,12 @@ export const readTableCellAttrs = (node: PMNode): ReadProseMirrorAttrsResult<Tab
     TABLE_CELL_VERTICAL_ALIGNMENT_VALUES,
   );
   optionalString(attrs, "backgroundColor", "tableCell.attrs.backgroundColor", issues);
+  optionalString(
+    attrs,
+    "_resolvedBackgroundColor",
+    "tableCell.attrs._resolvedBackgroundColor",
+    issues,
+  );
   optionalOneOf(
     attrs,
     "textDirection",
@@ -447,6 +483,8 @@ export const readTableCellAttrs = (node: PMNode): ReadProseMirrorAttrsResult<Tab
     "bottom",
     "left",
     "right",
+    "topLeftToBottomRight",
+    "topRightToBottomLeft",
   ]);
   optionalInsetMap(attrs, "margins", "tableCell.attrs.margins", issues);
   optionalRecord(attrs, "_originalFormatting", "tableCell.attrs._originalFormatting", issues);
@@ -489,12 +527,14 @@ export const readImageAttrs = (node: PMNode): ReadProseMirrorAttrsResult<ImageAt
   optionalNumber(attrs, "distLeft", "image.attrs.distLeft", issues);
   optionalNumber(attrs, "distRight", "image.attrs.distRight", issues);
   optionalImagePosition(attrs, "position", "image.attrs.position", issues);
+  optionalBoolean(attrs, "layoutInCell", "image.attrs.layoutInCell", issues);
   optionalNumber(attrs, "borderWidth", "image.attrs.borderWidth", issues);
   optionalString(attrs, "borderColor", "image.attrs.borderColor", issues);
   optionalString(attrs, "borderStyle", "image.attrs.borderStyle", issues);
   optionalOneOf(attrs, "wrapText", "image.attrs.wrapText", issues, IMAGE_WRAP_TEXT_VALUES);
   optionalString(attrs, "hlinkHref", "image.attrs.hlinkHref", issues);
   optionalString(attrs, "_docxRawXml", "image.attrs._docxRawXml", issues);
+  optionalBoolean(attrs, "_docxObjectPreview", "image.attrs._docxObjectPreview", issues);
 
   return attrsResult(attrs, issues);
 };
@@ -658,6 +698,7 @@ export const readTextBoxAttrs = (node: PMNode): ReadProseMirrorAttrsResult<TextB
 
   optionalNumber(attrs, "width", "textBox.attrs.width", issues);
   optionalNumber(attrs, "height", "textBox.attrs.height", issues);
+  optionalOneOf(attrs, "autoFit", "textBox.attrs.autoFit", issues, TEXT_BOX_AUTO_FIT_VALUES);
   optionalString(attrs, "textBoxId", "textBox.attrs.textBoxId", issues);
   optionalString(attrs, "fillColor", "textBox.attrs.fillColor", issues);
   optionalNumber(attrs, "outlineWidth", "textBox.attrs.outlineWidth", issues);
@@ -691,6 +732,7 @@ export const readTextBoxAttrs = (node: PMNode): ReadProseMirrorAttrsResult<TextB
     TEXT_BOX_DOCX_PLACEMENTS,
   );
   optionalString(attrs, "_docxGroupId", "textBox.attrs._docxGroupId", issues);
+  optionalTextBoxTrackedChange(attrs, issues);
 
   return attrsResult(attrs, issues);
 };
@@ -824,6 +866,21 @@ export const readFontFamilyMarkAttrs = (
 
 export const expectFontFamilyMarkAttrs = (mark: Mark): FontFamilyAttrs =>
   expectCachedMarkAttrs(mark, fontFamilyAttrsCache, readFontFamilyMarkAttrs, "font family attrs");
+
+export const readLanguageMarkAttrs = (mark: Mark): ReadProseMirrorAttrsResult<LanguageAttrs> => {
+  const attrs = attrsRecord(mark.attrs);
+  const issues: ProseMirrorAttrIssue[] = [];
+  expectMarkType(mark, "language", issues);
+
+  optionalString(attrs, "val", "language.attrs.val", issues);
+  optionalString(attrs, "eastAsia", "language.attrs.eastAsia", issues);
+  optionalString(attrs, "bidi", "language.attrs.bidi", issues);
+
+  return attrsResult(attrs, issues);
+};
+
+export const expectLanguageMarkAttrs = (mark: Mark): LanguageAttrs =>
+  expectCachedMarkAttrs(mark, languageAttrsCache, readLanguageMarkAttrs, "language attrs");
 
 export const readCharacterSpacingMarkAttrs = (
   mark: Mark,
@@ -1450,6 +1507,39 @@ const optionalRecord = (
   if (value !== undefined && value !== null && !isRecord(value)) {
     issues.push({ path, message: "Expected an object." });
   }
+};
+
+const optionalTextBoxTrackedChange = (
+  attrs: Record<string, unknown>,
+  issues: ProseMirrorAttrIssue[],
+): void => {
+  const value = attrs["_docxTrackedChange"];
+  if (value === undefined || value === null) {
+    return;
+  }
+  if (!isRecord(value)) {
+    issues.push({ path: "textBox.attrs._docxTrackedChange", message: "Expected an object." });
+    return;
+  }
+
+  requiredOneOf(
+    value,
+    "type",
+    "textBox.attrs._docxTrackedChange.type",
+    issues,
+    TEXT_BOX_TRACKED_CHANGE_TYPES,
+  );
+  const info = value["info"];
+  if (!isRecord(info)) {
+    issues.push({
+      path: "textBox.attrs._docxTrackedChange.info",
+      message: "Expected an object.",
+    });
+    return;
+  }
+  requiredNumber(info, "id", "textBox.attrs._docxTrackedChange.info.id", issues);
+  requiredString(info, "author", "textBox.attrs._docxTrackedChange.info.author", issues);
+  optionalString(info, "date", "textBox.attrs._docxTrackedChange.info.date", issues);
 };
 
 const optionalAutospacingBase = (

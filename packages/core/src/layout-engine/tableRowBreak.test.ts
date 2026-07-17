@@ -1,8 +1,8 @@
 /**
- * Table row-break geometry + mid-content row splitting. A table row taller than
- * a whole page must break between whole text lines across pages instead of
- * overflowing and clipping content. Regression for eigenpal/docx-editor#698
- * (their #570).
+ * Table row-break geometry + mid-content row splitting. Break-permitted rows
+ * must split between whole text lines when they exceed the current flow region,
+ * including rows taller than a full page. Regression for
+ * eigenpal/docx-editor#698 (their #570).
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { layoutDocument } from "./index";
 import { clearAllCaches } from "./measure";
 import { resetCanvasContext } from "./measure/measureContainer";
-import { buildTableRowBreakInfo, snapRowBreak } from "./tableRowBreak";
+import { buildTableRowBreakInfo, getRowContinuationSkip, snapRowBreak } from "./tableRowBreak";
 import type {
   FlowBlock,
   LayoutOptions,
@@ -292,7 +292,7 @@ describe("buildTableRowBreakInfo / snapRowBreak", () => {
 
     const info = buildTableRowBreakInfo(block, measure);
 
-    expect(info.breakOffsets[0]).toEqual([20, 40, 60, 80, 96]);
+    expect(info.breakOffsets[0]).toEqual([28, 48, 68, 88, 96]);
   });
 
   test("treats height-based cell blocks as atomic break offsets", () => {
@@ -759,6 +759,128 @@ describe("buildTableRowBreakInfo / snapRowBreak", () => {
     // Not even the first line fits.
     expect(snapRowBreak(info, 0, 0, 15)).toBe(0);
   });
+
+  test("marks leading spacing before an empty continuation paragraph as suppressible", () => {
+    const block: TableBlock = {
+      kind: "table",
+      id: "t",
+      rows: [
+        {
+          id: "r0",
+          cells: [
+            {
+              id: "c0",
+              padding: { top: 0, right: 0, bottom: 0, left: 0 },
+              blocks: [
+                {
+                  kind: "paragraph",
+                  id: "first",
+                  runs: [{ kind: "text", text: "first" }],
+                },
+                {
+                  kind: "paragraph",
+                  id: "second",
+                  attrs: { spacing: { before: 16, after: 8 }, styleId: "CellText" },
+                  runs: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      columnWidths: [220],
+    };
+    const measure: TableMeasure = {
+      kind: "table",
+      rows: [
+        {
+          cells: [
+            {
+              blocks: [paraMeasure(6), paraMeasure(1)],
+              width: 220,
+              height: 164,
+            },
+          ],
+          height: 164,
+        },
+      ],
+      columnWidths: [220],
+      totalWidth: 220,
+      totalHeight: 164,
+    };
+
+    const info = buildTableRowBreakInfo(block, measure);
+
+    expect(snapRowBreak(info, 0, 0, 120)).toBe(120);
+    expect(getRowContinuationSkip(info, 0, 120)).toBe(16);
+  });
+
+  test("does not suppress a shared row band while another cell starts content", () => {
+    const block: TableBlock = {
+      kind: "table",
+      id: "t",
+      rows: [
+        {
+          id: "r0",
+          cells: [
+            {
+              id: "c0",
+              padding: { top: 0, right: 0, bottom: 0, left: 0 },
+              blocks: [
+                {
+                  kind: "paragraph",
+                  id: "left-first",
+                  runs: [{ kind: "text", text: "first" }],
+                },
+                {
+                  kind: "paragraph",
+                  id: "left-second",
+                  attrs: { spacing: { before: 16 }, styleId: "CellText" },
+                  runs: [],
+                },
+              ],
+            },
+            {
+              id: "c1",
+              padding: { top: 0, right: 0, bottom: 0, left: 0 },
+              blocks: [
+                {
+                  kind: "paragraph",
+                  id: "right-first",
+                  runs: [{ kind: "text", text: "first" }],
+                },
+                {
+                  kind: "paragraph",
+                  id: "right-second",
+                  runs: [{ kind: "text", text: "second" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      columnWidths: [110, 110],
+    };
+    const measure: TableMeasure = {
+      kind: "table",
+      rows: [
+        {
+          cells: [
+            { blocks: [paraMeasure(6), paraMeasure(1)], width: 110, height: 156 },
+            { blocks: [paraMeasure(6), paraMeasure(1)], width: 110, height: 140 },
+          ],
+          height: 156,
+        },
+      ],
+      columnWidths: [110, 110],
+      totalWidth: 220,
+      totalHeight: 156,
+    };
+
+    const info = buildTableRowBreakInfo(block, measure);
+
+    expect(getRowContinuationSkip(info, 0, 120)).toBe(0);
+  });
 });
 
 const OPTIONS: LayoutOptions = {
@@ -776,27 +898,127 @@ function tableFragments(block: TableBlock, measure: TableMeasure): TableFragment
 }
 
 describe("left-aligned table placement", () => {
-  test("keeps an unindented table border at the content edge", () => {
+  test("aligns an unindented first-cell text edge with the content edge", () => {
     const { block, measure } = tallTable(1);
     block.rows[0]!.cells[0]!.padding.left = 7;
 
-    const fragment = tableFragments(block, measure)[0];
+    const fragment = tableFragments(block, measure).at(0);
 
-    expect(fragment?.x).toBe(OPTIONS.margins.left);
+    expect(fragment?.x).toBe(OPTIONS.margins.left - 7);
+    expect((fragment?.x ?? 0) + block.rows[0]!.cells[0]!.padding.left).toBe(OPTIONS.margins.left);
   });
 
-  test("applies w:tblInd to the first cell text edge", () => {
+  test("applies an authored w:tblInd to the table border", () => {
     const { block, measure } = tallTable(1);
     block.indent = 10;
     block.rows[0]!.cells[0]!.padding.left = 7;
 
-    const fragment = tableFragments(block, measure)[0];
+    const fragment = tableFragments(block, measure).at(0);
 
-    expect(fragment?.x).toBe(OPTIONS.margins.left + 10 - 7);
+    expect(fragment?.x).toBe(OPTIONS.margins.left + 10);
+  });
+
+  test("aligns an authored zero-indent table border with the content edge", () => {
+    const { block, measure } = tallTable(1);
+    block.indent = 0;
+    block.rows[0]!.cells[0]!.padding.left = 7;
+
+    const fragment = tableFragments(block, measure).at(0);
+
+    expect(fragment?.x).toBe(OPTIONS.margins.left);
+  });
+});
+
+describe("floating table placement", () => {
+  test("allows a numeric margin-relative offset to enter the page margin", () => {
+    const { block, measure } = tallTable(1);
+    block.floating = { horzAnchor: "margin", tblpX: -20 };
+
+    const fragment = tableFragments(block, measure).at(0);
+
+    expect(fragment?.x).toBe(OPTIONS.margins.left - 20);
+  });
+
+  test("keeps an aligned margin-relative table inside the body margin", () => {
+    const { block, measure } = tallTable(1);
+    block.floating = { horzAnchor: "margin", tblpXSpec: "left" };
+
+    const fragment = tableFragments(block, measure).at(0);
+
+    expect(fragment?.x).toBe(OPTIONS.margins.left);
+  });
+
+  test("clamps a numeric margin-relative offset against the physical page", () => {
+    const { block, measure } = tallTable(1);
+    block.floating = { horzAnchor: "margin", tblpX: -80 };
+
+    const fragment = tableFragments(block, measure).at(0);
+
+    expect(fragment?.x).toBe(0);
+  });
+
+  test("clamps a page-anchored table against the page instead of the body margins", () => {
+    const { block, measure } = tallTable(1);
+    block.floating = { horzAnchor: "page", tblpX: 80 };
+
+    const fragment = tableFragments(block, measure).at(0);
+
+    expect(fragment?.x).toBe(80);
   });
 });
 
 describe("oversized table row splits across pages (#570)", () => {
+  test("consumes empty-paragraph leading spacing when a split row resumes", () => {
+    const block: TableBlock = {
+      kind: "table",
+      id: "t",
+      rows: [
+        {
+          id: "r0",
+          cells: [
+            {
+              id: "c0",
+              padding: { top: 0, right: 0, bottom: 0, left: 0 },
+              blocks: [
+                {
+                  kind: "paragraph",
+                  id: "first",
+                  runs: [{ kind: "text", text: "first" }],
+                },
+                {
+                  kind: "paragraph",
+                  id: "second",
+                  attrs: { spacing: { before: 16, after: 8 }, styleId: "CellText" },
+                  runs: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      columnWidths: [220],
+    };
+    const measure: TableMeasure = {
+      kind: "table",
+      rows: [
+        {
+          cells: [{ blocks: [paraMeasure(6), paraMeasure(1)], width: 220, height: 164 }],
+          height: 164,
+        },
+      ],
+      columnWidths: [220],
+      totalWidth: 220,
+      totalHeight: 164,
+    };
+
+    const fragments = tableFragments(block, measure);
+
+    expect(fragments).toHaveLength(2);
+    expect(fragments[0]).toMatchObject({ height: 120, bottomClip: 120 });
+    expect(fragments[1]).toMatchObject({ height: 28, topClip: 136 });
+    expect(fragments[1]?.bottomClip).toBeUndefined();
+  });
+
   test("a row taller than a page breaks at line boundaries with no content lost", () => {
     // 15 lines = 300px row, page content height = 120px (6 lines).
     const { block, measure } = tallTable(15);
@@ -871,7 +1093,7 @@ describe("oversized table row splits across pages (#570)", () => {
     expect(frags[1]?.bottomClip).toBeUndefined();
   });
 
-  test("keeps page-fitting rows whole when only remaining space is short", () => {
+  test("splits a break-permitted first row when only remaining space is short", () => {
     const spacer: FlowBlock = {
       kind: "paragraph",
       id: "spacer",
@@ -888,7 +1110,65 @@ describe("oversized table row splits across pages (#570)", () => {
       .flatMap((page) => page.fragments)
       .filter((f): f is TableFragment => f.kind === "table");
 
-    expect(frags.length).toBe(1);
+    expect(frags).toHaveLength(2);
+    expect(frags[0]).toMatchObject({ height: 40, bottomClip: 40 });
+    expect(frags[0]?.topClip).toBeUndefined();
+    expect(frags[1]).toMatchObject({ height: 60, topClip: 40 });
+    expect(frags[1]?.bottomClip).toBeUndefined();
+  });
+
+  test("splits a break-permitted row after adjacent table rows", () => {
+    const { block, measure } = tableWithHeaderTallBodyAndShortRow(4);
+    measure.rows[2] = {
+      cells: [{ blocks: [paraMeasure(3)], width: 220, height: 3 * LINE }],
+      height: 3 * LINE,
+    };
+    measure.totalHeight = 8 * LINE;
+
+    const layout = layoutDocument([block as FlowBlock], [measure as Measure], OPTIONS);
+    const firstPageTables =
+      layout.pages[0]?.fragments.filter((f): f is TableFragment => f.kind === "table") ?? [];
+    const secondPageTables =
+      layout.pages[1]?.fragments.filter((f): f is TableFragment => f.kind === "table") ?? [];
+
+    expect(firstPageTables).toHaveLength(2);
+    expect(firstPageTables[0]).toMatchObject({ fromRow: 0, toRow: 2 });
+    expect(firstPageTables[0]?.bottomClip).toBeUndefined();
+    expect(firstPageTables[1]).toMatchObject({
+      fromRow: 2,
+      toRow: 3,
+      bottomClip: LINE,
+    });
+    expect(secondPageTables).toHaveLength(1);
+    expect(secondPageTables[0]).toMatchObject({
+      fromRow: 2,
+      toRow: 3,
+      headerRowCount: 1,
+      topClip: LINE,
+    });
+    expect(secondPageTables[0]?.bottomClip).toBeUndefined();
+  });
+
+  test("keeps a cantSplit row whole when only remaining space is short", () => {
+    const spacer: FlowBlock = {
+      kind: "paragraph",
+      id: "spacer",
+      runs: [{ kind: "text", text: "spacer" }],
+    };
+    const spacerMeasure = paraMeasureWithLineHeight(1, 70);
+    const { block, measure } = tallTable(5);
+    block.rows[0]!.cantSplit = true;
+
+    const layout = layoutDocument(
+      [spacer, block as FlowBlock],
+      [spacerMeasure as Measure, measure as Measure],
+      OPTIONS,
+    );
+    const frags = layout.pages
+      .flatMap((page) => page.fragments)
+      .filter((f): f is TableFragment => f.kind === "table");
+
+    expect(frags).toHaveLength(1);
     expect(frags[0]?.topClip).toBeUndefined();
     expect(frags[0]?.bottomClip).toBeUndefined();
     expect(frags[0]?.height).toBe(100);

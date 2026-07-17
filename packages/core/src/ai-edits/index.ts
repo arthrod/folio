@@ -1,4 +1,10 @@
 export { applyFolioAIEditOperations, type FolioAIEditView } from "./apply";
+export {
+  clampRangeToDocSize,
+  resolveFolioAIBlockRange,
+  resolveFolioAITextRange,
+  type DocPositionRange,
+} from "./blockRange";
 export { buildAnnotatedBlockText } from "./clean-text";
 export {
   getCommentAnchorsFromDoc,
@@ -13,9 +19,26 @@ export {
   hashFolioAIBlockText,
   normalizeFolioAIBlockText,
 } from "./snapshot";
+export { getFolioDocumentOutline, readFolioDocumentSection } from "./scoped-reading";
 export { getFolioParaIdFromBlockId } from "../types/block-id";
 export { diffWordSegments } from "./word-diff";
-export type { FolioDocumentStory, FolioDocumentStoryHandle } from "./headless";
+export {
+  FOLIO_RESOLVED_REVIEWED_VIEWS,
+  FOLIO_REVIEWED_VIEWS,
+  FolioDocumentStoryNotFoundError,
+  UnsupportedFolioReviewedViewError,
+  isFolioResolvedReviewedView,
+  isFolioReviewedView,
+  type FolioApplyDocumentOperationsToStoryOptions,
+  type FolioDocumentStory,
+  type FolioDocumentStoryHandle,
+  type FolioEditableDocumentStoryHandle,
+  type FolioReadReviewedStoryOptions,
+  type FolioResolveReviewedStoryOptions,
+  type FolioResolvedReviewedView,
+  type FolioReviewedStory,
+  type FolioReviewedView,
+} from "./headless";
 export type { WordDiffSegment } from "./word-diff";
 export type {
   FolioAIBlock,
@@ -36,6 +59,12 @@ export type {
   FolioAIInlineFormatting,
   FolioAISignatureParty,
   FolioAITextRangeHandle,
+  FolioDocumentNavigationTarget,
+  FolioDocumentOutline,
+  FolioDocumentOutlineEntry,
+  FolioDocumentSection,
+  FolioDocumentSectionHandle,
+  FolioDocumentSectionReadResult,
 } from "./types";
 export {
   applyFolioDocumentOperations,
@@ -68,4 +97,8 @@ export {
   type FolioDocumentOperationType,
   type FolioDocumentOperationResult,
   type FolioDocumentOperationStatus,
+  type FolioDocumentOperationStory,
+  type FolioDocumentOperationUndoFailureReason,
+  type FolioDocumentOperationUndoHandle,
+  type FolioDocumentOperationUndoResult,
 } from "../document-operations";

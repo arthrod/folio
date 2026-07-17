@@ -291,6 +291,16 @@ function parseFrameProperties(
 
   const frame: ParagraphFormatting["frame"] = {};
 
+  const dropCap = getAttribute(framePr, "w", "dropCap");
+  if (dropCap === "none" || dropCap === "drop" || dropCap === "margin") {
+    frame.dropCap = dropCap;
+  }
+
+  const lines = parseNumericAttribute(framePr, "w", "lines");
+  if (lines !== undefined) {
+    frame.lines = lines;
+  }
+
   const w = parseNumericAttribute(framePr, "w", "w");
   if (w !== undefined) {
     frame.width = w;
@@ -299,6 +309,16 @@ function parseFrameProperties(
   const h = parseNumericAttribute(framePr, "w", "h");
   if (h !== undefined) {
     frame.height = h;
+  }
+
+  const hSpace = parseNumericAttribute(framePr, "w", "hSpace");
+  if (hSpace !== undefined) {
+    frame.hSpace = hSpace;
+  }
+
+  const vSpace = parseNumericAttribute(framePr, "w", "vSpace");
+  if (vSpace !== undefined) {
+    frame.vSpace = vSpace;
   }
 
   const hAnchor = getAttribute(framePr, "w", "hAnchor");
@@ -351,8 +371,10 @@ type ParagraphPropertyChildren = {
   jc?: XmlElement;
   keepLines?: XmlElement;
   keepNext?: XmlElement;
+  kinsoku?: XmlElement;
   numPr?: XmlElement;
   outlineLvl?: XmlElement;
+  overflowPunct?: XmlElement;
   pageBreakBefore?: XmlElement;
   pBdr?: XmlElement;
   pStyle?: XmlElement;
@@ -395,11 +417,17 @@ function collectFirstParagraphPropertyChildren(pPr: XmlElement): ParagraphProper
       case "keepNext":
         children.keepNext ??= child;
         break;
+      case "kinsoku":
+        children.kinsoku ??= child;
+        break;
       case "numPr":
         children.numPr ??= child;
         break;
       case "outlineLvl":
         children.outlineLvl ??= child;
+        break;
+      case "overflowPunct":
+        children.overflowPunct ??= child;
         break;
       case "pageBreakBefore":
         children.pageBreakBefore ??= child;
@@ -466,6 +494,16 @@ export function parseParagraphProperties(
 
   const formatting: ParagraphFormatting = {};
   const propertyChildren = collectFirstParagraphPropertyChildren(pPr);
+
+  const kinsoku = propertyChildren.kinsoku;
+  if (kinsoku) {
+    formatting.kinsoku = parseBooleanElement(kinsoku);
+  }
+
+  const overflowPunct = propertyChildren.overflowPunct;
+  if (overflowPunct) {
+    formatting.overflowPunctuation = parseBooleanElement(overflowPunct);
+  }
 
   // === Alignment ===
   const jc = propertyChildren.jc;
@@ -980,10 +1018,11 @@ function isTrackedChangeWrapperChild(content: ParagraphContent): content is Run 
 
 // Mirror of upstream eigenpal/docx-editor PR #482 (commit 29f95751d):
 // OOXML allows runs, hyperlinks, simple/complex fields, nested SDTs,
-// and math equations directly inside `<w:sdtContent>`. Anything else
-// that the paragraph parser produced (bookmarks, comment markers,
-// tracked-change wrappers, ...) is lifted out as a sibling of the SDT
-// so the SDT wrapper itself stays valid for round-trip serialization.
+// tracked insertions/deletions, and math equations directly inside
+// `<w:sdtContent>`. Anything else that the paragraph parser produced
+// (bookmarks, comment markers, tracked-change range markers, ...) is
+// lifted out as a sibling of the SDT so the SDT wrapper itself stays
+// valid for round-trip serialization.
 function isInlineSdtContent(content: ParagraphContent): content is InlineSdt["content"][number] {
   return (
     content.type === "run" ||
@@ -991,6 +1030,8 @@ function isInlineSdtContent(content: ParagraphContent): content is InlineSdt["co
     content.type === "simpleField" ||
     content.type === "complexField" ||
     content.type === "inlineSdt" ||
+    content.type === "insertion" ||
+    content.type === "deletion" ||
     content.type === "mathEquation"
   );
 }
@@ -1787,8 +1828,14 @@ export function parseParagraph(
         if (level.rPr?.fontSize) {
           listRendering.markerFontSize = level.rPr.fontSize / 2;
         }
+        if (level.rPr?.bold !== undefined) {
+          listRendering.markerBold = level.rPr.bold;
+        }
         if (level.rPr?.allCaps) {
           listRendering.markerAllCaps = true;
+        }
+        if (level.lvlJc) {
+          listRendering.markerAlignment = level.lvlJc;
         }
         if (level.suffix) {
           listRendering.markerSuffix = level.suffix;

@@ -27,6 +27,8 @@ import type {
   TableStructuralChangeInfo,
   TableMeasurement,
   TableBorders,
+  TableCellBorders,
+  BorderSpec,
   TableLook,
   CellMargins,
   FloatingTableProperties,
@@ -35,8 +37,9 @@ import type {
   Paragraph,
 } from "../../types/document";
 import { serializeBorder } from "./borderSerializer";
-import { serializeParagraph } from "./paragraphSerializer";
 import { escapeXml, intAttr } from "./xmlUtils";
+
+type ParagraphSerializer = (paragraph: Paragraph) => string;
 
 function normalizeTrackedChangeInfo(info: { id: number; author: string; date?: string }): {
   id: number;
@@ -97,60 +100,56 @@ function serializeMeasurement(
 /**
  * Serialize table borders (w:tblBorders or w:tcBorders)
  */
+function serializeTableBorderParts(borders: TableBorders): string[] {
+  const parts: string[] = [];
+
+  const appendBorder = (border: BorderSpec | undefined, name: string): void => {
+    const xml = serializeBorder(border, name);
+    if (xml) {
+      parts.push(xml);
+    }
+  };
+
+  appendBorder(borders.top, "top");
+  appendBorder(borders.left, "left");
+  appendBorder(borders.bottom, "bottom");
+  appendBorder(borders.right, "right");
+  appendBorder(borders.insideH, "insideH");
+  appendBorder(borders.insideV, "insideV");
+
+  return parts;
+}
+
 function serializeTableBorders(borders: TableBorders | undefined, elementName: string): string {
   if (!borders) {
     return "";
   }
 
-  const parts: string[] = [];
-
-  if (borders.top) {
-    const topXml = serializeBorder(borders.top, "top");
-    if (topXml) {
-      parts.push(topXml);
-    }
-  }
-
-  if (borders.left) {
-    const leftXml = serializeBorder(borders.left, "left");
-    if (leftXml) {
-      parts.push(leftXml);
-    }
-  }
-
-  if (borders.bottom) {
-    const bottomXml = serializeBorder(borders.bottom, "bottom");
-    if (bottomXml) {
-      parts.push(bottomXml);
-    }
-  }
-
-  if (borders.right) {
-    const rightXml = serializeBorder(borders.right, "right");
-    if (rightXml) {
-      parts.push(rightXml);
-    }
-  }
-
-  if (borders.insideH) {
-    const insideHXml = serializeBorder(borders.insideH, "insideH");
-    if (insideHXml) {
-      parts.push(insideHXml);
-    }
-  }
-
-  if (borders.insideV) {
-    const insideVXml = serializeBorder(borders.insideV, "insideV");
-    if (insideVXml) {
-      parts.push(insideVXml);
-    }
-  }
+  const parts = serializeTableBorderParts(borders);
 
   if (parts.length === 0) {
     return "";
   }
 
   return `<w:${elementName}>${parts.join("")}</w:${elementName}>`;
+}
+
+function serializeTableCellBorders(borders: TableCellBorders | undefined): string {
+  if (!borders) {
+    return "";
+  }
+
+  const parts = serializeTableBorderParts(borders);
+  const topLeftToBottomRight = serializeBorder(borders.topLeftToBottomRight, "tl2br");
+  if (topLeftToBottomRight) {
+    parts.push(topLeftToBottomRight);
+  }
+  const topRightToBottomLeft = serializeBorder(borders.topRightToBottomLeft, "tr2bl");
+  if (topRightToBottomLeft) {
+    parts.push(topRightToBottomLeft);
+  }
+
+  return parts.length > 0 ? `<w:tcBorders>${parts.join("")}</w:tcBorders>` : "";
 }
 
 // ============================================================================
@@ -482,6 +481,26 @@ export function serializeTableRowFormatting(
   const parts: string[] = [];
 
   if (formatting) {
+    if (formatting.gridBefore) {
+      parts.push(`<w:gridBefore w:val="${intAttr(formatting.gridBefore)}"/>`);
+    }
+
+    if (formatting.widthBefore) {
+      parts.push(
+        `<w:wBefore w:w="${intAttr(formatting.widthBefore.value)}" w:type="${formatting.widthBefore.type}"/>`,
+      );
+    }
+
+    if (formatting.gridAfter) {
+      parts.push(`<w:gridAfter w:val="${intAttr(formatting.gridAfter)}"/>`);
+    }
+
+    if (formatting.widthAfter) {
+      parts.push(
+        `<w:wAfter w:w="${intAttr(formatting.widthAfter.value)}" w:type="${formatting.widthAfter.type}"/>`,
+      );
+    }
+
     // Can't split
     if (formatting.cantSplit) {
       parts.push("<w:cantSplit/>");
@@ -631,7 +650,7 @@ export function serializeTableCellFormatting(
     }
 
     // Cell borders
-    const bordersXml = serializeTableBorders(formatting.borders, "tcBorders");
+    const bordersXml = serializeTableCellBorders(formatting.borders);
     if (bordersXml) {
       parts.push(bordersXml);
     }
@@ -736,14 +755,17 @@ function serializeTableGrid(columnWidths: number[] | undefined): string {
 /**
  * Serialize cell content (paragraphs, nested tables)
  */
-function serializeCellContent(content: (Paragraph | Table)[]): string {
+function serializeCellContent(
+  content: (Paragraph | Table)[],
+  serializeParagraph: ParagraphSerializer,
+): string {
   const parts: string[] = [];
 
   for (const item of content) {
     if (item.type === "paragraph") {
       parts.push(serializeParagraph(item));
     } else {
-      parts.push(serializeTable(item));
+      parts.push(serializeTable(item, serializeParagraph));
     }
   }
 
@@ -762,7 +784,10 @@ function serializeCellContent(content: (Paragraph | Table)[]): string {
 /**
  * Serialize a table cell (w:tc)
  */
-export function serializeTableCell(cell: TableCell): string {
+export function serializeTableCell(
+  cell: TableCell,
+  serializeParagraph: ParagraphSerializer,
+): string {
   const parts: string[] = [];
 
   // Cell properties
@@ -776,7 +801,7 @@ export function serializeTableCell(cell: TableCell): string {
   }
 
   // Cell content
-  parts.push(serializeCellContent(cell.content));
+  parts.push(serializeCellContent(cell.content, serializeParagraph));
 
   return `<w:tc>${parts.join("")}</w:tc>`;
 }
@@ -788,7 +813,7 @@ export function serializeTableCell(cell: TableCell): string {
 /**
  * Serialize a table row (w:tr)
  */
-export function serializeTableRow(row: TableRow): string {
+export function serializeTableRow(row: TableRow, serializeParagraph: ParagraphSerializer): string {
   const parts: string[] = [];
 
   // Row properties
@@ -803,7 +828,7 @@ export function serializeTableRow(row: TableRow): string {
 
   // Cells
   for (const cell of row.cells) {
-    parts.push(serializeTableCell(cell));
+    parts.push(serializeTableCell(cell, serializeParagraph));
   }
 
   return `<w:tr>${parts.join("")}</w:tr>`;
@@ -819,7 +844,7 @@ export function serializeTableRow(row: TableRow): string {
  * @param table - The table to serialize
  * @returns XML string for the table
  */
-export function serializeTable(table: Table): string {
+export function serializeTable(table: Table, serializeParagraph: ParagraphSerializer): string {
   const parts: string[] = [];
 
   // Table properties
@@ -836,7 +861,7 @@ export function serializeTable(table: Table): string {
 
   // Rows
   for (const row of table.rows) {
-    parts.push(serializeTableRow(row));
+    parts.push(serializeTableRow(row, serializeParagraph));
   }
 
   return `<w:tbl>${parts.join("")}</w:tbl>`;
@@ -848,8 +873,8 @@ export function serializeTable(table: Table): string {
  * @param tables - The tables to serialize
  * @returns XML string for all tables
  */
-export function serializeTables(tables: Table[]): string {
-  return tables.map(serializeTable).join("");
+export function serializeTables(tables: Table[], serializeParagraph: ParagraphSerializer): string {
+  return tables.map((table) => serializeTable(table, serializeParagraph)).join("");
 }
 
 // ============================================================================

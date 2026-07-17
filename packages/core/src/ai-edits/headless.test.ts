@@ -14,13 +14,21 @@ import { EditorState } from "prosemirror-state";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
+import { buildTextBoxTableDocument, findTextBoxShape } from "../__tests__/textBoxTableDocument";
 import { parseDocx } from "../docx/parser";
-import { repackDocx } from "../docx/rezip";
+import { ensureParaIds } from "../docx/ensureParaIds";
+import { createEmptyDocx, repackDocx } from "../docx/rezip";
 import { updateDocumentContent } from "../prosemirror/conversion/fromProseDoc";
 import { toProseDoc } from "../prosemirror/conversion/toProseDoc";
 import { ensureParaIdsInState } from "../prosemirror/extensions/features/ParaIdAllocatorExtension";
 import { schema, singletonManager } from "../prosemirror/schema";
-import { FolioDocxReviewer, applyFolioAIEditsToBuffer } from "./headless";
+import type { HeaderFooter } from "../types/document";
+import {
+  FolioDocumentStoryNotFoundError,
+  FolioDocxReviewer,
+  UnsupportedFolioReviewedViewError,
+  applyFolioAIEditsToBuffer,
+} from "./headless";
 import type { FolioReviewChange } from "./headless";
 import type { FolioAIBlock } from "./types";
 
@@ -32,6 +40,40 @@ const FIXTURE = path.join(
 const readFixture = (): ArrayBuffer => {
   const bytes = readFileSync(FIXTURE);
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+};
+
+const HEADER_RELATIONSHIP_ID = "rId_header_story";
+const FOOTER_RELATIONSHIP_ID = "rId_footer_story";
+
+const textStory = (type: "header" | "footer", text: string, paraId: string): HeaderFooter => ({
+  type,
+  hdrFtrType: "default",
+  content: [
+    {
+      type: "paragraph",
+      paraId,
+      content: [{ type: "run", content: [{ type: "text", text }] }],
+    },
+  ],
+});
+
+const makeHeaderFooterBaseline = async (): Promise<ArrayBuffer> => {
+  const source = await createEmptyDocx();
+  const document = await parseDocx(source, { detectVariables: false, preloadFonts: false });
+  document.package.headers = new Map([
+    [HEADER_RELATIONSHIP_ID, textStory("header", "Header text", "A1000001")],
+  ]);
+  document.package.footers = new Map([
+    [FOOTER_RELATIONSHIP_ID, textStory("footer", "Footer text", "A1000002")],
+  ]);
+  document.package.document.finalSectionProperties = {
+    ...document.package.document.finalSectionProperties,
+    headerReferences: [{ type: "default", rId: HEADER_RELATIONSHIP_ID }],
+    footerReferences: [{ type: "default", rId: FOOTER_RELATIONSHIP_ID }],
+  };
+  const materialized = await repackDocx(document, { updateModifiedDate: false });
+  const { docx } = await ensureParaIds(materialized);
+  return new Uint8Array(docx).buffer;
 };
 
 /**
@@ -94,6 +136,516 @@ const findBlock = (blocks: FolioAIBlock[], needle: string): FolioAIBlock => {
 };
 
 describe("headless docx review round-trip", () => {
+  test("edits a table cell inside shape text and preserves its container", async () => {
+    const baseline = await buildTextBoxTableDocument();
+    const reviewer = await FolioDocxReviewer.fromBuffer(baseline);
+    const target = findBlock(reviewer.snapshot().blocks, "Cell value");
+
+    const result = reviewer.applyOperations(
+      [
+        {
+          id: "replace-shape-table-cell",
+          type: "replaceInBlock",
+          blockId: target.id,
+          find: "Cell value",
+          replace: "Updated value",
+        },
+      ],
+      { mode: "direct" },
+    );
+
+    expect(result.applied.map(({ id }) => id)).toEqual(["replace-shape-table-cell"]);
+    expect(result.skipped).toEqual([]);
+
+    const saved = await reviewer.toBuffer();
+    const documentXml = await partText(saved, "word/document.xml");
+    expect(documentXml).toContain("<wps:txbx><w:txbxContent>");
+    expect(documentXml).toContain("<w:tbl>");
+    expect(documentXml).toContain("Updated value");
+    expect(documentXml).not.toContain("Cell value");
+
+    const reparsed = await parseDocx(saved, { detectVariables: false, preloadFonts: false });
+    const shape = findTextBoxShape(reparsed);
+    expect(shape.size).toEqual({ width: 1_828_800, height: 914_400 });
+    expect(shape.textBody?.margins).toEqual({
+      top: 45_720,
+      bottom: 45_720,
+      left: 91_440,
+      right: 91_440,
+    });
+    expect(shape.textBody?.content.map(({ type }) => type)).toEqual([
+      "paragraph",
+      "table",
+      "paragraph",
+    ]);
+
+    const table = shape.textBody?.content.at(1);
+    expect(table?.type).toBe("table");
+    if (table?.type !== "table") {
+      throw new Error("expected a nested table");
+    }
+    const cellParagraph = table.rows.at(0)?.cells.at(0)?.content.at(0);
+    expect(cellParagraph?.type).toBe("paragraph");
+    expect(
+      await FolioDocxReviewer.fromBuffer(saved).then((reopened) => reopened.getContentAsText()),
+    ).toContain("Updated value");
+  });
+
+  test("inserts, persists, and undoes a row inside shape text", async () => {
+    const baseline = await buildTextBoxTableDocument();
+    const reviewer = await FolioDocxReviewer.fromBuffer(baseline);
+    const target = findBlock(reviewer.snapshot().blocks, "Cell value");
+
+    const rejected = reviewer.applyDocumentOperations({
+      version: 1,
+      mode: "direct",
+      atomic: true,
+      operations: [
+        {
+          id: "insert-row",
+          type: "insertTableRow",
+          blockId: target.id,
+          cellTexts: ["Added value"],
+        },
+        { id: "missing", type: "deleteBlock", blockId: "para-missing" },
+      ],
+    });
+
+    expect(rejected.status).toBe("rejected");
+    expect(rejected.applied).toEqual([]);
+    expect(reviewer.getContentAsText()).not.toContain("Added value");
+
+    const result = reviewer.applyDocumentOperations({
+      version: 1,
+      mode: "direct",
+      operations: [
+        {
+          id: "insert-row",
+          type: "insertTableRow",
+          blockId: target.id,
+          cellTexts: ["Added value"],
+        },
+      ],
+    });
+
+    expect(result.status).toBe("committed");
+    expect(result.applied).toEqual([{ id: "insert-row" }]);
+    expect(result.receipts).toEqual([
+      {
+        operationId: "insert-row",
+        operationIndex: 0,
+        affected: [
+          {
+            type: "insertion",
+            story: "main",
+            anchorBlockId: target.id,
+            position: "after",
+            content: "tableRow",
+          },
+        ],
+      },
+    ]);
+
+    const saved = await reviewer.toBuffer();
+    const reparsed = await parseDocx(saved, { detectVariables: false, preloadFonts: false });
+    const table = findTextBoxShape(reparsed).textBody?.content.at(1);
+    expect(table?.type).toBe("table");
+    if (table?.type !== "table") {
+      throw new Error("expected a nested table");
+    }
+    expect(table.rows).toHaveLength(2);
+    expect(table.rows.at(0)?.cells.at(0)?.content.at(0)?.type).toBe("paragraph");
+    expect(table.rows.at(1)?.cells.at(0)?.content.at(0)?.type).toBe("paragraph");
+    expect((await FolioDocxReviewer.fromBuffer(saved)).getContentAsText()).toContain("Added value");
+
+    if (!result.undoHandle) {
+      throw new Error("expected an undo handle");
+    }
+    expect(reviewer.undoDocumentOperations(result.undoHandle)).toEqual({
+      status: "undone",
+      undoHandle: result.undoHandle,
+    });
+    expect(reviewer.getContentAsText()).not.toContain("Added value");
+    const restored = await parseDocx(await reviewer.toBuffer(), {
+      detectVariables: false,
+      preloadFonts: false,
+    });
+    const restoredTable = findTextBoxShape(restored).textBody?.content.at(1);
+    expect(restoredTable?.type).toBe("table");
+    if (restoredTable?.type !== "table") {
+      throw new Error("expected a nested table");
+    }
+    expect(restoredTable.rows).toHaveLength(1);
+  });
+
+  test("deletes, persists, and undoes a row inside shape text", async () => {
+    const baseline = await buildTextBoxTableDocument();
+    const reviewer = await FolioDocxReviewer.fromBuffer(baseline);
+    const target = findBlock(reviewer.snapshot().blocks, "Cell value");
+
+    const rejected = reviewer.applyDocumentOperations({
+      version: 1,
+      mode: "direct",
+      atomic: true,
+      operations: [
+        {
+          id: "delete-row",
+          type: "deleteTableRow",
+          blockId: target.id,
+        },
+        { id: "missing", type: "deleteBlock", blockId: "para-missing" },
+      ],
+    });
+
+    expect(rejected.status).toBe("rejected");
+    expect(rejected.applied).toEqual([]);
+    expect(reviewer.getContentAsText()).toContain("Cell value");
+
+    const result = reviewer.applyDocumentOperations({
+      version: 1,
+      mode: "direct",
+      operations: [
+        {
+          id: "delete-row",
+          type: "deleteTableRow",
+          blockId: target.id,
+        },
+      ],
+    });
+
+    expect(result.status).toBe("committed");
+    expect(result.applied).toEqual([{ id: "delete-row" }]);
+    expect(result.receipts).toEqual([
+      {
+        operationId: "delete-row",
+        operationIndex: 0,
+        affected: [
+          {
+            type: "tableRow",
+            story: "main",
+            anchorBlockId: target.id,
+            effect: "deleted",
+          },
+        ],
+      },
+    ]);
+
+    const saved = await reviewer.toBuffer();
+    const reparsed = await parseDocx(saved, { detectVariables: false, preloadFonts: false });
+    expect(findTextBoxShape(reparsed).textBody?.content.map(({ type }) => type)).toEqual([
+      "paragraph",
+      "paragraph",
+    ]);
+    expect((await FolioDocxReviewer.fromBuffer(saved)).getContentAsText()).not.toContain(
+      "Cell value",
+    );
+
+    if (!result.undoHandle) {
+      throw new Error("expected an undo handle");
+    }
+    expect(reviewer.undoDocumentOperations(result.undoHandle)).toEqual({
+      status: "undone",
+      undoHandle: result.undoHandle,
+    });
+    expect(reviewer.getContentAsText()).toContain("Cell value");
+    const restored = await parseDocx(await reviewer.toBuffer(), {
+      detectVariables: false,
+      preloadFonts: false,
+    });
+    const restoredTable = findTextBoxShape(restored).textBody?.content.at(1);
+    expect(restoredTable?.type).toBe("table");
+    if (restoredTable?.type !== "table") {
+      throw new Error("expected a nested table");
+    }
+    expect(restoredTable.rows).toHaveLength(1);
+  });
+
+  test("inserts, persists, and undoes a column inside shape text", async () => {
+    const baseline = await buildTextBoxTableDocument();
+    const reviewer = await FolioDocxReviewer.fromBuffer(baseline);
+    const target = findBlock(reviewer.snapshot().blocks, "Cell value");
+
+    const rejected = reviewer.applyDocumentOperations({
+      version: 1,
+      mode: "direct",
+      atomic: true,
+      operations: [
+        {
+          id: "insert-column",
+          type: "insertTableColumn",
+          blockId: target.id,
+          cellTexts: ["Added value"],
+        },
+        { id: "missing", type: "deleteBlock", blockId: "para-missing" },
+      ],
+    });
+
+    expect(rejected.status).toBe("rejected");
+    expect(rejected.applied).toEqual([]);
+    expect(reviewer.getContentAsText()).not.toContain("Added value");
+
+    const result = reviewer.applyDocumentOperations({
+      version: 1,
+      mode: "direct",
+      operations: [
+        {
+          id: "insert-column",
+          type: "insertTableColumn",
+          blockId: target.id,
+          cellTexts: ["Added value"],
+        },
+      ],
+    });
+
+    expect(result.status).toBe("committed");
+    expect(result.applied).toEqual([{ id: "insert-column" }]);
+    expect(result.receipts).toEqual([
+      {
+        operationId: "insert-column",
+        operationIndex: 0,
+        affected: [
+          {
+            type: "insertion",
+            story: "main",
+            anchorBlockId: target.id,
+            position: "after",
+            content: "tableColumn",
+          },
+        ],
+      },
+    ]);
+
+    const saved = await reviewer.toBuffer();
+    const reparsed = await parseDocx(saved, { detectVariables: false, preloadFonts: false });
+    const table = findTextBoxShape(reparsed).textBody?.content.at(1);
+    expect(table?.type).toBe("table");
+    if (table?.type !== "table") {
+      throw new Error("expected a nested table");
+    }
+    expect(table.rows).toHaveLength(1);
+    expect(table.rows.at(0)?.cells).toHaveLength(2);
+    expect((await FolioDocxReviewer.fromBuffer(saved)).getContentAsText()).toContain("Added value");
+
+    if (!result.undoHandle) {
+      throw new Error("expected an undo handle");
+    }
+    expect(reviewer.undoDocumentOperations(result.undoHandle)).toEqual({
+      status: "undone",
+      undoHandle: result.undoHandle,
+    });
+    expect(reviewer.getContentAsText()).not.toContain("Added value");
+    const restored = await parseDocx(await reviewer.toBuffer(), {
+      detectVariables: false,
+      preloadFonts: false,
+    });
+    const restoredTable = findTextBoxShape(restored).textBody?.content.at(1);
+    expect(restoredTable?.type).toBe("table");
+    if (restoredTable?.type !== "table") {
+      throw new Error("expected a nested table");
+    }
+    expect(restoredTable.rows.at(0)?.cells).toHaveLength(1);
+  });
+
+  test("deletes, persists, and undoes a column inside shape text", async () => {
+    const baseline = await buildTextBoxTableDocument();
+    const reviewer = await FolioDocxReviewer.fromBuffer(baseline);
+    const target = findBlock(reviewer.snapshot().blocks, "Cell value");
+
+    const rejected = reviewer.applyDocumentOperations({
+      version: 1,
+      mode: "direct",
+      atomic: true,
+      operations: [
+        {
+          id: "delete-column",
+          type: "deleteTableColumn",
+          blockId: target.id,
+        },
+        { id: "missing", type: "deleteBlock", blockId: "para-missing" },
+      ],
+    });
+
+    expect(rejected.status).toBe("rejected");
+    expect(rejected.applied).toEqual([]);
+    expect(reviewer.getContentAsText()).toContain("Cell value");
+
+    const result = reviewer.applyDocumentOperations({
+      version: 1,
+      mode: "direct",
+      operations: [
+        {
+          id: "delete-column",
+          type: "deleteTableColumn",
+          blockId: target.id,
+        },
+      ],
+    });
+
+    expect(result.status).toBe("committed");
+    expect(result.applied).toEqual([{ id: "delete-column" }]);
+    expect(result.receipts).toEqual([
+      {
+        operationId: "delete-column",
+        operationIndex: 0,
+        affected: [
+          {
+            type: "tableColumn",
+            story: "main",
+            anchorBlockId: target.id,
+            effect: "deleted",
+          },
+        ],
+      },
+    ]);
+
+    const saved = await reviewer.toBuffer();
+    const reparsed = await parseDocx(saved, { detectVariables: false, preloadFonts: false });
+    expect(findTextBoxShape(reparsed).textBody?.content.map(({ type }) => type)).toEqual([
+      "paragraph",
+      "paragraph",
+    ]);
+    expect((await FolioDocxReviewer.fromBuffer(saved)).getContentAsText()).not.toContain(
+      "Cell value",
+    );
+
+    if (!result.undoHandle) {
+      throw new Error("expected an undo handle");
+    }
+    expect(reviewer.undoDocumentOperations(result.undoHandle)).toEqual({
+      status: "undone",
+      undoHandle: result.undoHandle,
+    });
+    expect(reviewer.getContentAsText()).toContain("Cell value");
+    const restored = await parseDocx(await reviewer.toBuffer(), {
+      detectVariables: false,
+      preloadFonts: false,
+    });
+    const restoredTable = findTextBoxShape(restored).textBody?.content.at(1);
+    expect(restoredTable?.type).toBe("table");
+    if (restoredTable?.type !== "table") {
+      throw new Error("expected a nested table");
+    }
+    expect(restoredTable.rows.at(0)?.cells).toHaveLength(1);
+  });
+
+  test("edits a header through story-scoped document operations", async () => {
+    const baseline = await makeHeaderFooterBaseline();
+    const story = { type: "header", relationshipId: HEADER_RELATIONSHIP_ID } as const;
+    const reviewer = await FolioDocxReviewer.fromBuffer(baseline, { author: "Reviewer" });
+    const snapshot = reviewer.snapshotStory(story);
+    if (!snapshot) {
+      throw new Error("expected the header story");
+    }
+    const target = findBlock(snapshot.blocks, "Header text");
+
+    const result = reviewer.applyDocumentOperationsToStory({
+      story,
+      snapshot,
+      batch: {
+        version: 1,
+        mode: "direct",
+        operations: [
+          {
+            id: "header-replace",
+            type: "replaceInBlock",
+            blockId: target.id,
+            find: "Header text",
+            replace: "Updated header",
+          },
+        ],
+      },
+    });
+
+    expect(result.status).toBe("committed");
+    expect(result.applied.map(({ id }) => id)).toEqual(["header-replace"]);
+    expect(result.receipts.at(0)?.affected.at(0)).toEqual({
+      type: "block",
+      story,
+      blockId: target.id,
+      effect: "updated",
+    });
+    expect(reviewer.readStory(story)?.text).toBe("Updated header");
+    expect(reviewer.getNotesAsText()).toContain("[header default] Updated header");
+
+    const saved = await reviewer.toBuffer();
+    const headerXml = await partText(saved, "word/header1.xml");
+    expect(headerXml).toContain("Updated header");
+    expect(headerXml).not.toContain("Header text");
+    expect(headerXml).not.toContain("<w:ins ");
+    expect(headerXml).not.toContain("<w:del ");
+    expect(await partBytes(saved, "word/document.xml")).toEqual(
+      await partBytes(baseline, "word/document.xml"),
+    );
+    expect(await partBytes(saved, "word/footer1.xml")).toEqual(
+      await partBytes(baseline, "word/footer1.xml"),
+    );
+
+    const reopened = await FolioDocxReviewer.fromBuffer(saved);
+    expect(reopened.readStory(story)?.text).toBe("Updated header");
+  });
+
+  test("tracks and undoes a footer operation batch", async () => {
+    const baseline = await makeHeaderFooterBaseline();
+    const story = { type: "footer", relationshipId: FOOTER_RELATIONSHIP_ID } as const;
+    const reviewer = await FolioDocxReviewer.fromBuffer(baseline, { author: "Reviewer" });
+    const snapshot = reviewer.snapshotStory(story);
+    if (!snapshot) {
+      throw new Error("expected the footer story");
+    }
+    const target = findBlock(snapshot.blocks, "Footer text");
+
+    const result = reviewer.applyDocumentOperationsToStory({
+      story,
+      snapshot,
+      batch: {
+        version: 1,
+        mode: "tracked-changes",
+        operations: [
+          {
+            id: "footer-replace",
+            type: "replaceInBlock",
+            blockId: target.id,
+            find: "Footer text",
+            replace: "Updated footer",
+          },
+        ],
+      },
+    });
+
+    expect(result.status).toBe("committed");
+    const saved = await reviewer.toBuffer();
+    const footerXml = await partText(saved, "word/footer1.xml");
+    expect(footerXml).toContain("Updated");
+    expect(footerXml).toContain("footer");
+    expect(footerXml).toContain("<w:ins ");
+    expect(footerXml).toContain("<w:del ");
+    expect(footerXml).toContain('w:author="Reviewer"');
+
+    if (!result.undoHandle) {
+      throw new Error("expected an undo handle");
+    }
+    expect(reviewer.undoDocumentOperations(result.undoHandle)).toEqual({
+      status: "undone",
+      undoHandle: result.undoHandle,
+    });
+    expect(reviewer.readStory(story)?.text).toBe("Footer text");
+    expect(await partBytes(await reviewer.toBuffer(), "word/footer1.xml")).toEqual(
+      await partBytes(baseline, "word/footer1.xml"),
+    );
+  });
+
+  test("rejects a missing editable story before applying operations", async () => {
+    const reviewer = await FolioDocxReviewer.fromBuffer(await makeHeaderFooterBaseline());
+    const story = { type: "header", relationshipId: "missing" } as const;
+    expect(reviewer.snapshotStory(story)).toBeNull();
+    expect(() =>
+      reviewer.applyDocumentOperationsToStory({
+        story,
+        batch: { version: 1, operations: [] },
+      }),
+    ).toThrow(FolioDocumentStoryNotFoundError);
+  });
+
   test("replaceInBlock (direct) rewrites the text with no tracked marks", async () => {
     const baseline = await makeParaIdBaseline(readFixture());
     const reviewer = await FolioDocxReviewer.fromBuffer(baseline, { author: "AI" });
@@ -155,6 +707,7 @@ describe("headless docx review round-trip", () => {
     const baseline = await makeParaIdBaseline(readFixture());
     const reviewer = await FolioDocxReviewer.fromBuffer(baseline, { author: "AI Reviewer" });
     const target = findBlock(reviewer.snapshot().blocks, "Heading");
+    const contentBefore = reviewer.getContentAsText();
 
     const result = reviewer.applyDocumentOperations({
       version: 1,
@@ -181,7 +734,20 @@ describe("headless docx review round-trip", () => {
         affected: [{ type: "block", story: "main", blockId: target.id, effect: "updated" }],
       },
     ]);
+    expect(result.undoHandle).toEqual({
+      type: "documentOperationUndo",
+      id: expect.any(String),
+    });
     expect(await partText(await reviewer.toBuffer(), "word/document.xml")).toContain("<w:ins ");
+    if (!result.undoHandle) {
+      throw new Error("expected an undo handle");
+    }
+    expect(reviewer.undoDocumentOperations(result.undoHandle)).toEqual({
+      status: "undone",
+      undoHandle: result.undoHandle,
+    });
+    expect(reviewer.getContentAsText()).toBe(contentBefore);
+    expect(reviewer.getChanges()).toEqual([]);
   });
 
   test("atomic batches reject every operation without document or comment changes", async () => {
@@ -234,6 +800,7 @@ describe("headless docx review round-trip", () => {
         },
       ],
       receipts: [],
+      undoHandle: null,
     });
     expect(reviewer.getContentAsText()).toBe(contentBefore);
     expect(reviewer.getComments()).toEqual([]);
@@ -243,6 +810,7 @@ describe("headless docx review round-trip", () => {
     const baseline = await makeParaIdBaseline(readFixture());
     const reviewer = await FolioDocxReviewer.fromBuffer(baseline, { author: "AI Reviewer" });
     const target = findBlock(reviewer.snapshot().blocks, "Heading");
+    const contentBefore = reviewer.getContentAsText();
 
     const result = reviewer.applyDocumentOperations({
       version: 1,
@@ -295,6 +863,142 @@ describe("headless docx review round-trip", () => {
     expect(reviewer.getContentAsText()).toContain("Intro paragraph.");
     expect(reviewer.getContentAsText()).toContain("New clause.");
     expect(reviewer.getComments()).toHaveLength(1);
+    expect(result.undoHandle).toEqual({
+      type: "documentOperationUndo",
+      id: expect.any(String),
+    });
+    if (!result.undoHandle) {
+      throw new Error("expected an undo handle");
+    }
+    expect(reviewer.undoDocumentOperations(result.undoHandle)).toEqual({
+      status: "undone",
+      undoHandle: result.undoHandle,
+    });
+    expect(reviewer.getContentAsText()).toBe(contentBefore);
+    expect(reviewer.getComments()).toEqual([]);
+
+    const reparsed = await FolioDocxReviewer.fromBuffer(await reviewer.toBuffer());
+    expect(reparsed.getContentAsText()).toBe(contentBefore);
+    expect(reparsed.getComments()).toEqual([]);
+  });
+
+  test("undo handles reject unknown, out-of-order, and changed document state", async () => {
+    const baseline = await makeParaIdBaseline(readFixture());
+    const reviewer = await FolioDocxReviewer.fromBuffer(baseline);
+    const skipped = reviewer.applyDocumentOperations({
+      version: 1,
+      mode: "direct",
+      operations: [{ id: "missing", type: "deleteBlock", blockId: "missing" }],
+    });
+    expect(skipped.status).toBe("committed");
+    expect(skipped.undoHandle).toBeNull();
+    const heading = findBlock(reviewer.snapshot().blocks, "Heading");
+    const first = reviewer.applyDocumentOperations({
+      version: 1,
+      mode: "direct",
+      operations: [
+        {
+          id: "first",
+          type: "replaceInBlock",
+          blockId: heading.id,
+          find: "Heading",
+          replace: "Intro",
+        },
+      ],
+    });
+    const trailing = findBlock(reviewer.snapshot().blocks, "Trailing");
+    const second = reviewer.applyDocumentOperations({
+      version: 1,
+      mode: "direct",
+      operations: [
+        {
+          id: "second",
+          type: "replaceInBlock",
+          blockId: trailing.id,
+          find: "Trailing",
+          replace: "Closing",
+        },
+      ],
+    });
+    if (!first.undoHandle || !second.undoHandle) {
+      throw new Error("expected undo handles");
+    }
+
+    expect(reviewer.undoDocumentOperations(first.undoHandle)).toEqual({
+      status: "rejected",
+      undoHandle: first.undoHandle,
+      reason: "notLatest",
+    });
+    expect(reviewer.undoDocumentOperations(second.undoHandle)).toEqual({
+      status: "undone",
+      undoHandle: second.undoHandle,
+    });
+    expect(reviewer.undoDocumentOperations(first.undoHandle)).toEqual({
+      status: "undone",
+      undoHandle: first.undoHandle,
+    });
+    const unknownHandle = { type: "documentOperationUndo", id: "unknown" } as const;
+    expect(reviewer.undoDocumentOperations(unknownHandle)).toEqual({
+      status: "rejected",
+      undoHandle: unknownHandle,
+      reason: "unknownHandle",
+    });
+
+    const changedReviewer = await FolioDocxReviewer.fromBuffer(baseline);
+    const changedTarget = findBlock(changedReviewer.snapshot().blocks, "Heading");
+    const changed = changedReviewer.applyDocumentOperations({
+      version: 1,
+      operations: [
+        {
+          id: "changed",
+          type: "replaceInBlock",
+          blockId: changedTarget.id,
+          find: "Heading",
+          replace: "Intro",
+        },
+      ],
+    });
+    if (!changed.undoHandle) {
+      throw new Error("expected an undo handle");
+    }
+    expect(changedReviewer.undoDocumentOperations(first.undoHandle)).toEqual({
+      status: "rejected",
+      undoHandle: first.undoHandle,
+      reason: "unknownHandle",
+    });
+
+    const commentReviewer = await FolioDocxReviewer.fromBuffer(baseline);
+    const commentTarget = findBlock(commentReviewer.snapshot().blocks, "Heading");
+    const commented = commentReviewer.applyDocumentOperations({
+      version: 1,
+      mode: "direct",
+      operations: [
+        {
+          id: "commented",
+          type: "commentOnBlock",
+          blockId: commentTarget.id,
+          comment: { text: "Review this." },
+        },
+      ],
+    });
+    const parentComment = commentReviewer.getComments().at(0);
+    if (!commented.undoHandle || !parentComment) {
+      throw new Error("expected an undo handle and comment");
+    }
+    commentReviewer.replyTo(parentComment.id, { text: "Keep this reply." });
+    expect(commentReviewer.undoDocumentOperations(commented.undoHandle)).toEqual({
+      status: "rejected",
+      undoHandle: commented.undoHandle,
+      reason: "documentChanged",
+    });
+    expect(commentReviewer.getComments().at(0)?.replies.at(0)?.text).toBe("Keep this reply.");
+
+    changedReviewer.acceptAll();
+    expect(changedReviewer.undoDocumentOperations(changed.undoHandle)).toEqual({
+      status: "rejected",
+      undoHandle: changed.undoHandle,
+      reason: "documentChanged",
+    });
   });
 
   test("dry runs predict best-effort results without document or comment changes", async () => {
@@ -343,6 +1047,7 @@ describe("headless docx review round-trip", () => {
           affected: [{ type: "block", story: "main", blockId: target.id, effect: "updated" }],
         },
       ],
+      undoHandle: null,
     });
     expect(reviewer.getContentAsText()).toBe(contentBefore);
     expect(reviewer.getComments()).toEqual([]);
@@ -407,6 +1112,7 @@ describe("headless docx review round-trip", () => {
         },
       ],
       receipts: [],
+      undoHandle: null,
     });
     expect(reviewer.getContentAsText()).toContain("Heading paragraph.");
     expect(reviewer.getChanges()).toEqual([]);
@@ -775,6 +1481,45 @@ describe("headless docx review discovery + resolve", () => {
 });
 
 describe("headless docx review annotated read surface", () => {
+  test("reads original, current-markup, and final views without mutating the reviewer", async () => {
+    const baseline = await makeParaIdBaseline(readFixture());
+    const reviewer = await FolioDocxReviewer.fromBuffer(baseline, { author: "Reviewer" });
+    const target = findBlock(reviewer.snapshot().blocks, "Heading");
+    reviewer.applyOperations([
+      {
+        id: "reviewed-view-replace",
+        type: "replaceInBlock",
+        blockId: target.id,
+        find: "Heading",
+        replace: "Intro",
+      },
+    ]);
+    const changesBefore = reviewer.getChanges();
+
+    const original = reviewer.readReviewedStory({ view: "original" });
+    const currentMarkup = reviewer.readReviewedStory({ view: "current-markup" });
+    const final = reviewer.readReviewedStory({ view: "final" });
+
+    expect(original?.text).toContain("Heading paragraph.");
+    expect(original?.text).not.toContain("Intro paragraph.");
+    expect(original?.changes).toEqual([]);
+    expect(currentMarkup?.text).toContain('<ins author="Reviewer">Intro</ins>');
+    expect(currentMarkup?.text).toContain('<del author="Reviewer">Heading</del>');
+    expect(currentMarkup?.changes).toEqual(changesBefore);
+    expect(final?.text).toContain("Intro paragraph.");
+    expect(final?.text).not.toContain("Heading paragraph.");
+    expect(final?.changes).toEqual([]);
+    expect(reviewer.getChanges()).toEqual(changesBefore);
+    expect(reviewer.getContentAsText()).toContain("Intro paragraph.");
+  });
+
+  test("rejects an unsupported reviewed view at the public boundary", async () => {
+    const reviewer = await FolioDocxReviewer.fromBuffer(await makeParaIdBaseline(readFixture()));
+    expect(() =>
+      Reflect.apply(reviewer.readReviewedStory, reviewer, [{ view: "unsupported" }]),
+    ).toThrow(UnsupportedFolioReviewedViewError);
+  });
+
   test("getContentAsText({ annotated }) inlines redline + comment tags; default stays clean", async () => {
     const baseline = await makeParaIdBaseline(readFixture());
     const reviewer = await FolioDocxReviewer.fromBuffer(baseline, { author: "AI Reviewer" });
@@ -833,13 +1578,140 @@ const readNotesFixture = async (): Promise<ArrayBuffer> => {
   const footnotesXml = await footnotesFile.async("text");
   const injected = footnotesXml.replace(
     "</w:footnotes>",
-    '<w:footnote w:id="2"><w:p><w:r><w:t>Injected footnote body text.</w:t></w:r></w:p></w:footnote></w:footnotes>',
+    '<w:footnote w:id="2"><w:p w14:paraId="B2000001"><w:r><w:t>Injected footnote body text.</w:t></w:r></w:p></w:footnote></w:footnotes>',
   );
   zip.file("word/footnotes.xml", injected);
+  zip.file(
+    "word/endnotes.xml",
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:endnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:endnote w:id="3"><w:p w14:paraId="B2000002"><w:r><w:t>Injected endnote body text.</w:t></w:r></w:p></w:endnote></w:endnotes>',
+  );
   return zip.generateAsync({ type: "arraybuffer" });
 };
 
 describe("headless docx review notes read surface", () => {
+  test("edits a footnote through story-scoped document operations", async () => {
+    const baseline = await readNotesFixture();
+    const story = { type: "footnote", noteId: 2 } as const;
+    const reviewer = await FolioDocxReviewer.fromBuffer(baseline, { author: "Reviewer" });
+    const snapshot = reviewer.snapshotStory(story);
+    if (!snapshot) {
+      throw new Error("expected the footnote story");
+    }
+    const target = findBlock(snapshot.blocks, "Injected footnote body text.");
+
+    const result = reviewer.applyDocumentOperationsToStory({
+      story,
+      snapshot,
+      batch: {
+        version: 1,
+        mode: "direct",
+        operations: [
+          {
+            id: "footnote-replace",
+            type: "replaceInBlock",
+            blockId: target.id,
+            find: "Injected footnote",
+            replace: "Updated footnote",
+          },
+        ],
+      },
+    });
+
+    expect(result.status).toBe("committed");
+    expect(result.receipts.at(0)?.affected.at(0)).toEqual({
+      type: "block",
+      story,
+      blockId: target.id,
+      effect: "updated",
+    });
+    expect(reviewer.readStory(story)?.text).toBe("Updated footnote body text.");
+    expect(reviewer.getNotesAsText()).toContain("[footnote #2] Updated footnote body text.");
+
+    const saved = await reviewer.toBuffer();
+    expect(await partText(saved, "word/footnotes.xml")).toContain("Updated footnote");
+    expect(await partBytes(saved, "word/document.xml")).toEqual(
+      await partBytes(baseline, "word/document.xml"),
+    );
+    expect(await partBytes(saved, "word/endnotes.xml")).toEqual(
+      await partBytes(baseline, "word/endnotes.xml"),
+    );
+
+    const reopened = await FolioDocxReviewer.fromBuffer(saved);
+    expect(reopened.readStory(story)?.text).toBe("Updated footnote body text.");
+  });
+
+  test("tracks and undoes an endnote operation batch", async () => {
+    const baseline = await readNotesFixture();
+    const story = { type: "endnote", noteId: 3 } as const;
+    const reviewer = await FolioDocxReviewer.fromBuffer(baseline, { author: "Reviewer" });
+    const snapshot = reviewer.snapshotStory(story);
+    if (!snapshot) {
+      throw new Error("expected the endnote story");
+    }
+    const target = findBlock(snapshot.blocks, "Injected endnote body text.");
+
+    const result = reviewer.applyDocumentOperationsToStory({
+      story,
+      snapshot,
+      batch: {
+        version: 1,
+        mode: "tracked-changes",
+        operations: [
+          {
+            id: "endnote-replace",
+            type: "replaceInBlock",
+            blockId: target.id,
+            find: "Injected endnote",
+            replace: "Updated endnote",
+          },
+        ],
+      },
+    });
+
+    expect(result.status).toBe("committed");
+    expect(reviewer.readReviewedStory({ story, view: "original" })?.text).toContain(
+      "Injected endnote body text.",
+    );
+    expect(reviewer.readReviewedStory({ story, view: "current-markup" })?.text).toContain(
+      '<ins author="Reviewer">Updated</ins>',
+    );
+    expect(reviewer.readReviewedStory({ story, view: "final" })?.text).toContain(
+      "Updated endnote body text.",
+    );
+    const saved = await reviewer.toBuffer();
+    const endnotesXml = await partText(saved, "word/endnotes.xml");
+    expect(endnotesXml).toContain("Updated");
+    expect(endnotesXml).toContain("endnote body text.");
+    expect(endnotesXml).toContain("<w:ins ");
+    expect(endnotesXml).toContain("<w:del ");
+    expect(endnotesXml).toContain('w:author="Reviewer"');
+
+    if (!result.undoHandle) {
+      throw new Error("expected an undo handle");
+    }
+    expect(reviewer.undoDocumentOperations(result.undoHandle)).toEqual({
+      status: "undone",
+      undoHandle: result.undoHandle,
+    });
+    expect(reviewer.readStory(story)?.text).toBe("Injected endnote body text.");
+    expect(await partBytes(await reviewer.toBuffer(), "word/endnotes.xml")).toEqual(
+      await partBytes(baseline, "word/endnotes.xml"),
+    );
+  });
+
+  test("rejects a missing note story before applying operations", async () => {
+    const reviewer = await FolioDocxReviewer.fromBuffer(await readNotesFixture());
+    const story = { type: "footnote", noteId: 999_999 } as const;
+    expect(reviewer.snapshotStory(story)).toBeNull();
+    expect(reviewer.readReviewedStory({ story, view: "final" })).toBeNull();
+    expect(() =>
+      reviewer.applyDocumentOperationsToStory({
+        story,
+        batch: { version: 1, operations: [] },
+      }),
+    ).toThrow(FolioDocumentStoryNotFoundError);
+  });
+
   test("listStories discovers typed handles that readStory resolves", async () => {
     const reviewer = await FolioDocxReviewer.fromBuffer(await readNotesFixture());
     const stories = reviewer.listStories();
@@ -847,6 +1719,9 @@ describe("headless docx review notes read surface", () => {
     const footnote = stories.find(({ handle }) => handle.type === "footnote");
     expect(footnote?.text).toBe("Injected footnote body text.");
     expect(footnote ? reviewer.readStory(footnote.handle) : null).toEqual(footnote);
+    const endnote = stories.find(({ handle }) => handle.type === "endnote");
+    expect(endnote?.text).toBe("Injected endnote body text.");
+    expect(endnote ? reviewer.readStory(endnote.handle) : null).toEqual(endnote);
     expect(reviewer.readStory({ type: "footnote", noteId: 999_999 })).toBeNull();
   });
 
@@ -859,8 +1734,9 @@ describe("headless docx review notes read surface", () => {
     );
     expect(notes).toContain("[footer default]");
     expect(notes).toContain("[footnote #2] Injected footnote body text.");
+    expect(notes).toContain("[endnote #3] Injected endnote body text.");
     // Body content is not folded into the notes surface.
-    expect(notes).not.toContain("[endnote");
+    expect(notes).not.toContain("Project Goals");
   });
 
   test("getNotesAsText is empty for a document without headers/footers or notes", async () => {

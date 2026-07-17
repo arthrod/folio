@@ -62,9 +62,13 @@ export const createFolioAIEditSnapshot = (doc: PMNode): FolioAIEditSnapshot => {
   }[] = [];
   const hashCounts = new Map<string, number>();
   const usedBlockIds = new Set<string>();
+  const emptyAnchorState: {
+    candidate: { from: number; to: number; paraId: string | null } | null;
+    textblockCount: number;
+  } = { candidate: null, textblockCount: 0 };
 
   let blockIndex = 0;
-  doc.descendants((node, pos) => {
+  doc.descendants((node, pos, parent) => {
     if (!node.isTextblock) {
       return;
     }
@@ -79,6 +83,18 @@ export const createFolioAIEditSnapshot = (doc: PMNode): FolioAIEditSnapshot => {
     const { text } = buildCleanBlockText(node, pos);
     const normalizedText = normalizeFolioAIBlockText(text);
     if (normalizedText.length === 0) {
+      if (parent?.type !== doc.type) {
+        return;
+      }
+      emptyAnchorState.textblockCount++;
+      if (emptyAnchorState.candidate === null) {
+        const paraIdAttr: unknown = node.attrs["paraId"];
+        emptyAnchorState.candidate = {
+          from: pos,
+          to: pos + node.nodeSize,
+          paraId: typeof paraIdAttr === "string" && paraIdAttr.length > 0 ? paraIdAttr : null,
+        };
+      }
       return;
     }
 
@@ -104,7 +120,8 @@ export const createFolioAIEditSnapshot = (doc: PMNode): FolioAIEditSnapshot => {
       taken: usedBlockIds,
     });
     usedBlockIds.add(id);
-    const kind = getBlockKind(node);
+    const headingLevel = getHeadingLevel(node);
+    const kind = getBlockKind(node, headingLevel);
     const displayLabel = getDisplayLabel(node);
     const styleId = getStyleId(node);
     const previewRuns = getPreviewRuns(node);
@@ -114,6 +131,7 @@ export const createFolioAIEditSnapshot = (doc: PMNode): FolioAIEditSnapshot => {
         id,
         kind,
         text,
+        ...(headingLevel !== undefined && { headingLevel }),
         ...(displayLabel !== undefined && { displayLabel }),
         ...(styleId !== undefined && { styleId }),
         ...(previewRuns !== undefined && { previewRuns }),
@@ -139,10 +157,30 @@ export const createFolioAIEditSnapshot = (doc: PMNode): FolioAIEditSnapshot => {
     };
   }
 
-  return { blocks, anchors };
+  const emptyAnchorCandidate = emptyAnchorState.candidate;
+  if (blocks.length > 0 || emptyAnchorCandidate === null) {
+    return { blocks, anchors };
+  }
+
+  const emptyDocumentAnchorId = deriveBlockId({
+    paraId: emptyAnchorCandidate.paraId,
+    index: 1,
+    taken: usedBlockIds,
+  });
+  const normalizedText = "";
+  anchors[emptyDocumentAnchorId] = {
+    id: emptyDocumentAnchorId,
+    from: emptyAnchorCandidate.from,
+    to: emptyAnchorCandidate.to,
+    text: "",
+    normalizedText,
+    textHash: hashFolioAIBlockText(normalizedText),
+    hashOccurrenceCount: emptyAnchorState.textblockCount,
+  };
+  return { blocks, anchors, emptyDocumentAnchorId };
 };
 
-const getBlockKind = (node: PMNode): FolioAIBlockKind => {
+const getBlockKind = (node: PMNode, headingLevel: number | undefined): FolioAIBlockKind => {
   const listMarker: unknown = node.attrs["listMarker"];
   const numPr: unknown = node.attrs["numPr"];
   if (
@@ -152,12 +190,31 @@ const getBlockKind = (node: PMNode): FolioAIBlockKind => {
     return "listItem";
   }
 
-  const outlineLevel: unknown = node.attrs["outlineLevel"];
-  if (typeof outlineLevel === "number" && outlineLevel >= 0) {
+  if (headingLevel !== undefined) {
     return "heading";
   }
 
   return "paragraph";
+};
+
+const getHeadingLevel = (node: PMNode): number | undefined => {
+  const outlineLevel: unknown = node.attrs["outlineLevel"];
+  if (
+    typeof outlineLevel === "number" &&
+    Number.isInteger(outlineLevel) &&
+    outlineLevel >= 0 &&
+    outlineLevel <= 8
+  ) {
+    return outlineLevel + 1;
+  }
+
+  const styleId: unknown = node.attrs["styleId"];
+  if (typeof styleId !== "string") {
+    return undefined;
+  }
+  const match = /^heading(?<level>[1-9])$/iu.exec(styleId);
+  const level = match?.groups?.["level"];
+  return level === undefined ? undefined : Number.parseInt(level, 10);
 };
 
 const getDisplayLabel = (node: PMNode): string | undefined => {

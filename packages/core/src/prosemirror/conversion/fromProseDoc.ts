@@ -71,6 +71,7 @@ import {
   expectTextEffectMarkAttrs,
   expectFieldAttrs,
   expectFontFamilyMarkAttrs,
+  expectLanguageMarkAttrs,
   expectFontSizeMarkAttrs,
   expectFootnoteRefMarkAttrs,
   expectHardBreakAttrs,
@@ -519,6 +520,12 @@ function listRenderingFromAttrs(attrs: ParagraphAttrs): Paragraph["listRendering
     ...(attrs.listMarkerFontSize != null && {
       markerFontSize: attrs.listMarkerFontSize,
     }),
+    ...(attrs.listMarkerBold != null && {
+      markerBold: attrs.listMarkerBold,
+    }),
+    ...(attrs.listMarkerAlignment != null && {
+      markerAlignment: attrs.listMarkerAlignment,
+    }),
     ...(attrs.listMarkerSuffix != null && {
       markerSuffix: attrs.listMarkerSuffix,
     }),
@@ -663,7 +670,12 @@ function isStyleSourcedNumPr(attrs: ParagraphAttrs): boolean {
 // "inherit", dropping the user's decision on save. Branch on `== null` so every
 // toggle routed through here preserves `false`. (Direction is handled
 // separately via the `direction` discriminated union, not this helper.)
-type BooleanToggleKey = "pageBreakBefore" | "widowControl";
+type BooleanToggleKey =
+  | "pageBreakBefore"
+  | "widowControl"
+  | "kinsoku"
+  | "overflowPunctuation"
+  | "suppressAutoHyphens";
 
 function assignBooleanToggle(
   result: ParagraphFormatting,
@@ -766,6 +778,9 @@ function paragraphAttrsToFormatting(attrs: ParagraphAttrs): ParagraphFormatting 
     }
     assignBooleanToggle(result, attrs, orig, "pageBreakBefore");
     assignBooleanToggle(result, attrs, orig, "widowControl");
+    assignBooleanToggle(result, attrs, orig, "kinsoku");
+    assignBooleanToggle(result, attrs, orig, "overflowPunctuation");
+    assignBooleanToggle(result, attrs, orig, "suppressAutoHyphens");
     if (attrs.spacingExplicit !== orig.spacingExplicit) {
       if (attrs.spacingExplicit) {
         result.spacingExplicit = attrs.spacingExplicit;
@@ -815,7 +830,10 @@ function paragraphAttrsToFormatting(attrs: ParagraphAttrs): ParagraphFormatting 
     // keep the paragraph from short-circuiting to "no formatting".
     bidi != null ||
     attrs.pageBreakBefore != null ||
-    attrs.widowControl != null;
+    attrs.widowControl != null ||
+    attrs.kinsoku != null ||
+    attrs.overflowPunctuation != null ||
+    attrs.suppressAutoHyphens != null;
 
   if (!hasFormatting) {
     return undefined;
@@ -889,6 +907,15 @@ function paragraphAttrsToFormatting(attrs: ParagraphAttrs): ParagraphFormatting 
   }
   if (attrs.widowControl != null) {
     f.widowControl = attrs.widowControl;
+  }
+  if (attrs.kinsoku != null) {
+    f.kinsoku = attrs.kinsoku;
+  }
+  if (attrs.overflowPunctuation != null) {
+    f.overflowPunctuation = attrs.overflowPunctuation;
+  }
+  if (attrs.suppressAutoHyphens != null) {
+    f.suppressAutoHyphens = attrs.suppressAutoHyphens;
   }
   return f;
 }
@@ -1002,16 +1029,7 @@ function extractParagraphContent(
     syncCommentRanges(node, offset);
     const linkMark = node.marks.find((m) => m.type.name === "hyperlink");
 
-    // Check for footnote/endnote reference mark
     const noteRefMark = node.marks.find((m) => m.type.name === "footnoteRef");
-    if (noteRefMark && !linkMark) {
-      // Finish any current content
-      flushCurrentInline();
-      content.push(createNoteReferenceRun(noteRefMark, node.marks));
-      return;
-    }
-
-    // Check for tracked change marks (insertion/deletion)
     const insertionMark = node.marks.find((m) => m.type.name === "insertion");
     const deletionMark = node.marks.find((m) => m.type.name === "deletion");
     if (insertionMark || deletionMark) {
@@ -1061,13 +1079,20 @@ function extractParagraphContent(
       return;
     }
 
+    // A tracked note reference must reach the branch above so it stays inside
+    // the w:ins/w:del wrapper. Plain references serialize directly.
+    if (noteRefMark && !linkMark) {
+      flushCurrentInline();
+      content.push(createNoteReferenceRun(noteRefMark, node.marks));
+      return;
+    }
+
     if (linkMark) {
       // Start or continue hyperlink
       const linkKey = getLinkKey(linkMark);
 
       if (currentHyperlink && currentHyperlinkKey === linkKey) {
         // Continue current hyperlink
-        addNodeToHyperlink(currentHyperlink, node);
       } else {
         // Finish previous content
         flushCurrentInline();
@@ -1075,8 +1100,8 @@ function extractParagraphContent(
         // Start new hyperlink
         currentHyperlink = createHyperlink(linkMark);
         currentHyperlinkKey = linkKey;
-        addNodeToHyperlink(currentHyperlink, node);
       }
+      addNodeToHyperlink(currentHyperlink, node);
       return;
     }
 
@@ -1177,6 +1202,10 @@ function extractParagraphContent(
 }
 
 function createTrackedChangeRun(node: PMNode, marks: readonly Mark[]): Run | null {
+  const noteRefMark = marks.find((mark) => mark.type.name === "footnoteRef");
+  if (noteRefMark) {
+    return createNoteReferenceRun(noteRefMark, marks);
+  }
   if (node.isText) {
     const formatting = marksToTextFormatting(marks);
     return {
@@ -1606,10 +1635,10 @@ function createInlineSdtFromNode(node: PMNode): InlineSdt {
   }
 
   // Extract content from the sdt node's children. OOXML allows runs,
-  // hyperlinks, simple/complex fields, nested SDTs, and math here — keep
-  // all of them so docProps-bound fields and similar template content
-  // survive a round-trip through the editor. Keep this filter in sync
-  // with the exhaustive switch in `serializeInlineSdt`.
+  // hyperlinks, simple/complex fields, nested SDTs, tracked changes,
+  // and math here. Keep all of them so docProps-bound fields and reviewed
+  // template content survive a round-trip through the editor. Keep this
+  // filter in sync with the exhaustive switch in `serializeInlineSdt`.
   const sdtContent = extractParagraphContent(node);
   const content = sdtContent.filter(
     (c): c is InlineSdt["content"][number] =>
@@ -1618,6 +1647,8 @@ function createInlineSdtFromNode(node: PMNode): InlineSdt {
       c.type === "simpleField" ||
       c.type === "complexField" ||
       c.type === "inlineSdt" ||
+      c.type === "insertion" ||
+      c.type === "deletion" ||
       c.type === "mathEquation",
   );
 
@@ -1705,6 +1736,9 @@ function createImageRun(node: PMNode): Run {
   const imagePosition = imagePositionFromAttrs(attrs.position);
   if (imagePosition) {
     image.position = imagePosition;
+  }
+  if (attrs.layoutInCell !== undefined) {
+    image.layoutInCell = attrs.layoutInCell;
   }
 
   // Round-trip border/outline
@@ -2012,6 +2046,16 @@ export function marksToTextFormatting(marks: readonly Mark[]): TextFormatting {
         break;
       }
 
+      case "language": {
+        const attrs = expectLanguageMarkAttrs(mark);
+        formatting.language = {
+          ...(attrs.val ? { val: attrs.val } : {}),
+          ...(attrs.eastAsia ? { eastAsia: attrs.eastAsia } : {}),
+          ...(attrs.bidi ? { bidi: attrs.bidi } : {}),
+        };
+        break;
+      }
+
       case "superscript":
         formatting.vertAlign = "superscript";
         break;
@@ -2282,6 +2326,7 @@ function convertPMTable(node: PMNode, documentCounts?: TrackedChangeCounts): Tab
         if (attrs.columnWidths) {
           minTable.columnWidths = attrs.columnWidths;
         }
+        restoreTablePropertyChanges(minTable, attrs);
         return minTable;
       }
     }
@@ -2294,7 +2339,19 @@ function convertPMTable(node: PMNode, documentCounts?: TrackedChangeCounts): Tab
   if (formatting) {
     table.formatting = formatting;
   }
+  restoreTablePropertyChanges(table, attrs);
   return table;
+}
+
+/**
+ * Restore `w:tblPrChange` entries that PM carried opaquely on the table attrs
+ * (same rationale as the paragraph `_propertyChanges` attr): they must survive
+ * an edit so the saved DOCX keeps the tracked property-change history.
+ */
+function restoreTablePropertyChanges(table: Table, attrs: TableAttrs): void {
+  if (Array.isArray(attrs.tblPrChange) && attrs.tblPrChange.length > 0) {
+    table.propertyChanges = [...attrs.tblPrChange];
+  }
 }
 
 type ActiveVerticalMerge = {
@@ -2524,6 +2581,11 @@ function convertPMTableRow(
   if (rowFormatting) {
     row.formatting = rowFormatting;
   }
+  // Restore `w:trPrChange` entries PM carried opaquely (see the paragraph
+  // `_propertyChanges` attr for the rationale).
+  if (Array.isArray(attrs.trPrChange) && attrs.trPrChange.length > 0) {
+    row.propertyChanges = [...attrs.trPrChange];
+  }
   return row;
 }
 
@@ -2612,14 +2674,22 @@ function tableRowAttrsToFormatting(attrs: TableRowAttrs): TableRowFormatting | u
 function convertPMTableCell(node: PMNode, documentCounts?: TrackedChangeCounts): TableCell {
   const attrs = expectTableCellAttrs(node);
   const content: (Paragraph | Table)[] = [];
+  let previousStandaloneTextBox: PreviousStandaloneTextBox | null = null;
 
   // Extract cell content (paragraphs and nested tables)
   // oxlint-disable-next-line unicorn/no-array-for-each -- ProseMirror Node.forEach
   node.forEach((contentNode) => {
     if (contentNode.type.name === "paragraph") {
       content.push(convertPMParagraph(contentNode, documentCounts));
+      previousStandaloneTextBox = null;
     } else if (contentNode.type.name === "table") {
       content.push(convertPMTable(contentNode, documentCounts));
+      previousStandaloneTextBox = null;
+    } else if (contentNode.type.name === "textBox") {
+      previousStandaloneTextBox = appendTextBoxBlock(content, contentNode, {
+        pendingPageBreaks: 0,
+        previousStandaloneTextBox,
+      });
     }
   });
 
@@ -2628,6 +2698,11 @@ function convertPMTableCell(node: PMNode, documentCounts?: TrackedChangeCounts):
   if (cellFormatting) {
     cell.formatting = cellFormatting;
   }
+  // Restore `w:tcPrChange` entries PM carried opaquely (see the paragraph
+  // `_propertyChanges` attr for the rationale).
+  if (Array.isArray(attrs.tcPrChange) && attrs.tcPrChange.length > 0) {
+    cell.propertyChanges = [...attrs.tcPrChange];
+  }
   return cell;
 }
 
@@ -2635,7 +2710,14 @@ function convertPMTableCell(node: PMNode, documentCounts?: TrackedChangeCounts):
  * Convert ProseMirror table cell attrs to TableCellFormatting
  * Borders are stored as full BorderSpec objects — no conversion needed.
  */
+type CellShading = NonNullable<TableCellFormatting["shading"]>;
+
+const cellShadingFromAttrs = (attrs: TableCellAttrs): CellShading =>
+  attrs.backgroundColor ? { fill: { rgb: attrs.backgroundColor } } : { pattern: "nil" };
+
 function tableCellAttrsToFormatting(attrs: TableCellAttrs): TableCellFormatting | undefined {
+  const backgroundChanged = attrs.backgroundColor !== attrs._resolvedBackgroundColor;
+
   // If we have the original formatting from the DOCX, use it as a base
   // for lossless round-trip. This preserves properties like vMerge, fitText,
   // hideMark, conditionalFormat that aren't tracked as PM attrs.
@@ -2667,11 +2749,8 @@ function tableCellAttrsToFormatting(attrs: TableCellAttrs): TableCellFormatting 
         delete result.verticalAlign;
       }
     }
-    if (attrs.backgroundColor) {
-      result.shading = { fill: { rgb: attrs.backgroundColor } };
-    } else if (!attrs.backgroundColor && orig.shading) {
-      // User cleared the background color
-      delete result.shading;
+    if (backgroundChanged) {
+      result.shading = cellShadingFromAttrs(attrs);
     }
     if (attrs.borders) {
       result.borders = attrs.borders;
@@ -2697,7 +2776,7 @@ function tableCellAttrsToFormatting(attrs: TableCellAttrs): TableCellFormatting 
     attrs.rowspan > 1 ||
     cellWidth !== undefined ||
     attrs.verticalAlign ||
-    attrs.backgroundColor ||
+    backgroundChanged ||
     attrs.borders ||
     attrs.margins ||
     attrs.textDirection;
@@ -2725,8 +2804,8 @@ function tableCellAttrsToFormatting(attrs: TableCellAttrs): TableCellFormatting 
   if (attrs.textDirection) {
     f.textDirection = attrs.textDirection;
   }
-  if (attrs.backgroundColor) {
-    f.shading = { fill: { rgb: attrs.backgroundColor } };
+  if (backgroundChanged) {
+    f.shading = cellShadingFromAttrs(attrs);
   }
   if (attrs.borders) {
     f.borders = attrs.borders;
@@ -2749,13 +2828,14 @@ function convertPMTextBox(node: PMNode): Paragraph {
   const attrs = expectTextBoxAttrs(node);
 
   // Extract child paragraphs from the text box content
-  const childParagraphs: Paragraph[] = [];
+  const childBlocks: (Paragraph | Table)[] = [];
   // oxlint-disable-next-line unicorn/no-array-for-each -- ProseMirror Node.forEach
   node.forEach((child) => {
     if (child.type.name === "paragraph") {
-      childParagraphs.push(convertPMParagraph(child));
+      childBlocks.push(convertPMParagraph(child));
+    } else if (child.type.name === "table") {
+      childBlocks.push(convertPMTable(child));
     }
-    // Tables inside text boxes are currently not round-tripped
   });
 
   // Build shape with text body
@@ -2767,7 +2847,8 @@ function convertPMTextBox(node: PMNode): Paragraph {
       height: attrs.height ? pixelsToEmu(attrs.height) : 0,
     },
     textBody: {
-      content: childParagraphs.length > 0 ? childParagraphs : [{ type: "paragraph", content: [] }],
+      content: childBlocks.length > 0 ? childBlocks : [{ type: "paragraph", content: [] }],
+      ...(attrs.autoFit !== undefined ? { autoFit: attrs.autoFit } : {}),
       margins: (() => {
         const m: {
           top?: number;
@@ -2829,10 +2910,13 @@ function convertPMTextBox(node: PMNode): Paragraph {
   // Wrap the shape in a paragraph with a run containing ShapeContent
   const shapeContent: ShapeContent = { type: "shape", shape };
   const run: Run = { type: "run", content: [shapeContent] };
+  const trackedChange = attrs._docxTrackedChange;
 
   return {
     type: "paragraph",
-    content: [run],
+    content: trackedChange
+      ? [{ type: trackedChange.type, info: trackedChange.info, content: [run] }]
+      : [run],
   };
 }
 

@@ -5,6 +5,7 @@
 ```ts
 
 import { AnonymizationMatch } from '@stll/folio-core/prosemirror/plugins/anonymizationDecorations';
+import { App } from 'vue';
 import { CellCoordinates } from '@stll/folio-core/managers/types';
 import { ClipboardSelection } from '@stll/folio-core/managers/ClipboardManager';
 import { CommandMap } from '@stll/folio-core/prosemirror/extensions/types';
@@ -17,17 +18,24 @@ import { DocxInput } from '@stll/folio-core/utils/docxInput';
 import { EditorState } from 'prosemirror-state';
 import { EditorView } from 'prosemirror-view';
 import { extractTrackedChanges } from '@stll/folio-core/prosemirror/utils/extractTrackedChanges';
+import { FindOptions } from '@stll/folio-core/utils/findReplace';
 import { FlowBlock } from '@stll/folio-core/layout-engine/types';
 import { FolioEditor } from '@stll/folio-core/controller/folioEditor';
 import { FolioSelectiveSaveFlags } from '@stll/folio-core/docx/selectiveSaveFlags';
 import { getSelectionRuns } from '@stll/folio-core/managers/ClipboardManager';
+import { HeaderFooterPartKind } from '@stll/folio-core/controller/headerFooterEditorManager';
+import { HiddenProseMirrorCollaboration } from '@stll/folio-core/controller/hiddenEditorManager';
+import { HiddenProseMirrorRemoteSelection } from '@stll/folio-core/controller/hiddenEditorManager';
 import { Layout } from '@stll/folio-core/layout-engine/types';
+import { LayoutSelectionGate } from '@stll/folio-core/paged-layout/LayoutSelectionGate';
 import { MaybeRefOrGetter } from 'vue';
 import { Measure } from '@stll/folio-core/layout-engine/types';
 import { ParsedClipboardContent } from '@stll/folio-core/utils/clipboard';
 import { Plugin as Plugin_2 } from 'prosemirror-state';
+import { ProseMirrorFindMatch } from '@stll/folio-core/prosemirror/findReplaceSelection';
 import { Ref } from 'vue';
 import { runsToClipboardContent } from '@stll/folio-core/utils/clipboard';
+import { ShallowRef } from 'vue';
 import { TemplateSlashMenuKeyAction } from '@stll/folio-core/prosemirror/plugins/templateSlashMenu';
 import { TemplateSlashMenuState } from '@stll/folio-core/prosemirror/plugins/templateSlashMenu';
 import { TrackedChangeEntry } from '@stll/folio-core/prosemirror/utils/extractTrackedChanges';
@@ -36,7 +44,18 @@ import { TripwireResult } from '@stll/folio-core/docx/selectiveSaveTripwire';
 
 export { ClipboardSelection }
 
+// @public
+export type ColorMode = "light" | "dark" | "system";
+
+// @public
+export const colorModePlugin: {
+    install(app: App, colorMode?: MaybeRefOrGetter<ColorMode>): void;
+};
+
 export { createSelectionFromDOM }
+
+// @public
+export const defaultColorMode: ColorMode;
 
 // @public (undocumented)
 export type DragAutoScrollOptions = {
@@ -47,6 +66,17 @@ export type DragAutoScrollOptions = {
 export { extractTrackedChanges }
 
 export { getSelectionRuns }
+
+// @public (undocumented)
+export type HeaderFooterSelectionState = {
+    from: number;
+    kind: HeaderFooterPartKind;
+    rId: string;
+    to: number;
+};
+
+// @public
+export const provideColorMode: (colorMode?: MaybeRefOrGetter<ColorMode>) => void;
 
 export { runsToClipboardContent }
 
@@ -76,12 +106,21 @@ export type UseClipboardReturn = {
     lastPastedContent: Ref<ParsedClipboardContent | null>;
 };
 
+// @public
+export function useColorMode(): ComputedRef<boolean>;
+
 // @public (undocumented)
 export function useDocxEditor(options: UseDocxEditorOptions): UseDocxEditorReturn;
 
 // @public (undocumented)
+export type UseDocxEditorCollaboration = HiddenProseMirrorCollaboration & {
+    plugins?: Plugin_2[] | undefined;
+};
+
+// @public (undocumented)
 export type UseDocxEditorOptions = {
     hiddenContainer: Ref<HTMLElement | null>;
+    hiddenHeaderFooterContainer?: Ref<HTMLElement | null>;
     pagesContainer: Ref<HTMLElement | null>;
     readOnly?: MaybeRefOrGetter<boolean>;
     pageGap?: number;
@@ -90,6 +129,7 @@ export type UseDocxEditorOptions = {
     editorMode?: MaybeRefOrGetter<"editing" | "suggesting" | "viewing">;
     author?: MaybeRefOrGetter<string>;
     externalPlugins?: Plugin_2[];
+    collaboration?: MaybeRefOrGetter<UseDocxEditorCollaboration | undefined>;
     onAnonymizationMatchesChange?: (matches: readonly AnonymizationMatch[]) => void;
     showTemplateDirectives?: MaybeRefOrGetter<boolean | undefined>;
     onSlashMenuChange?: (state: TemplateSlashMenuState) => void;
@@ -98,6 +138,9 @@ export type UseDocxEditorOptions = {
     onError?: (error: Error) => void;
     onSelectionUpdate?: (state: EditorState) => void;
     onEditorViewReady?: (view: EditorView | null) => void;
+    onCopy?: () => void;
+    onCut?: () => void;
+    onPaste?: () => void;
     onReadOnlyEditAttempt?: () => void;
     featureFlags?: MaybeRefOrGetter<FolioSelectiveSaveFlags | undefined>;
     onSelectiveSaveTripwire?: ((result: TripwireResult) => void) | undefined;
@@ -108,12 +151,15 @@ export type UseDocxEditorReturn = {
     editor: FolioEditor;
     editorView: Ref<EditorView | null>;
     editorState: Ref<EditorState | null>;
+    remoteSelections: Ref<HiddenProseMirrorRemoteSelection[]>;
+    headerFooterSelection: Ref<HeaderFooterSelectionState | null>;
     isReady: Ref<boolean>;
     isDirty: Ref<boolean>;
     parseError: Ref<string | null>;
     layout: Ref<Layout | null>;
     blocks: Ref<FlowBlock[]>;
     measures: Ref<Measure[]>;
+    syncCoordinator: LayoutSelectionGate;
     loadBuffer: (buffer: DocxInput) => Promise<void>;
     loadDocument: (doc: Document_2) => void;
     save: (options?: {
@@ -121,6 +167,8 @@ export type UseDocxEditorReturn = {
     }) => Promise<Blob | null>;
     getDocument: () => Document_2 | null;
     setDocument: (doc: Document_2) => void;
+    getHeaderFooterView: (rId: string) => EditorView | null;
+    syncHeaderFooterViews: () => void;
     getCommands: () => CommandMap;
     focus: () => void;
     reLayout: () => void;
@@ -134,6 +182,32 @@ export function useDragAutoScroll(input: DragAutoScrollOptions): UseDragAutoScro
 export type UseDragAutoScrollReturn = {
     updateMousePosition: (clientX: number, clientY: number) => void;
     stopAutoScroll: () => void;
+};
+
+// @public (undocumented)
+export function useFindReplace(input: UseFindReplaceOptions): UseFindReplaceReturn;
+
+// @public (undocumented)
+export type UseFindReplaceOptions = {
+    editorView: Readonly<Ref<EditorView | null>>;
+    scrollVisiblePositionIntoView?: (pmPos: number) => void;
+};
+
+// @public (undocumented)
+export type UseFindReplaceReturn = {
+    searchText: Ref<string>;
+    replaceText: Ref<string>;
+    options: FindOptions;
+    matches: ShallowRef<ProseMirrorFindMatch[]>;
+    currentIndex: Ref<number>;
+    currentMatch: ComputedRef<ProseMirrorFindMatch | null>;
+    performSearch: () => ProseMirrorFindMatch[];
+    goToMatch: (index: number) => boolean;
+    findNext: () => ProseMirrorFindMatch | null;
+    findPrevious: () => ProseMirrorFindMatch | null;
+    replaceCurrent: () => boolean;
+    replaceAll: () => number;
+    clear: () => void;
 };
 
 // @public (undocumented)

@@ -1,5 +1,13 @@
 import type { Mark, Node as PMNode, Schema } from "prosemirror-model";
 import type { EditorState, Transaction } from "prosemirror-state";
+import {
+  columnIsHeader,
+  removeColumn,
+  removeRow,
+  rowIsHeader,
+  TableMap,
+  tableNodeTypes,
+} from "prosemirror-tables";
 
 import { getFolioParaIdFromBlockId } from "../types/block-id";
 import { buildCleanBlockText } from "./clean-text";
@@ -56,6 +64,10 @@ type ResolvedOperation = {
   blockTo: number;
   blockNode: PMNode;
   insertText?: string;
+  tableRowInsertion?: TableRowInsertion;
+  tableRowDeletion?: TableRowDeletion;
+  tableColumnInsertion?: TableColumnInsertion;
+  tableColumnDeletion?: TableColumnDeletion;
   commentId?: number;
   /**
    * Position in the input `operations` array, used as a secondary
@@ -211,6 +223,359 @@ const findEnclosingTableBoundary = (doc: PMNode, blockFrom: number): TableBounda
     }
   }
   return null;
+};
+
+type TableRowInsertion = {
+  tableStart: number;
+  rowPosition: number;
+  rowType: PMNode["type"];
+  cells: readonly PMNode[];
+  rowspanUpdates: readonly number[];
+};
+
+type TableRowTarget = {
+  table: PMNode;
+  tableStart: number;
+  tablePosition: number;
+  rowIndex: number;
+  rowPosition: number;
+};
+
+type TableRowDeletion = Omit<TableRowTarget, "table">;
+
+type TableColumnInsertion = {
+  tablePosition: number;
+  columnIndex: number;
+};
+
+type TableColumnDeletion = TableColumnInsertion;
+
+const getTableColumnCoordinateKey = ({
+  tablePosition,
+  columnIndex,
+}: TableColumnInsertion): string => `${tablePosition}:${columnIndex}`;
+
+type TableCellTarget = {
+  tablePosition: number;
+  cellPosition: number;
+  cellEndPosition: number;
+  leftColumnIndex: number;
+  rightColumnIndex: number;
+};
+
+const findEnclosingTableRow = (doc: PMNode, blockFrom: number): TableRowTarget | null => {
+  const resolved = doc.resolve(blockFrom);
+  for (let rowDepth = resolved.depth; rowDepth > 0; rowDepth--) {
+    if (resolved.node(rowDepth).type.spec["tableRole"] !== "row") {
+      continue;
+    }
+    const tableDepth = rowDepth - 1;
+    const table = resolved.node(tableDepth);
+    if (table.type.spec["tableRole"] !== "table") {
+      return null;
+    }
+    return {
+      table,
+      tableStart: resolved.start(tableDepth),
+      tablePosition: resolved.before(tableDepth),
+      rowIndex: resolved.index(tableDepth),
+      rowPosition: resolved.before(rowDepth),
+    };
+  }
+  return null;
+};
+
+const findEnclosingTableCell = (doc: PMNode, blockFrom: number): TableCellTarget | null => {
+  const resolved = doc.resolve(blockFrom);
+  for (let cellDepth = resolved.depth; cellDepth > 0; cellDepth--) {
+    const cell = resolved.node(cellDepth);
+    const tableRole = cell.type.spec["tableRole"];
+    if (tableRole !== "cell" && tableRole !== "header_cell") {
+      continue;
+    }
+    const rowDepth = cellDepth - 1;
+    const tableDepth = rowDepth - 1;
+    if (tableDepth < 0) {
+      return null;
+    }
+    if (
+      resolved.node(rowDepth).type.spec["tableRole"] !== "row" ||
+      resolved.node(tableDepth).type.spec["tableRole"] !== "table"
+    ) {
+      return null;
+    }
+    const table = resolved.node(tableDepth);
+    const tableStart = resolved.start(tableDepth);
+    const cellPosition = resolved.before(cellDepth);
+    const cellRect = TableMap.get(table).findCell(cellPosition - tableStart);
+    return {
+      tablePosition: resolved.before(tableDepth),
+      cellPosition,
+      cellEndPosition: cellPosition + cell.nodeSize,
+      leftColumnIndex: cellRect.left,
+      rightColumnIndex: cellRect.right,
+    };
+  }
+  return null;
+};
+
+const findTableColumnInsertion = (
+  doc: PMNode,
+  blockFrom: number,
+  position: "after" | "before",
+): (TableColumnInsertion & { boundaryPosition: number }) | null => {
+  const target = findEnclosingTableCell(doc, blockFrom);
+  if (!target) {
+    return null;
+  }
+  return {
+    tablePosition: target.tablePosition,
+    columnIndex: position === "before" ? target.leftColumnIndex : target.rightColumnIndex,
+    boundaryPosition: position === "before" ? target.cellPosition : target.cellEndPosition,
+  };
+};
+
+const deleteTableNode = (
+  tr: Transaction,
+  tablePosition: number,
+  table: PMNode,
+): Transaction | null => {
+  const tableEnd = tablePosition + table.nodeSize;
+  const resolved = tr.doc.resolve(tablePosition);
+  const parent = resolved.parent;
+  const tableIndex = resolved.index();
+  if (parent.canReplace(tableIndex, tableIndex + 1)) {
+    return tr.delete(tablePosition, tableEnd);
+  }
+  const emptyParagraph = tr.doc.type.schema.nodes["paragraph"]?.createAndFill();
+  if (
+    !emptyParagraph ||
+    !parent.canReplaceWith(tableIndex, tableIndex + 1, emptyParagraph.type, emptyParagraph.marks)
+  ) {
+    return null;
+  }
+  return tr.replaceWith(tablePosition, tableEnd, emptyParagraph);
+};
+
+const buildTableRowInsertion = (
+  map: TableMap,
+  table: PMNode,
+  tableStart: number,
+  rowIndex: number,
+): TableRowInsertion | null => {
+  const cells: PMNode[] = [];
+  const rowspanUpdates: number[] = [];
+  let referenceRow: number | null = rowIndex > 0 ? -1 : 0;
+  if (rowIsHeader(map, table, rowIndex + referenceRow)) {
+    referenceRow = rowIndex === 0 || rowIndex === map.height ? null : 0;
+  }
+  for (let col = 0, index = map.width * rowIndex; col < map.width; col++, index++) {
+    if (rowIndex > 0 && rowIndex < map.height && map.map[index] === map.map[index - map.width]) {
+      const cellPosition = map.map[index];
+      if (cellPosition === undefined) {
+        return null;
+      }
+      const cell = table.nodeAt(cellPosition);
+      if (!cell) {
+        return null;
+      }
+      const colspan: unknown = cell.attrs["colspan"];
+      if (typeof colspan !== "number" || colspan < 1) {
+        return null;
+      }
+      rowspanUpdates.push(cellPosition);
+      col += colspan - 1;
+      index += colspan - 1;
+      continue;
+    }
+    const referencePosition =
+      referenceRow === null ? undefined : map.map[index + referenceRow * map.width];
+    const cellType =
+      referencePosition === undefined
+        ? tableNodeTypes(table.type.schema).cell
+        : table.nodeAt(referencePosition)?.type;
+    const cell = cellType?.createAndFill();
+    if (!cell) {
+      return null;
+    }
+    cells.push(cell);
+  }
+  if (cells.length === 0) {
+    return null;
+  }
+  let rowPosition = tableStart;
+  for (let index = 0; index < rowIndex; index++) {
+    rowPosition += table.child(index).nodeSize;
+  }
+  return {
+    tableStart,
+    rowPosition,
+    rowType: tableNodeTypes(table.type.schema).row,
+    cells,
+    rowspanUpdates,
+  };
+};
+
+const findTableRowInsertion = (
+  doc: PMNode,
+  blockFrom: number,
+  position: "after" | "before",
+): TableRowInsertion | null => {
+  const target = findEnclosingTableRow(doc, blockFrom);
+  if (!target) {
+    return null;
+  }
+  const map = TableMap.get(target.table);
+  const rowIndex = position === "before" ? target.rowIndex : target.rowIndex + 1;
+  return buildTableRowInsertion(map, target.table, target.tableStart, rowIndex);
+};
+
+const populateTableRow = (row: PMNode, cellTexts: readonly string[] | undefined): PMNode => {
+  if (cellTexts === undefined) {
+    return row;
+  }
+  const cells: PMNode[] = [];
+  row.forEach((cell, _offset, index) => {
+    const paragraph = cell.firstChild;
+    if (!paragraph?.isTextblock) {
+      cells.push(cell);
+      return;
+    }
+    const text = cellTexts[index] ?? "";
+    const content = text.length > 0 ? row.type.schema.text(text) : null;
+    const nextParagraph = paragraph.type.create(stripIdentityAttrs(paragraph.attrs), content);
+    cells.push(cell.type.create(cell.attrs, nextParagraph));
+  });
+  return row.type.create(row.attrs, cells);
+};
+
+const getInsertedPhysicalColumnRows = (map: TableMap, columnIndex: number): number[] => {
+  const rows: number[] = [];
+  for (let row = 0; row < map.height; row++) {
+    const index = row * map.width + columnIndex;
+    const crossesColspan =
+      columnIndex > 0 && columnIndex < map.width && map.map[index - 1] === map.map[index];
+    if (!crossesColspan) {
+      rows.push(row);
+    }
+  }
+  return rows;
+};
+
+type TableColumnInsertionAction =
+  | { type: "insertCell"; position: number; cell: PMNode }
+  | { type: "setColspan"; position: number; attrs: Record<string, unknown> };
+
+const expandTableCellColspan = (
+  cell: PMNode,
+  colspanOffset: number,
+): Record<string, unknown> | null => {
+  const colspan: unknown = cell.attrs["colspan"];
+  const rowspan: unknown = cell.attrs["rowspan"];
+  const colwidth: unknown = cell.attrs["colwidth"];
+  if (
+    typeof colspan !== "number" ||
+    !Number.isInteger(colspan) ||
+    colspan < 1 ||
+    typeof rowspan !== "number" ||
+    !Number.isInteger(rowspan) ||
+    rowspan < 1 ||
+    !Number.isInteger(colspanOffset) ||
+    colspanOffset < 0 ||
+    colspanOffset > colspan
+  ) {
+    return null;
+  }
+  if (colwidth !== null && !Array.isArray(colwidth)) {
+    return null;
+  }
+  if (Array.isArray(colwidth) && !colwidth.every((width) => typeof width === "number")) {
+    return null;
+  }
+  const nextColwidth = Array.isArray(colwidth) ? [...colwidth] : null;
+  nextColwidth?.splice(colspanOffset, 0, 0);
+  return {
+    ...cell.attrs,
+    colspan: colspan + 1,
+    colwidth: nextColwidth,
+  };
+};
+
+const populateTableCell = (cell: PMNode, text: string): PMNode | null => {
+  const paragraph = cell.firstChild;
+  if (!paragraph?.isTextblock) {
+    return null;
+  }
+  const content = text.length > 0 ? cell.type.schema.text(text) : null;
+  const nextParagraph = paragraph.type.create(stripIdentityAttrs(paragraph.attrs), content);
+  return cell.type.create(cell.attrs, nextParagraph);
+};
+
+const buildTableColumnInsertionActions = (
+  map: TableMap,
+  table: PMNode,
+  columnIndex: number,
+  cellTexts: readonly string[] | undefined,
+): TableColumnInsertionAction[] | null => {
+  if (columnIndex < 0 || columnIndex > map.width) {
+    return null;
+  }
+  const physicalRows = getInsertedPhysicalColumnRows(map, columnIndex);
+  if ((cellTexts?.length ?? 0) > physicalRows.length) {
+    return null;
+  }
+  let referenceColumn: number | null = columnIndex > 0 ? -1 : 0;
+  if (columnIsHeader(map, table, columnIndex + referenceColumn)) {
+    referenceColumn = columnIndex === 0 || columnIndex === map.width ? null : 0;
+  }
+  const actions: TableColumnInsertionAction[] = [];
+  let physicalCellIndex = 0;
+  for (let row = 0; row < map.height; row++) {
+    const index = row * map.width + columnIndex;
+    if (columnIndex > 0 && columnIndex < map.width && map.map[index - 1] === map.map[index]) {
+      const position = map.map[index];
+      if (position === undefined) {
+        return null;
+      }
+      const cell = table.nodeAt(position);
+      if (!cell) {
+        return null;
+      }
+      const colspanOffset = columnIndex - map.colCount(position);
+      const attrs = expandTableCellColspan(cell, colspanOffset);
+      if (!attrs) {
+        return null;
+      }
+      actions.push({
+        type: "setColspan",
+        position,
+        attrs,
+      });
+      row += Number(cell.attrs["rowspan"]) - 1;
+      continue;
+    }
+    const referencePosition =
+      referenceColumn === null ? undefined : map.map[index + referenceColumn];
+    const cellType =
+      referencePosition === undefined
+        ? tableNodeTypes(table.type.schema).cell
+        : table.nodeAt(referencePosition)?.type;
+    const cell = cellType?.createAndFill();
+    if (!cell) {
+      return null;
+    }
+    const populatedCell = populateTableCell(cell, cellTexts?.[physicalCellIndex] ?? "");
+    if (!populatedCell) {
+      return null;
+    }
+    actions.push({
+      type: "insertCell",
+      position: map.positionAt(row, columnIndex, table),
+      cell: populatedCell,
+    });
+    physicalCellIndex++;
+  }
+  return actions;
 };
 
 /**
@@ -372,6 +737,8 @@ const applyFolioAIEditOperationsInternal = ({
   const insertionType = view.state.schema.marks["insertion"];
   const deletionType = view.state.schema.marks["deletion"];
   const commentType = view.state.schema.marks["comment"];
+  const claimedTableRows = new Set<string>();
+  const claimedTableColumns = new Set<string>();
 
   if (mode === "tracked-changes" && (!insertionType || !deletionType)) {
     return {
@@ -391,7 +758,14 @@ const applyFolioAIEditOperationsInternal = ({
   const liveBlocksByParaId = collectLiveBlocksByParaId(view.state.doc);
 
   for (const [index, operation] of operations.entries()) {
-    if (mode === "tracked-changes" && operation.type === "formatRange") {
+    if (
+      mode === "tracked-changes" &&
+      (operation.type === "formatRange" ||
+        operation.type === "insertTableRow" ||
+        operation.type === "deleteTableRow" ||
+        operation.type === "insertTableColumn" ||
+        operation.type === "deleteTableColumn")
+    ) {
       skipped.push({ id: operation.id, reason: "unsupportedMode" });
       continue;
     }
@@ -413,6 +787,26 @@ const applyFolioAIEditOperationsInternal = ({
       continue;
     }
 
+    const deletion = resolution.operation.tableRowDeletion;
+    if (deletion) {
+      const rowKey = `${deletion.tablePosition}:${deletion.rowIndex}`;
+      if (claimedTableRows.has(rowKey)) {
+        skipped.push({ id: operation.id, reason: "noopOperation" });
+        continue;
+      }
+      claimedTableRows.add(rowKey);
+    }
+
+    const columnDeletion = resolution.operation.tableColumnDeletion;
+    if (columnDeletion) {
+      const columnKey = getTableColumnCoordinateKey(columnDeletion);
+      if (claimedTableColumns.has(columnKey)) {
+        skipped.push({ id: operation.id, reason: "noopOperation" });
+        continue;
+      }
+      claimedTableColumns.add(columnKey);
+    }
+
     const commentId = commentText !== undefined ? createCommentId?.(commentText) : undefined;
     resolved.push({
       ...resolution.operation,
@@ -428,14 +822,37 @@ const applyFolioAIEditOperationsInternal = ({
   let tr = view.state.tr;
   let revisionSeed = revisionIdSeed ?? nextRevisionSeed(resolved.length);
   const date = new Date().toISOString();
+  const insertedColumnCounts = new Map<string, number>();
 
-  // Sort right-to-left so each tr.insert / tr.delete leaves
-  // earlier positions intact. For ties on `from` we order by
-  // `originalIndex` DESC: applied in reverse, that means the
-  // earlier-listed op lands at the original anchor and the later
-  // one ends up immediately after it, matching the AI's logical
-  // sequence.
+  // Sort right-to-left so each tr.insert / tr.delete leaves earlier
+  // positions intact. Column insertions run before deletions at the
+  // same snapshot coordinate; the deletion path accounts for those
+  // inserted columns so it still removes the original target. Other
+  // ties use reverse input order so repeated insertions retain their
+  // requested sequence.
   for (const item of resolved.toSorted((left, right) => {
+    const leftColumn = left.tableColumnInsertion ?? left.tableColumnDeletion;
+    const rightColumn = right.tableColumnInsertion ?? right.tableColumnDeletion;
+    if (!leftColumn && rightColumn) {
+      return -1;
+    }
+    if (leftColumn && !rightColumn) {
+      return 1;
+    }
+    if (leftColumn && rightColumn) {
+      if (leftColumn.tablePosition !== rightColumn.tablePosition) {
+        return rightColumn.tablePosition - leftColumn.tablePosition;
+      }
+      if (leftColumn.columnIndex !== rightColumn.columnIndex) {
+        return rightColumn.columnIndex - leftColumn.columnIndex;
+      }
+      const leftIsInsertion = left.tableColumnInsertion !== undefined;
+      const rightIsInsertion = right.tableColumnInsertion !== undefined;
+      if (leftIsInsertion !== rightIsInsertion) {
+        return leftIsInsertion ? -1 : 1;
+      }
+      return right.originalIndex - left.originalIndex;
+    }
     if (left.from !== right.from) {
       return right.from - left.from;
     }
@@ -655,6 +1072,187 @@ const applyFolioAIEditOperationsInternal = ({
         // tracked-changes for new tables is a separate future
         // concern.
         tr = tr.insert(item.from, node);
+        break;
+      }
+      case "insertTableRow": {
+        const insertion = item.tableRowInsertion;
+        if (!insertion) {
+          skipped.push({
+            id: item.operation.id,
+            reason: "unsupportedBlock",
+          });
+          continue;
+        }
+        const liveRowspanUpdates: { position: number; cell: PMNode; rowspan: number }[] = [];
+        let invalidRowspanUpdate = false;
+        for (const updatePosition of insertion.rowspanUpdates) {
+          const cellPosition = insertion.tableStart + updatePosition;
+          const liveCell = tr.doc.nodeAt(cellPosition);
+          if (!liveCell) {
+            invalidRowspanUpdate = true;
+            break;
+          }
+          const rowspan: unknown = liveCell.attrs["rowspan"];
+          if (typeof rowspan !== "number") {
+            invalidRowspanUpdate = true;
+            break;
+          }
+          liveRowspanUpdates.push({ position: cellPosition, cell: liveCell, rowspan });
+        }
+        if (invalidRowspanUpdate) {
+          skipped.push({
+            id: item.operation.id,
+            reason: "unsupportedBlock",
+          });
+          continue;
+        }
+        for (const update of liveRowspanUpdates) {
+          tr = tr.setNodeMarkup(update.position, undefined, {
+            ...update.cell.attrs,
+            rowspan: update.rowspan + 1,
+          });
+        }
+        const row = insertion.rowType.create(null, insertion.cells);
+        tr = tr.insert(insertion.rowPosition, populateTableRow(row, item.operation.cellTexts));
+        break;
+      }
+      case "insertTableColumn": {
+        const insertion = item.tableColumnInsertion;
+        const tablePosition = insertion ? tr.mapping.map(insertion.tablePosition, 1) : null;
+        const table = tablePosition === null ? null : tr.doc.nodeAt(tablePosition);
+        if (
+          !insertion ||
+          tablePosition === null ||
+          !table ||
+          table.type.spec["tableRole"] !== "table"
+        ) {
+          skipped.push({
+            id: item.operation.id,
+            reason: "unsupportedBlock",
+          });
+          continue;
+        }
+        const map = TableMap.get(table);
+        const actions = buildTableColumnInsertionActions(
+          map,
+          table,
+          insertion.columnIndex,
+          item.operation.cellTexts,
+        );
+        if (!actions) {
+          skipped.push({
+            id: item.operation.id,
+            reason: "unsupportedBlock",
+          });
+          continue;
+        }
+        const mapFrom = tr.mapping.maps.length;
+        for (const action of actions) {
+          const position = tr.mapping.slice(mapFrom).map(tablePosition + 1 + action.position);
+          if (action.type === "insertCell") {
+            tr = tr.insert(position, action.cell);
+            continue;
+          }
+          tr = tr.setNodeMarkup(position, undefined, action.attrs);
+        }
+        const columnKey = getTableColumnCoordinateKey(insertion);
+        insertedColumnCounts.set(columnKey, (insertedColumnCounts.get(columnKey) ?? 0) + 1);
+        break;
+      }
+      case "deleteTableColumn": {
+        const deletion = item.tableColumnDeletion;
+        const tablePosition = deletion ? tr.mapping.map(deletion.tablePosition, 1) : null;
+        const table = tablePosition === null ? null : tr.doc.nodeAt(tablePosition);
+        if (
+          !deletion ||
+          tablePosition === null ||
+          !table ||
+          table.type.spec["tableRole"] !== "table"
+        ) {
+          skipped.push({
+            id: item.operation.id,
+            reason: "unsupportedBlock",
+          });
+          continue;
+        }
+        const map = TableMap.get(table);
+        const columnKey = getTableColumnCoordinateKey(deletion);
+        const columnIndex = deletion.columnIndex + (insertedColumnCounts.get(columnKey) ?? 0);
+        if (columnIndex < 0 || columnIndex >= map.width) {
+          skipped.push({
+            id: item.operation.id,
+            reason: "unsupportedBlock",
+          });
+          continue;
+        }
+        if (map.width === 1) {
+          const nextTr = deleteTableNode(tr, tablePosition, table);
+          if (!nextTr) {
+            skipped.push({
+              id: item.operation.id,
+              reason: "unsupportedBlock",
+            });
+            continue;
+          }
+          tr = nextTr;
+          break;
+        }
+        removeColumn(
+          tr,
+          {
+            map,
+            table,
+            tableStart: tablePosition + 1,
+            left: columnIndex,
+            top: 0,
+            right: columnIndex + 1,
+            bottom: map.height,
+          },
+          columnIndex,
+        );
+        break;
+      }
+      case "deleteTableRow": {
+        const deletion = item.tableRowDeletion;
+        const table = deletion ? tr.doc.nodeAt(deletion.tablePosition) : null;
+        if (
+          !deletion ||
+          !table ||
+          table.type.spec["tableRole"] !== "table" ||
+          deletion.rowIndex >= table.childCount
+        ) {
+          skipped.push({
+            id: item.operation.id,
+            reason: "unsupportedBlock",
+          });
+          continue;
+        }
+        if (table.childCount === 1) {
+          const nextTr = deleteTableNode(tr, deletion.tablePosition, table);
+          if (!nextTr) {
+            skipped.push({
+              id: item.operation.id,
+              reason: "unsupportedBlock",
+            });
+            continue;
+          }
+          tr = nextTr;
+          break;
+        }
+        const map = TableMap.get(table);
+        removeRow(
+          tr,
+          {
+            map,
+            table,
+            tableStart: deletion.tableStart,
+            left: 0,
+            top: deletion.rowIndex,
+            right: map.width,
+            bottom: deletion.rowIndex + 1,
+          },
+          deletion.rowIndex,
+        );
         break;
       }
       case "deleteBlock": {
@@ -1110,17 +1708,115 @@ const resolveOperation = ({
     };
   }
 
+  if (operation.type === "insertTableRow") {
+    const position = operation.position ?? "after";
+    const insertion = findTableRowInsertion(doc, blockFrom, position);
+    if (!insertion || (operation.cellTexts?.length ?? 0) > insertion.cells.length) {
+      return { type: "skip", reason: "unsupportedBlock" };
+    }
+    return {
+      type: "resolved",
+      operation: {
+        operation,
+        from: insertion.rowPosition,
+        to: insertion.rowPosition,
+        blockFrom,
+        blockTo,
+        blockNode,
+        tableRowInsertion: insertion,
+      },
+    };
+  }
+
+  if (operation.type === "deleteTableRow") {
+    const target = findEnclosingTableRow(doc, blockFrom);
+    if (!target) {
+      return { type: "skip", reason: "unsupportedBlock" };
+    }
+    return {
+      type: "resolved",
+      operation: {
+        operation,
+        from: target.rowPosition,
+        to: target.rowPosition,
+        blockFrom,
+        blockTo,
+        blockNode,
+        tableRowDeletion: {
+          tableStart: target.tableStart,
+          tablePosition: target.tablePosition,
+          rowIndex: target.rowIndex,
+          rowPosition: target.rowPosition,
+        },
+      },
+    };
+  }
+
+  if (operation.type === "insertTableColumn") {
+    const position = operation.position ?? "after";
+    const insertion = findTableColumnInsertion(doc, blockFrom, position);
+    if (!insertion) {
+      return { type: "skip", reason: "unsupportedBlock" };
+    }
+    const { boundaryPosition, ...tableColumnInsertion } = insertion;
+    return {
+      type: "resolved",
+      operation: {
+        operation,
+        from: boundaryPosition,
+        to: boundaryPosition,
+        blockFrom,
+        blockTo,
+        blockNode,
+        tableColumnInsertion,
+      },
+    };
+  }
+
+  if (operation.type === "deleteTableColumn") {
+    const target = findEnclosingTableCell(doc, blockFrom);
+    if (!target) {
+      return { type: "skip", reason: "unsupportedBlock" };
+    }
+    return {
+      type: "resolved",
+      operation: {
+        operation,
+        from: target.cellPosition,
+        to: target.cellPosition,
+        blockFrom,
+        blockTo,
+        blockNode,
+        tableColumnDeletion: {
+          tablePosition: target.tablePosition,
+          columnIndex: target.leftColumnIndex,
+        },
+      },
+    };
+  }
+
   if (operation.type === "deleteBlock" || operation.type === "replaceBlock") {
     const range = getTextRangeFromCleanBlock(cleanBlock);
     if (!range) {
-      // Empty block. The AI never sees these — the snapshot
-      // explicitly skips blocks whose normalised text is empty,
-      // so by construction the resolver only ever lands here on a
-      // block that was non-empty at snapshot time and got emptied
-      // between snapshot and apply. The textHash gate above already
-      // rejects that case as `changedBlock`, so this branch is
-      // unreachable through the real flow; keeping the skip as a
-      // defensive guard.
+      const insertionPoint = cleanBlock.offsets.at(0);
+      if (
+        operation.type === "replaceBlock" &&
+        currentText.length === 0 &&
+        operation.text.length > 0 &&
+        insertionPoint !== undefined
+      ) {
+        return {
+          type: "resolved",
+          operation: {
+            operation,
+            from: insertionPoint,
+            to: insertionPoint,
+            blockFrom,
+            blockTo,
+            blockNode,
+          },
+        };
+      }
       return { type: "skip", reason: "unsupportedBlock" };
     }
     // The model occasionally emits replaceBlock with text identical

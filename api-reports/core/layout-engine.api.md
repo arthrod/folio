@@ -6,8 +6,11 @@
 
 import { ImagePosition } from '@stll/docx-core/model';
 import { ImageWrap } from '@stll/docx-core/model';
+import * as import__stll_docx_core_model from '@stll/docx-core/model';
 import { SdtProperties } from '@stll/docx-core/model';
 import { SdtType } from '@stll/docx-core/model';
+import { ShapeTextBody } from '@stll/docx-core/model';
+import { TableCellFormatting } from '@stll/docx-core/model';
 import { TableWidthType } from '@stll/docx-core/model';
 
 // @public
@@ -46,6 +49,8 @@ export type CellBorders = {
     bottom?: CellBorderSpec;
     left?: CellBorderSpec;
     right?: CellBorderSpec;
+    topLeftToBottomRight?: CellBorderSpec;
+    topRightToBottomLeft?: CellBorderSpec;
 };
 
 // @public
@@ -78,7 +83,9 @@ export type ColumnBreakMeasure = {
 export type ColumnLayout = {
     count: number;
     gap: number;
-    equalWidth?: boolean; /** Draw vertical separator line between columns (w:sep). */
+    equalWidth?: boolean; /** Authored widths for unequal-width section columns. */
+    widths?: number[]; /** Authored space after each column except the last. */
+    gaps?: number[]; /** Draw vertical separator line between columns (w:sep). */
     separator?: boolean;
 };
 
@@ -100,6 +107,8 @@ export function createPaginator(options: PaginatorOptions): {
         count: number;
         gap: number;
         equalWidth?: boolean;
+        widths?: number[];
+        gaps?: number[];
         separator?: boolean;
     }; /** Get current state. */
     getCurrentState: () => PageState; /** Get available height in current column. */
@@ -233,6 +242,9 @@ export function getHeaderRowsHeight(measure: TableMeasure, headerRowCount: numbe
 export function getMidChainIndices(chains: Map<number, KeepNextChain>): Set<number>;
 
 // @public
+export const getTableRowLeadingWidth: (row: TableRow, columnWidths: readonly number[]) => number;
+
+// @public
 export function hasKeepLines(block: FlowBlock): boolean;
 
 // @public
@@ -325,14 +337,16 @@ export type ImageRun = {
     alt?: string; /** CSS transform string (rotation, flip) */
     transform?: string;
     opacity?: number; /** Position for floating/anchored images */
-    position?: ImageRunPosition; /** Wrap type from DOCX (inline, square, tight, through, topAndBottom, etc.) */
+    position?: ImageRunPosition; /** Whether a table-cell anchor uses the cell as its positioning scope. Undefined defaults true. */
+    layoutInCell?: boolean; /** Wrap type from DOCX (inline, square, tight, through, topAndBottom, etc.) */
     wrapType?: ImageWrap["type"]; /** Display mode for CSS rendering */
     displayMode?: "inline" | "block" | "float"; /** CSS float direction */
     cssFloat?: "left" | "right" | "none"; /** Wrap distances in pixels */
     distTop?: number;
     distBottom?: number;
     distLeft?: number;
-    distRight?: number;
+    distRight?: number; /** Use the image box as the exact line height for an embedded-object preview. */
+    exactLineHeight?: boolean;
     cropTop?: number;
     cropRight?: number;
     cropBottom?: number;
@@ -400,12 +414,14 @@ export type LayoutOptions = {
         h: number;
     }; /** Initial page margins. */
     margins: PageMargins;
-    firstPageMargins?: PageMargins; /** Body-level final section page size. */
+    firstPageMargins?: PageMargins; /** Per-section body margins used on even section pages. */
+    sectionEvenPageMargins?: (PageMargins | undefined)[]; /** Body-level final section page size. */
     finalPageSize?: {
         w: number;
         h: number;
     }; /** Body-level final section margins. */
-    finalMargins?: PageMargins; /** Column configuration. */
+    finalMargins?: PageMargins; /** Body-level final section column configuration. */
+    finalColumns?: ColumnLayout; /** Column configuration. */
     columns?: ColumnLayout; /** Gap between rendered pages (for UI). */
     pageGap?: number; /** Default line height multiplier. */
     defaultLineHeight?: number; /** Header content heights by variant. */
@@ -458,7 +474,10 @@ export type MeasuredLine = {
     lineHeight: number; /** Left offset from floating images (pixels from content left edge). */
     leftOffset?: number; /** Right offset from floating images (pixels from content right edge). */
     rightOffset?: number;
-    floatSkipBefore?: number;
+    floatSkipBefore?: number; /** Decorative hyphen inserted at a dictionary break without changing source text. */
+    discretionaryHyphen?: {
+        runIndex: number;
+    };
 };
 
 // @public
@@ -537,7 +556,8 @@ export type PaginatorOptions = {
     }; /** Page margins. */
     margins: PageMargins; /** Swap left/right margins on even physical pages. */
     mirrorMargins?: boolean;
-    firstPageMargins?: PageMargins; /** Column configuration (optional). */
+    firstPageMargins?: PageMargins; /** Per-section body margins used on even section pages. */
+    sectionEvenPageMargins?: (PageMargins | undefined)[]; /** Column configuration (optional). */
     columns?: ColumnLayout; /** Per-page footnote reserved heights (pageNumber → height in pixels). */
     footnoteReservedHeights?: Map<number, number>; /** Header/footer refs by section index. */
     sectionHeaderFooterRefs?: PageHeaderFooterRefs[]; /** Callback when a new page is created. */
@@ -546,12 +566,39 @@ export type PaginatorOptions = {
 
 // @public
 export type ParagraphAttrs = {
-    alignment?: "left" | "center" | "right" | "justify";
-    spacing?: ParagraphSpacing;
+    alignment?: "left" | "center" | "right" | "justify"; /** East Asian first/last-character restrictions (`w:kinsoku`). */
+    kinsoku?: boolean; /** Hanging punctuation (`w:overflowPunct`); defaults to enabled when omitted. */
+    overflowPunctuation?: boolean; /** Exempt this paragraph from document automatic hyphenation. */
+    suppressAutoHyphens?: boolean; /** Document-wide automatic hyphenation controls retained for line layout. */
+    automaticHyphenation?: {
+        enabled: true;
+        doNotHyphenateCaps?: boolean;
+        consecutiveLineLimit?: number; /** Maximum tolerated line-end whitespace before hyphenation, in twips. */
+        hyphenationZoneTwips?: number;
+    }; /** Document-wide custom line-edge characters and compatibility behavior. */
+    lineBreakRules?: {
+        noLineBreaksBefore?: {
+            language?: string;
+            characters: string;
+        };
+        noLineBreaksAfter?: {
+            language?: string;
+            characters: string;
+        };
+        useLegacyEthiopicAmharicRules?: boolean;
+    }; /** OOXML outline level (`w:outlineLvl`), where zero is the top level. */
+    outlineLevel?: number;
+    spacing?: ParagraphSpacing; /** Spacing sides resolved from OOXML automatic paragraph spacing. */
+    automaticSpacing?: {
+        before?: boolean;
+        after?: boolean;
+    };
     spacingExplicit?: {
         before?: boolean;
         after?: boolean;
     };
+    hasDirectParagraphFormatting?: boolean; /** Whether an empty paragraph carries direct formatting on its paragraph mark. */
+    hasDirectParagraphMarkFormatting?: boolean;
     indent?: ParagraphIndent;
     keepNext?: boolean;
     keepLines?: boolean;
@@ -565,13 +612,16 @@ export type ParagraphAttrs = {
     borders?: ParagraphBorders;
     shading?: string;
     tabs?: TabStop[]; /** Render structural empty paragraphs as zero-height anchors. */
-    suppressEmptyParagraphHeight?: boolean;
+    suppressEmptyParagraphHeight?: boolean; /** Reserve the reference extra line advance for a story-leading empty level-0 outline paragraph. */
+    reserveEmptyOutlineHeight?: boolean;
     numPr?: ListNumPr;
     listMarker?: string;
     listIsBullet?: boolean;
     listMarkerHidden?: boolean;
     listMarkerFontFamily?: string;
     listMarkerFontSize?: number;
+    listMarkerBold?: boolean; /** Horizontal alignment of the marker around the paragraph's list anchor. */
+    listMarkerAlignment?: "left" | "center" | "right";
     listMarkerSuffix?: "tab" | "space" | "nothing";
     listMarkerRevision?: {
         kind: "ins" | "del";
@@ -642,6 +692,9 @@ export type ParagraphSpacing = {
     lineRule?: "auto" | "exact" | "atLeast";
 };
 
+// @public (undocumented)
+export const resolveSectionHeaderFooterRefs: (documentModel: import__stll_docx_core_model.Document | null | undefined) => PageHeaderFooterRefs[] | undefined;
+
 // @public
 export type Run = TextRun | TabRun | ImageRun | LineBreakRun | FieldRun | MathRun;
 
@@ -659,7 +712,12 @@ export type RunFormatting = {
     highlight?: string;
     shading?: string;
     fontFamily?: string;
-    eastAsiaFontFamily?: string;
+    eastAsiaFontFamily?: string; /** Run language metadata resolved from `w:lang`. */
+    language?: {
+        val?: string;
+        eastAsia?: string;
+        bidi?: string;
+    };
     fontSize?: number;
     letterSpacing?: number;
     superscript?: boolean;
@@ -774,7 +832,8 @@ export type TableBlock = {
     rows: TableRow[];
     columnWidths?: number[]; /** Table width value (twips for dxa, 50ths of percent for pct). */
     width?: number; /** Table width type ('auto', 'pct', 'dxa', 'nil'). */
-    widthType?: TableWidthType; /** Table horizontal alignment */
+    widthType?: TableWidthType;
+    layout?: "fixed" | "autofit"; /** Table horizontal alignment */
     justification?: "left" | "center" | "right"; /** Table indent from left margin (in pixels, from w:tblInd) */
     indent?: number; /** Right-to-left column order (w:bidiVisual): logical column 0 paints on the right. */
     bidi?: boolean; /** Floating table properties (pixel values). */
@@ -792,6 +851,7 @@ export type TableCell = {
     rowSpan?: number;
     width?: number;
     verticalAlign?: "top" | "center" | "bottom";
+    textDirection?: NonNullable<TableCellFormatting["textDirection"]>;
     background?: string;
     borders?: CellBorders; /** Per-cell padding in pixels (from w:tcMar or table-level w:tblCellMar) */
     padding?: {
@@ -811,6 +871,9 @@ export type TableCellMeasure = {
     colSpan?: number;
     rowSpan?: number;
 };
+
+// @public
+export function tableColumnsArePinned(table: TableBlock): boolean;
 
 // @public
 export type TableFragment = FragmentBase & {
@@ -840,9 +903,12 @@ export type TableMeasure = {
 export type TableRow = {
     id: BlockId;
     cells: TableCell[];
+    gridBefore?: number;
+    gridAfter?: number;
     height?: number;
     heightRule?: "auto" | "atLeast" | "exact";
-    isHeader?: boolean;
+    isHeader?: boolean; /** `w:cantSplit`: keep this row in one flow region. */
+    cantSplit?: boolean;
     hidden?: boolean;
 };
 
@@ -872,7 +938,8 @@ export type TextBoxBlock = {
     kind: "textBox";
     id: BlockId; /** Width in pixels */
     width: number; /** Height in pixels (may be auto-calculated) */
-    height?: number; /** Fill/background color */
+    height?: number; /** Text fitting behavior */
+    autoFit?: ShapeTextBody["autoFit"]; /** Fill/background color */
     fillColor?: string; /** Border width in pixels */
     outlineWidth?: number; /** Border color */
     outlineColor?: string; /** Outline dash style, or `"none"` for an explicit no-outline. */
@@ -882,8 +949,8 @@ export type TextBoxBlock = {
         bottom: number;
         left: number;
         right: number;
-    }; /** Paragraph blocks inside the text box */
-    content: ParagraphBlock[]; /** Display mode copied from the ProseMirror text box node. */
+    }; /** Flow blocks inside the text box */
+    content: (ParagraphBlock | TableBlock)[]; /** Display mode copied from the ProseMirror text box node. */
     displayMode?: "inline" | "float" | "block"; /** CSS float direction copied from the ProseMirror text box node. */
     cssFloat?: "left" | "right" | "none"; /** OOXML wrap type for anchored text boxes. */
     wrapType?: ImageWrap["type"]; /** OOXML wrapText direction for anchored text boxes. */
@@ -910,8 +977,8 @@ export type TextBoxFragment = FragmentBase & {
 export type TextBoxMeasure = {
     kind: "textBox";
     width: number;
-    height: number; /** Pre-measured inner paragraph measures (avoids re-measuring during render) */
-    innerMeasures: ParagraphMeasure[];
+    height: number; /** Pre-measured inner content (avoids re-measuring during render) */
+    innerMeasures: (ParagraphMeasure | TableMeasure)[];
 };
 
 // @public

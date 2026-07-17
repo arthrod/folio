@@ -35,6 +35,34 @@ const baseRef = (): FolioAgentEditorRefLike => ({
 });
 
 describe("createEditorRefBridge: document operations", () => {
+  test("exposes transactional undo only when the editor ref supports it", () => {
+    const undoHandle = { type: "documentOperationUndo", id: "live-1" } as const;
+    const currentBridge = createEditorRefBridge({
+      ref: {
+        ...baseRef(),
+        undoDocumentOperations: (receivedHandle) => ({
+          status: "undone",
+          undoHandle: receivedHandle,
+        }),
+      },
+      author: "AI",
+      getComments: () => [],
+      setComments: () => {},
+    });
+    const legacyBridge = createEditorRefBridge({
+      ref: baseRef(),
+      author: "AI",
+      getComments: () => [],
+      setComments: () => {},
+    });
+
+    expect(currentBridge.undoDocumentOperations?.(undoHandle)).toEqual({
+      status: "undone",
+      undoHandle,
+    });
+    expect(legacyBridge.undoDocumentOperations).toBeUndefined();
+  });
+
   test("delegates a versioned batch to a current editor ref", () => {
     let receivedVersion: number | undefined;
     const ref: FolioAgentEditorRefLike = {
@@ -60,6 +88,7 @@ describe("createEditorRefBridge: document operations", () => {
     expect(result.version).toBe(FOLIO_DOCUMENT_OPERATION_CONTRACT_VERSION);
     expect(result.issues).toEqual([]);
     expect(result.receipts).toEqual([]);
+    expect(result.undoHandle).toBeNull();
   });
 
   test("preserves the versioned result when adapting an older editor ref", () => {
@@ -81,6 +110,7 @@ describe("createEditorRefBridge: document operations", () => {
       ...EMPTY_APPLY_RESULT,
       issues: [],
       receipts: [],
+      undoHandle: null,
     });
   });
 
@@ -139,6 +169,7 @@ describe("createEditorRefBridge: document operations", () => {
       skipped: [{ id: "op-1", reason: "unsupportedMode" }],
       issues: [UNSUPPORTED_MODE_ISSUE],
       receipts: [],
+      undoHandle: null,
     });
     expect(applyCalls).toBe(0);
   });
@@ -172,6 +203,7 @@ describe("createEditorRefBridge: document operations", () => {
       skipped: [{ id: "op-1", reason: "unsupportedMode" }],
       issues: [UNSUPPORTED_MODE_ISSUE],
       receipts: [],
+      undoHandle: null,
     });
     expect(applyCalls).toBe(0);
   });
@@ -364,6 +396,32 @@ describe("createEditorRefBridge: capability-conditional members", () => {
     });
 
     expect(bridge.getPageText).toBeUndefined();
+  });
+
+  test("getTargetPage and showInDocument are exposed only when the ref supports them", () => {
+    const target = { type: "block", story: "main", blockId: "AAAA0001" } as const;
+    const current = createEditorRefBridge({
+      ref: {
+        ...baseRef(),
+        getTargetPage: (received) =>
+          received.type === "block" && received.blockId === "AAAA0001" ? 2 : null,
+        showInDocument: (received) => received.type === "block",
+      },
+      author: "AI",
+      getComments: () => [],
+      setComments: () => {},
+    });
+    const legacy = createEditorRefBridge({
+      ref: baseRef(),
+      author: "AI",
+      getComments: () => [],
+      setComments: () => {},
+    });
+
+    expect(current.getTargetPage?.(target)).toBe(2);
+    expect(current.showInDocument?.(target)).toBe(true);
+    expect(legacy.getTargetPage).toBeUndefined();
+    expect(legacy.showInDocument).toBeUndefined();
   });
 
   test("getPageCount always delegates to ref.getTotalPages (required member, unaffected by the optional ones)", () => {

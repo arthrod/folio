@@ -82,6 +82,8 @@ describe("ListExtension suggestion mode integration", () => {
       listMarkerHidden: null,
       listMarkerFontFamily: null,
       listMarkerFontSize: null,
+      listMarkerBold: null,
+      listMarkerAlignment: null,
       listMarkerSuffix: null,
       listLevelNumFmts: null,
       listLevelStarts: null,

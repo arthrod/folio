@@ -27,7 +27,7 @@ import React, {
 import type { CSSProperties } from "react";
 import { createPortal } from "react-dom";
 
-import type { Mark, Node as PMNode } from "prosemirror-model";
+import type { Node as PMNode } from "prosemirror-model";
 import { NodeSelection, TextSelection } from "prosemirror-state";
 import type { EditorState, Transaction, Plugin } from "prosemirror-state";
 import { CellSelection } from "prosemirror-tables";
@@ -39,6 +39,7 @@ import type { AISuggestion } from "@stll/folio-core/ai-suggestions/types";
 import { createFolioEditor } from "@stll/folio-core/controller/folioEditor";
 import type { FolioEditor } from "@stll/folio-core/controller/folioEditor";
 import { createFolioEditorEmitter } from "@stll/folio-core/controller/folioEditorEvents";
+import { createLatestRequestGate } from "@stll/folio-core/controller/latestRequestGate";
 import { runLayoutPipeline as runLayoutPipelineCompute } from "@stll/folio-core/controller/layoutPipeline";
 import {
   browserClock,
@@ -46,6 +47,11 @@ import {
   type LayoutScheduler,
 } from "@stll/folio-core/controller/layoutScheduler";
 import { createLayoutSession } from "@stll/folio-core/controller/layoutSession";
+import {
+  documentFontsAreLoaded,
+  getDocumentFontSet,
+  waitForInitialLayoutFonts,
+} from "@stll/folio-core/controller/fontReadiness";
 import { getFootnoteText } from "@stll/folio-core/docx/footnoteParser";
 import {
   convertHeaderFooterPmDocToContent,
@@ -85,7 +91,7 @@ import type {
 } from "@stll/folio-core/layout-bridge/engine/selectionRects";
 import type * as SelectionGeometry from "@stll/folio-core/layout-bridge/engine/selectionRects";
 // Layout engine
-import type { ColumnLayout } from "@stll/folio-core/layout-engine";
+import { resolveSectionHeaderFooterRefs, type ColumnLayout } from "@stll/folio-core/layout-engine";
 import { recordLayoutPhase } from "@stll/folio-core/layout-engine/layoutInstrumentation";
 import type { LayoutRunReason } from "@stll/folio-core/layout-engine/layoutInstrumentation";
 import type {
@@ -140,7 +146,6 @@ import { getTransactionDirtyRange } from "@stll/folio-core/paged-layout/transact
 import { addRowBelow, addColumnRight } from "@stll/folio-core/prosemirror";
 import { findStartPosForParaId } from "@stll/folio-core/prosemirror/utils/findParagraphByParaId";
 import {
-  expectFontFamilyMarkAttrs,
   expectImageAttrs,
   expectTableAttrs,
   expectTableCellAttrs,
@@ -172,7 +177,6 @@ import type {
   StyleDefinitions,
   SectionProperties,
   HeaderFooter,
-  TextFormatting,
 } from "@stll/folio-core/types/document";
 import {
   closestHtmlElement,
@@ -257,6 +261,12 @@ export type PagedEditorProps = {
   onDocumentChange?: (document: Document) => void;
   /** Callback when a readonly user action would mutate the document. */
   onReadOnlyEditAttempt?: () => void;
+  /** Fires when the editor receives a copy event. */
+  onCopy?: () => void;
+  /** Fires when an editable editor receives a cut event. */
+  onCut?: () => void;
+  /** Fires when an editable editor receives a paste event. */
+  onPaste?: () => void;
   /** Callback when selection changes. */
   onSelectionChange?: (from: number, to: number) => void;
   /**
@@ -901,57 +911,6 @@ function renderHeaderFooterContentByRId(
   return rendered.size > 0 ? rendered : undefined;
 }
 
-function getSectionHeaderFooterRefs(
-  documentModel: Document | null | undefined,
-): PageHeaderFooterRefs[] | undefined {
-  const body = documentModel?.package.document;
-  if (!body) {
-    return undefined;
-  }
-  const documentEvenAndOddHeaders = documentModel.package.settings?.evenAndOddHeaders === true;
-  const sections = body.sections;
-  if (sections && sections.length > 0) {
-    return sections.map((section) =>
-      getHeaderFooterRefsFromSectionProperties(section.properties, documentEvenAndOddHeaders),
-    );
-  }
-  const finalProps = body.finalSectionProperties;
-  if (!finalProps) {
-    return undefined;
-  }
-  return [getHeaderFooterRefsFromSectionProperties(finalProps, documentEvenAndOddHeaders)];
-}
-
-function getHeaderFooterRefsFromSectionProperties(
-  props: SectionProperties,
-  documentEvenAndOddHeaders: boolean,
-): PageHeaderFooterRefs {
-  const refs: PageHeaderFooterRefs = {};
-  if (props.titlePg !== undefined) {
-    refs.titlePg = props.titlePg;
-  }
-  refs.evenAndOddHeaders = props.evenAndOddHeaders ?? documentEvenAndOddHeaders;
-  for (const ref of props.headerReferences ?? []) {
-    if (ref.type === "default") {
-      refs.headerDefault = ref.rId;
-    } else if (ref.type === "first") {
-      refs.headerFirst = ref.rId;
-    } else {
-      refs.headerEven = ref.rId;
-    }
-  }
-  for (const ref of props.footerReferences ?? []) {
-    if (ref.type === "default") {
-      refs.footerDefault = ref.rId;
-    } else if (ref.type === "first") {
-      refs.footerFirst = ref.rId;
-    } else {
-      refs.footerEven = ref.rId;
-    }
-  }
-  return refs;
-}
-
 type LayoutInputSignatureOptions = {
   columns: ColumnLayout | undefined;
   contentWidth: number;
@@ -1009,257 +968,7 @@ function stableJsonStringify(value: unknown): string {
   });
 }
 
-function getDocumentFontSet(): FontFaceSet | null {
-  if (typeof document === "undefined" || !("fonts" in document)) {
-    return null;
-  }
-  return document.fonts;
-}
-
-function documentFontsAreLoaded(): boolean {
-  const fontSet = getDocumentFontSet();
-  return !fontSet || fontSet.status === "loaded";
-}
-
-const INITIAL_LAYOUT_FONT_TIMEOUT_MS = 2000;
 const INITIAL_FONT_READY_SUPPRESSION_MS = 250;
-const DEFAULT_LAYOUT_FONT_FAMILY = "Calibri";
-const OFFICE_FONT_FAMILY_MAP: Record<string, string> = {
-  Arial: "Arimo",
-  Calibri: "Carlito",
-  Cambria: "Caladea",
-  "Times New Roman": "Tinos",
-  "Courier New": "Cousine",
-};
-const CSS_GENERIC_FONT_FAMILIES = new Set([
-  "serif",
-  "sans-serif",
-  "monospace",
-  "cursive",
-  "fantasy",
-  "system-ui",
-]);
-const LAYOUT_FONT_DESCRIPTORS = [
-  { style: "normal", weight: 400 },
-  { style: "italic", weight: 400 },
-  { style: "normal", weight: 700 },
-  { style: "italic", weight: 700 },
-] as const;
-const REGULAR_LAYOUT_FONT_DESCRIPTOR = LAYOUT_FONT_DESCRIPTORS[0];
-
-export type LayoutFontFace = {
-  family: string;
-  style: (typeof LAYOUT_FONT_DESCRIPTORS)[number]["style"];
-  weight: (typeof LAYOUT_FONT_DESCRIPTORS)[number]["weight"];
-};
-
-function waitForInitialLayoutFonts(
-  documentModel: Document | null,
-  pmDoc: EditorState["doc"],
-): Promise<boolean> {
-  const fontSet = getDocumentFontSet();
-  if (!fontSet) {
-    return Promise.resolve(true);
-  }
-
-  const loadChecks: string[] = [];
-  for (const face of collectInitialLayoutFontFaces(documentModel, pmDoc)) {
-    loadChecks.push(`${face.style} ${face.weight} 16px "${escapeCssFontFamily(face.family)}"`);
-  }
-
-  const loadFonts = Promise.allSettled(loadChecks.map((check) => fontSet.load(check)))
-    .then(() => fontSet.ready)
-    .then(() => true);
-  return Promise.race([
-    loadFonts,
-    new Promise<boolean>((resolve) => {
-      window.setTimeout(() => resolve(false), INITIAL_LAYOUT_FONT_TIMEOUT_MS);
-    }),
-  ]);
-}
-
-export function collectInitialLayoutFontFamilies(
-  documentModel: Document | null,
-  pmDoc: EditorState["doc"],
-): Set<string> {
-  return new Set(collectInitialLayoutFontFaces(documentModel, pmDoc).map(({ family }) => family));
-}
-
-export function collectInitialLayoutFontFaces(
-  documentModel: Document | null,
-  pmDoc: EditorState["doc"],
-): LayoutFontFace[] {
-  const faces = new Map<string, LayoutFontFace>();
-  addLayoutFontFamilyFace(faces, DEFAULT_LAYOUT_FONT_FAMILY, REGULAR_LAYOUT_FONT_DESCRIPTOR);
-
-  for (const family of documentModel?.requiredFonts ?? []) {
-    addLayoutFontFamilyFace(faces, family, REGULAR_LAYOUT_FONT_DESCRIPTOR);
-  }
-
-  addLayoutFontFamilyFace(
-    faces,
-    documentModel?.package.theme?.fontScheme?.majorFont?.latin,
-    REGULAR_LAYOUT_FONT_DESCRIPTOR,
-  );
-  addLayoutFontFamilyFace(
-    faces,
-    documentModel?.package.theme?.fontScheme?.minorFont?.latin,
-    REGULAR_LAYOUT_FONT_DESCRIPTOR,
-  );
-  addTextFormattingFontFaces(faces, documentModel?.package.styles?.docDefaults?.rPr);
-  for (const style of documentModel?.package.styles?.styles ?? []) {
-    addTextFormattingFontFaces(faces, style.rPr);
-  }
-
-  collectProseMirrorFontFaces(faces, pmDoc, undefined);
-
-  return Array.from(faces.values());
-}
-
-function addTextFormattingFontFaces(
-  faces: Map<string, LayoutFontFace>,
-  formatting: TextFormatting | undefined,
-): void {
-  addLayoutFontFamilyFace(
-    faces,
-    formatting?.fontFamily,
-    layoutDescriptorFromFormatting(formatting),
-  );
-}
-
-function collectProseMirrorFontFaces(
-  faces: Map<string, LayoutFontFace>,
-  node: PMNode,
-  inheritedTextFormatting: TextFormatting | undefined,
-): void {
-  const paragraphDefaults = readParagraphDefaultTextFormatting(node);
-  const textFormatting = paragraphDefaults ?? inheritedTextFormatting;
-  if (paragraphDefaults) {
-    addTextFormattingFontFaces(faces, paragraphDefaults);
-  }
-
-  if (node.attrs["listMarkerFontFamily"]) {
-    addLayoutFontFamilyFace(
-      faces,
-      node.attrs["listMarkerFontFamily"],
-      REGULAR_LAYOUT_FONT_DESCRIPTOR,
-    );
-  }
-
-  if (node.isText) {
-    const descriptor = layoutDescriptorFromFormattingAndMarks(textFormatting, node.marks);
-    const markFontFamily = readFontFamilyMarkAttrs(node.marks);
-    addLayoutFontFamilyFace(
-      faces,
-      markFontFamily ?? textFormatting?.fontFamily ?? DEFAULT_LAYOUT_FONT_FAMILY,
-      descriptor,
-    );
-  }
-
-  // oxlint-disable-next-line unicorn/no-array-for-each -- ProseMirror Node.forEach
-  node.forEach((child) => {
-    collectProseMirrorFontFaces(faces, child, textFormatting);
-  });
-}
-
-function readParagraphDefaultTextFormatting(node: PMNode): TextFormatting | undefined {
-  const value = node.attrs["defaultTextFormatting"];
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  return value as TextFormatting;
-}
-
-function readFontFamilyMarkAttrs(marks: readonly Mark[]): unknown {
-  for (const mark of marks) {
-    if (mark.type.name === "fontFamily") {
-      return expectFontFamilyMarkAttrs(mark);
-    }
-  }
-  return undefined;
-}
-
-function layoutDescriptorFromFormatting(
-  formatting: Pick<TextFormatting, "bold" | "italic"> | undefined,
-): Omit<LayoutFontFace, "family"> {
-  return {
-    style: formatting?.italic ? "italic" : "normal",
-    weight: formatting?.bold ? 700 : 400,
-  };
-}
-
-function layoutDescriptorFromFormattingAndMarks(
-  formatting: Pick<TextFormatting, "bold" | "italic"> | undefined,
-  marks: readonly Mark[],
-): Omit<LayoutFontFace, "family"> {
-  let bold = formatting?.bold === true;
-  let italic = formatting?.italic === true;
-
-  for (const mark of marks) {
-    if (mark.type.name === "bold") {
-      bold = true;
-    }
-    if (mark.type.name === "italic") {
-      italic = true;
-    }
-  }
-
-  return {
-    style: italic ? "italic" : "normal",
-    weight: bold ? 700 : 400,
-  };
-}
-
-function addLayoutFontFamilyFace(
-  faces: Map<string, LayoutFontFace>,
-  value: unknown,
-  descriptor: Omit<LayoutFontFace, "family">,
-): void {
-  if (typeof value === "string") {
-    addLayoutFontFamilyNameFace(faces, value, descriptor);
-    return;
-  }
-
-  if (!value || typeof value !== "object") {
-    return;
-  }
-
-  const fontFamily = value as { ascii?: unknown; hAnsi?: unknown };
-  addLayoutFontFamilyFace(faces, fontFamily.ascii, descriptor);
-  addLayoutFontFamilyFace(faces, fontFamily.hAnsi, descriptor);
-}
-
-function addLayoutFontFamilyNameFace(
-  faces: Map<string, LayoutFontFace>,
-  family: string,
-  descriptor: Omit<LayoutFontFace, "family">,
-): void {
-  const normalized = family.trim();
-  if (!normalized || CSS_GENERIC_FONT_FAMILIES.has(normalized)) {
-    return;
-  }
-
-  addLayoutFontFace(faces, normalized, descriptor);
-  const mappedFamily = OFFICE_FONT_FAMILY_MAP[normalized];
-  if (mappedFamily) {
-    addLayoutFontFace(faces, mappedFamily, descriptor);
-  }
-}
-
-function addLayoutFontFace(
-  faces: Map<string, LayoutFontFace>,
-  family: string,
-  descriptor: Omit<LayoutFontFace, "family">,
-): void {
-  faces.set(`${family}|${descriptor.style}|${descriptor.weight}`, {
-    family,
-    ...descriptor,
-  });
-}
-
-function escapeCssFontFamily(family: string): string {
-  return family.replace(/\\/gu, "\\\\").replace(/"/gu, '\\"');
-}
 
 function describeInvalidHighlightMarks(doc: EditorState["doc"]): string {
   const invalidHighlights: string[] = [];
@@ -1644,6 +1353,7 @@ function buildFootnoteRenderItems(
  * PagedEditor - Main paginated editing component.
  */
 export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
+  // eslint-disable-next-line prefer-arrow-callback -- preserve the component name in React DevTools without reindenting this large component.
   function PagedEditor(props, ref) {
     const {
       document,
@@ -1665,6 +1375,9 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
       zoom = 1,
       onDocumentChange,
       onReadOnlyEditAttempt,
+      onCopy,
+      onCut,
+      onPaste,
       onSelectionChange,
       onSelectionTextChange,
       onEditorViewReady,
@@ -1784,7 +1497,7 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
     // doesn't depend on a state setter callback that would trigger
     // its own re-run.
     const anonymizationMatchesRef = useRef<readonly AnonymizationMatch[]>([]);
-    const anonymizationOverlayRequestSeqRef = useRef(0);
+    const [anonymizationOverlayRequestGate] = useState(createLatestRequestGate);
     // Autocomplete (inline ghost-text) overlay state. Mirrors the
     // anonymization pattern: a ref tracks the latest plugin
     // suggestion, a derived caret-rect lives in state and drives
@@ -1796,7 +1509,7 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
       text: "",
       requestId: null,
     });
-    const autocompleteOverlayRequestSeqRef = useRef(0);
+    const [autocompleteOverlayRequestGate] = useState(createLatestRequestGate);
     const [autocompleteCaret, setAutocompleteCaret] = useState<AutocompleteCaretRect | null>(null);
     const [autocompleteText, setAutocompleteText] = useState<string>("");
     const [autocompleteIsStreaming, setAutocompleteIsStreaming] = useState<boolean>(false);
@@ -1806,7 +1519,7 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
     // block directives — drives the innermost-block rail emphasis in the overlay.
     const [directiveCaretPos, setDirectiveCaretPos] = useState<number | null>(null);
     const directivesRef = useRef<readonly DirectiveRange[]>([]);
-    const directivesOverlayRequestSeqRef = useRef(0);
+    const [directivesOverlayRequestGate] = useState(createLatestRequestGate);
     // Template fill preview — the hidden editor's plugin keeps marker↔value
     // entries in sync; the layout pipeline substitutes them into the flow
     // blocks so the painted pages reflow as if the values were the text.
@@ -1826,13 +1539,13 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
       suggestions: readonly AISuggestion[];
       focusedId: string | null;
     }>({ suggestions: EMPTY_AI_SUGGESTIONS, focusedId: null });
-    const aiSuggestionsOverlayRequestSeqRef = useRef(0);
+    const [aiSuggestionsOverlayRequestGate] = useState(createLatestRequestGate);
     const [remoteSelections, setRemoteSelections] = useState<HiddenProseMirrorRemoteSelection[]>(
       [],
     );
     const suppressSelectionOverlayRef = useRef(false);
     const revealSelectionOverlayTimerRef = useRef<number | null>(null);
-    const selectionOverlayRequestSeqRef = useRef(0);
+    const [selectionOverlayRequestGate] = useState(createLatestRequestGate);
 
     const validPrecomputedInitialState =
       precomputedInitialDocumentRef.current === document ? precomputedInitialState : null;
@@ -2060,7 +1773,10 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
       documentSettings !== undefined &&
       "mirrorMargins" in documentSettings &&
       documentSettings.mirrorMargins === true;
-    const sectionHeaderFooterRefs = useMemo(() => getSectionHeaderFooterRefs(document), [document]);
+    const sectionHeaderFooterRefs = useMemo(
+      () => resolveSectionHeaderFooterRefs(document),
+      [document],
+    );
     const layoutInputSignature = useMemo(
       () =>
         buildLayoutInputSignature({
@@ -2430,9 +2146,7 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
     const updateSelectionOverlay = useCallback(
       (state: EditorState) => {
         const { from, to } = state.selection;
-        const requestSeq = selectionOverlayRequestSeqRef.current + 1;
-        selectionOverlayRequestSeqRef.current = requestSeq;
-        const isCurrentRequest = () => selectionOverlayRequestSeqRef.current === requestSeq;
+        const isCurrentRequest = selectionOverlayRequestGate.begin();
 
         // Feed the template-directives overlay the caret head so it can emphasise
         // the innermost block around it. Gated on there being directives at all,
@@ -2669,7 +2383,7 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
           setCaretPosition(null);
         }
       },
-      [layout, blocks, measures, getCaretFromDom, zoom],
+      [layout, blocks, measures, getCaretFromDom, selectionOverlayRequestGate, zoom],
       // NOTE: onSelectionChange removed from dependencies - accessed via ref to prevent infinite loops
     );
     const updateSelectionOverlayRef = useRef(updateSelectionOverlay);
@@ -2684,9 +2398,7 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
     // ProseMirror's spans are not used — they sit at -9999px and
     // would yield bogus coordinates.
     const updateAnonymizationOverlay = useCallback(() => {
-      const requestSeq = anonymizationOverlayRequestSeqRef.current + 1;
-      anonymizationOverlayRequestSeqRef.current = requestSeq;
-      const isCurrentRequest = () => anonymizationOverlayRequestSeqRef.current === requestSeq;
+      const isCurrentRequest = anonymizationOverlayRequestGate.begin();
       const matches = anonymizationMatchesRef.current;
       if (matches.length === 0) {
         setAnonymizationRectGroups([]);
@@ -2828,7 +2540,7 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
         },
         () => undefined,
       );
-    }, [layout, blocks, measures, zoom]);
+    }, [anonymizationOverlayRequestGate, layout, blocks, measures, zoom]);
 
     // Project the autocomplete suggestion's anchor onto container
     // coordinates so {@link AutocompleteCaretOverlay} can paint the
@@ -2836,11 +2548,10 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
     // ref so this can run from a transaction handler without
     // re-creating callbacks per render.
     const updateAutocompleteOverlay = useCallback(() => {
-      const requestSeq = autocompleteOverlayRequestSeqRef.current + 1;
-      autocompleteOverlayRequestSeqRef.current = requestSeq;
+      const requestIsLatest = autocompleteOverlayRequestGate.begin();
       const current = autocompleteSuggestionRef.current;
       const isCurrentRequest = () =>
-        autocompleteOverlayRequestSeqRef.current === requestSeq &&
+        requestIsLatest() &&
         autocompleteSuggestionRef.current === current &&
         current.status !== "idle" &&
         current.text.length > 0;
@@ -2915,15 +2626,14 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
         },
         () => undefined,
       );
-    }, [layout, blocks, measures, zoom]);
+    }, [autocompleteOverlayRequestGate, layout, blocks, measures, zoom]);
 
     // Project template-directive ranges (kept in sync by the
     // templateDirectives plugin) onto container-space rects. Shares
     // the projection pipeline with anonymization via
     // `projectRangesToRects`.
     const updateDirectivesOverlay = useCallback(() => {
-      const requestSeq = directivesOverlayRequestSeqRef.current + 1;
-      directivesOverlayRequestSeqRef.current = requestSeq;
+      const isCurrentRequest = directivesOverlayRequestGate.begin();
       // A marker with an active fill-preview value already reads as filled
       // (orange substituted run); suppress its blue marker tint so filled and
       // to-be-filled markers are visually disjoint.
@@ -2948,19 +2658,18 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
           blocks,
           measures,
         });
-        if (directivesOverlayRequestSeqRef.current === requestSeq) {
+        if (isCurrentRequest()) {
           setDirectiveRectGroups(projected);
         }
       })();
-    }, [layout, blocks, measures, zoom]);
+    }, [directivesOverlayRequestGate, layout, blocks, measures, zoom]);
 
     // Project pending AI suggestions (kept in sync by the
     // aiSuggestionDecorations plugin) onto container-space rects: dotted
     // severity underlines, plus the focused suggestion's in-text diff
     // (struck-through original + adjacent replacement text).
     const updateAISuggestionsOverlay = useCallback(() => {
-      const requestSeq = aiSuggestionsOverlayRequestSeqRef.current + 1;
-      aiSuggestionsOverlayRequestSeqRef.current = requestSeq;
+      const isCurrentRequest = aiSuggestionsOverlayRequestGate.begin();
       const { suggestions, focusedId } = aiSuggestionsRef.current;
       const pending = suggestions.filter(
         (suggestion) =>
@@ -2982,7 +2691,7 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
           })),
           { pagesContainer, zoom, layout, blocks, measures },
         );
-        if (aiSuggestionsOverlayRequestSeqRef.current !== requestSeq) {
+        if (!isCurrentRequest()) {
           return;
         }
         const focused = projected.find(({ range }) => range.suggestion.id === focusedId);
@@ -2999,11 +2708,11 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
           })),
         );
       })();
-    }, [layout, blocks, measures, zoom]);
+    }, [aiSuggestionsOverlayRequestGate, layout, blocks, measures, zoom]);
 
     const hideSelectionOverlayDuringInput = useCallback(
       (state: EditorState) => {
-        selectionOverlayRequestSeqRef.current += 1;
+        selectionOverlayRequestGate.invalidate();
         suppressSelectionOverlayRef.current = true;
         setCaretPosition(null);
         setSelectionRects([]);
@@ -3018,17 +2727,29 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
           updateSelectionOverlay(hiddenPMRef.current?.getState() ?? state);
         }, SELECTION_REVEAL_AFTER_INPUT_DELAY);
       },
-      [updateSelectionOverlay],
+      [selectionOverlayRequestGate, updateSelectionOverlay],
     );
 
     useEffect(
       () => () => {
+        selectionOverlayRequestGate.invalidate();
+        anonymizationOverlayRequestGate.invalidate();
+        autocompleteOverlayRequestGate.invalidate();
+        directivesOverlayRequestGate.invalidate();
+        aiSuggestionsOverlayRequestGate.invalidate();
+
         if (revealSelectionOverlayTimerRef.current !== null) {
           window.clearTimeout(revealSelectionOverlayTimerRef.current);
           revealSelectionOverlayTimerRef.current = null;
         }
       },
-      [],
+      [
+        aiSuggestionsOverlayRequestGate,
+        anonymizationOverlayRequestGate,
+        autocompleteOverlayRequestGate,
+        directivesOverlayRequestGate,
+        selectionOverlayRequestGate,
+      ],
     );
 
     // =========================================================================
@@ -3556,20 +3277,16 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
           cellDragContentEndRef.current = null;
           isCellDraggingRef.current = false;
           const view = hiddenPMRef.current?.getView();
+          let endPos: number;
           if (view) {
-            const endPos = Math.max(0, view.state.doc.content.size - 1);
+            endPos = Math.max(0, view.state.doc.content.size - 1);
             hiddenPMRef.current?.setSelection(endPos);
-            dragAnchorRef.current = endPos;
-            isDraggingRef.current = true;
           } else {
-            const docEnd = Math.max(
-              0,
-              (precomputedInitialStateRef.current?.doc.content.size ?? 1) - 1,
-            );
-            queueHiddenEditorSelection({ type: "text", anchor: docEnd });
-            dragAnchorRef.current = docEnd;
-            isDraggingRef.current = true;
+            endPos = Math.max(0, (precomputedInitialStateRef.current?.doc.content.size ?? 1) - 1);
+            queueHiddenEditorSelection({ type: "text", anchor: endPos });
           }
+          dragAnchorRef.current = endPos;
+          isDraggingRef.current = true;
         }
 
         focusHiddenEditor();
@@ -5162,18 +4879,19 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
             }
 
             let tr = view.state.tr;
+            tr = tr.delete(pmPos, pmPos + node.nodeSize);
+            let selectionPos: number;
 
             if (dropPos <= pmPos) {
-              tr = tr.delete(pmPos, pmPos + node.nodeSize);
               tr = tr.insert(dropPos, node);
-              hiddenPMRef.current?.setNodeSelection(dropPos);
+              selectionPos = dropPos;
             } else {
-              tr = tr.delete(pmPos, pmPos + node.nodeSize);
               const adjusted = dropPos - node.nodeSize;
               tr = tr.insert(Math.min(adjusted, tr.doc.content.size), node);
-              hiddenPMRef.current?.setNodeSelection(Math.min(adjusted, tr.doc.content.size - 1));
+              selectionPos = Math.min(adjusted, tr.doc.content.size - 1);
             }
 
+            hiddenPMRef.current?.setNodeSelection(selectionPos);
             view.dispatch(tr);
           }
         } catch {
@@ -5663,20 +5381,21 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
       void loadEmbeddedFontFaces(embeddedFontBuffer).then((faces) => {
         if (cancelled) {
           removeFontFaces(faces);
-          return;
+          return undefined;
         }
         registered = faces;
         if (faces.length === 0) {
-          return;
+          return undefined;
         }
         const view = hiddenPMRef.current?.getView();
         if (!view) {
-          return;
+          return undefined;
         }
         resetCanvasContext();
         clearAllCaches();
         runLayoutPipelineRef.current(view.state, { reason: "font-ready" });
         updateSelectionOverlayRef.current(view.state);
+        return undefined;
       });
       return () => {
         cancelled = true;
@@ -5715,13 +5434,14 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
       void loadHostFontFaces(hostFonts).then((faces) => {
         if (cancelled) {
           removeFontFaces(faces);
-          return;
+          return undefined;
         }
         registered = faces;
         if (faces.length === 0) {
-          return;
+          return undefined;
         }
         remeasureForFontChange();
+        return undefined;
       });
 
       return () => {
@@ -5997,10 +5717,10 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
         tabIndex={0}
         role="textbox"
         aria-multiline
-        onFocus={containedHandler(containerRef, handleContainerFocus)}
+        onFocus={containedHandler(handleContainerFocus)}
         onBlur={handleContainerBlur}
         onKeyDown={handleKeyDown}
-        onMouseDown={containedHandler(containerRef, handleContainerMouseDown)}
+        onMouseDown={containedHandler(handleContainerMouseDown)}
       >
         {/* Persistent off-screen ProseMirror per HF rId — the painter reads
           from these views when a slot's view exists (see HF unification port,
@@ -6029,6 +5749,9 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
           onEditorViewReady={handleEditorViewReady}
           onEditorViewDestroy={handleEditorViewDestroy}
           onKeyDown={handleHiddenEditorKeyDown}
+          {...(onCopy !== undefined ? { onCopy } : {})}
+          {...(onCut !== undefined ? { onCut } : {})}
+          {...(onPaste !== undefined ? { onPaste } : {})}
           {...(styles !== undefined ? { styles } : {})}
           externalPlugins={externalPlugins}
           {...(collaboration !== undefined ? { collaboration } : {})}
@@ -6044,9 +5767,9 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
               ref={pagesContainerRef}
               className={`${PAGES_CONTAINER_CLASS}${readOnly ? " paged-editor--readonly" : ""}${hfEditMode ? ` paged-editor--hf-editing paged-editor--editing-${hfEditMode}` : ""}`}
               style={pagesContainerStyles}
-              onMouseDown={containedHandler(pagesContainerRef, handlePagesMouseDown)}
+              onMouseDown={containedHandler(handlePagesMouseDown)}
               onMouseMove={handlePagesMouseMove}
-              onClick={containedHandler(pagesContainerRef, handlePagesClick)}
+              onClick={containedHandler(handlePagesClick)}
               onContextMenu={handlePagesContextMenu}
               aria-hidden="true" // Visual only, PM provides semantic content
             />

@@ -41,7 +41,7 @@ import { createNodeExtension, createExtension } from "../create";
 import type { ExtensionContext, ExtensionRuntime, AnyExtension } from "../types";
 
 type TableCellBorders = NonNullable<TableCellAttrs["borders"]>;
-type TableCellBorderSide = keyof TableCellBorders;
+type TableCellBorderSide = "top" | "bottom" | "left" | "right";
 
 // ============================================================================
 // CSS PASTE HELPERS — Extract formatting from inline styles (Google Docs, etc.)
@@ -272,7 +272,9 @@ const tableSpec: NodeSpec = {
     cellMargins: { default: null },
     look: { default: null },
     borders: { default: null },
+    _resolvedIndent: { default: null },
     _originalFormatting: { default: null },
+    tblPrChange: { default: null },
   },
   parseDOM: [
     {
@@ -305,16 +307,14 @@ const tableSpec: NodeSpec = {
 
     if (attrs.width !== undefined && attrs.widthType === "pct") {
       styles.push(`width: ${attrs.width / 50}%`);
-      styles.push("table-layout: fixed");
     } else if (attrs.width !== undefined && attrs.widthType === "dxa") {
       const widthPx = Math.round((attrs.width / 20) * 1.333);
       styles.push(`width: ${widthPx}px`);
-      styles.push("table-layout: fixed");
     } else {
       // Default: fill available width so tables aren't collapsed to content
       styles.push("width: 100%");
-      styles.push("table-layout: fixed");
     }
+    styles.push("table-layout: fixed");
 
     if (attrs.justification === "center") {
       styles.push("margin-left: auto", "margin-right: auto");
@@ -336,6 +336,7 @@ const tableRowSpec: NodeSpec = {
     isHeader: { default: false },
     hidden: { default: false },
     _originalFormatting: { default: null },
+    trPrChange: { default: null },
   },
   parseDOM: [{ tag: "tr" }],
   toDOM(node) {
@@ -480,7 +481,7 @@ function buildCellWidthStyles(attrs: TableCellAttrs): string[] {
 }
 
 const tableCellSpec: NodeSpec = {
-  content: "(paragraph | table)+",
+  content: "(paragraph | table | textBox)+",
   tableRole: "cell",
   isolating: true,
   attrs: {
@@ -491,11 +492,13 @@ const tableCellSpec: NodeSpec = {
     widthType: { default: null },
     verticalAlign: { default: null },
     backgroundColor: { default: null },
+    _resolvedBackgroundColor: { default: null },
     borders: { default: null },
     margins: { default: null },
     textDirection: { default: null },
     noWrap: { default: false },
     _originalFormatting: { default: null },
+    tcPrChange: { default: null },
     _preserveVMergeRestart: { default: null },
     _docxVMergeContinuationCells: { default: null },
   },
@@ -544,7 +547,7 @@ const tableCellSpec: NodeSpec = {
 };
 
 const tableHeaderSpec: NodeSpec = {
-  content: "(paragraph | table)+",
+  content: "(paragraph | table | textBox)+",
   tableRole: "header_cell",
   isolating: true,
   attrs: {
@@ -555,11 +558,13 @@ const tableHeaderSpec: NodeSpec = {
     widthType: { default: null },
     verticalAlign: { default: null },
     backgroundColor: { default: null },
+    _resolvedBackgroundColor: { default: null },
     borders: { default: null },
     margins: { default: null },
     textDirection: { default: null },
     noWrap: { default: false },
     _originalFormatting: { default: null },
+    tcPrChange: { default: null },
     _preserveVMergeRestart: { default: null },
     _docxVMergeContinuationCells: { default: null },
   },

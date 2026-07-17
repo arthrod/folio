@@ -144,8 +144,15 @@ export function formattingEquals(
   if (!fontFamilyEquals(a.fontFamily, b.fontFamily)) {
     return false;
   }
+  if (!languageEquals(a.language, b.language)) {
+    return false;
+  }
 
   return true;
+}
+
+function languageEquals(a: TextFormatting["language"], b: TextFormatting["language"]): boolean {
+  return a?.val === b?.val && a?.eastAsia === b?.eastAsia && a?.bidi === b?.bidi;
 }
 
 /**

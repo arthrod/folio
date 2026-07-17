@@ -3,7 +3,11 @@
 </p>
 
 <p align="center">
-  <strong>Browser editor and framework-neutral engine for Word <code>.docx</code> files.</strong>
+  <strong>Browser editor and framework-neutral engine for OOXML <code>.docx</code> documents.</strong>
+</p>
+
+<p align="center">
+  English &middot; <a href="./README.zh-CN.md">简体中文</a> &middot; <a href="./README.pt-BR.md">Português (Brasil)</a>
 </p>
 
 <p align="center">
@@ -23,7 +27,7 @@
 # folio
 
 Browser editor and framework-neutral engine for `.docx` files. It opens, edits,
-and writes Word documents while preserving pagination, tables, headers and
+and writes OOXML documents while preserving pagination, tables, headers and
 footers, tracked changes, and footnotes.
 
 The core package is framework-neutral. React, Vue, Nuxt, and document-review
@@ -34,6 +38,18 @@ Part of [stella](https://github.com/stella/stella), an open-source legal workspa
 See [DOCX platform boundary](./docs/docx-platform.md) for what belongs in folio
 and how editors, headless tools, agents, and hosts share one document model and
 operation contract.
+
+## Standards-first interoperability
+
+Folio targets interoperable OOXML behavior through published standards,
+differential parsing, round-trip and interaction tests, and reproducible layout
+comparisons across independent implementations.
+
+Comparison reports record the reference implementation, version, and relevant
+rendering environment so results remain explicit and reproducible.
+
+See [Interoperability references](./docs/interoperability.md) for the complete
+testing methodology and reference matrix.
 
 ## Packages
 

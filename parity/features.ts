@@ -25,6 +25,7 @@ import type {
   DivergenceKind,
   DocGeom,
   FeatureAttributedResult,
+  LineBox,
   ParityResult,
 } from "./types";
 
@@ -332,13 +333,13 @@ export const extractDocFeatures = (docxPath: string): Promise<DocFeatures> => {
 };
 
 // ---------------------------------------------------------------------------
-// ground-truth font substitution detection
+// reference-renderer font substitution detection
 // ---------------------------------------------------------------------------
 
 /** PostScript-name decorations a PDF may append to a faithfully-rendered
  * font, normalized to lowercase alphanumerics ("ArialMT" satisfies "Arial",
  * "Calibri-BoldItalic" satisfies "Calibri"). Anything else after the
- * requested family name means Word rendered a DIFFERENT family (e.g. a
+ * requested family name means the reference renderer used a DIFFERENT family (e.g. a
  * request for "Inter" answered by "Interstate-Bold": remainder "state-bold"
  * is no style suffix, so it counts as a substitution). */
 const PDF_FONT_STYLE_SUFFIXES = new Set([
@@ -412,50 +413,100 @@ export const fontFamiliesMatch = (leftRaw: string, rightRaw: string): boolean =>
   return observedSatisfiesRequested(left, right) || observedSatisfiesRequested(right, left);
 };
 
-const collectFontPairs = (wordGeom: DocGeom, folioGeom: DocGeom): Array<[string, string]> => {
-  const folioFontsByText = new Map<string, string[]>();
+type FontPair = {
+  referenceFont: string;
+  folioFont: string;
+  referenceWidthPt: number;
+  folioWidthPt: number;
+};
+
+const MIN_FONT_METRIC_SAMPLES = 8;
+// Short glyph runs are useful probes; very narrow boxes amplify extractor
+// rounding, while long/justified lines mostly measure their container width.
+const MIN_FONT_METRIC_WIDTH_PT = 20;
+const MAX_FONT_METRIC_WIDTH_PT = 200;
+const FONT_METRIC_RELATIVE_TOLERANCE = 0.05;
+// A repeated directional cluster can be hidden by justified lines whose
+// measured width stays stable even when their glyph metrics do not.
+const MIN_FONT_METRIC_OUTLIER_SHARE = 0.25;
+
+const collectFontPairs = (referenceGeom: DocGeom, folioGeom: DocGeom): FontPair[] => {
+  const folioLinesByText = new Map<string, LineBox[]>();
   for (const page of folioGeom.pages) {
     for (const line of page.lines) {
       if (line.fontName === undefined) continue;
-      const fonts = folioFontsByText.get(line.normText);
-      if (fonts) {
-        fonts.push(line.fontName);
+      const lines = folioLinesByText.get(line.normText);
+      if (lines) {
+        lines.push(line);
       } else {
-        folioFontsByText.set(line.normText, [line.fontName]);
+        folioLinesByText.set(line.normText, [line]);
       }
     }
   }
 
-  const pairs: Array<[string, string]> = [];
-  for (const page of wordGeom.pages) {
+  for (const lines of folioLinesByText.values()) lines.reverse();
+
+  const pairs: FontPair[] = [];
+  for (const page of referenceGeom.pages) {
     for (const line of page.lines) {
       if (line.fontName === undefined) continue;
-      const folioFonts = folioFontsByText.get(line.normText);
-      const folioFont = folioFonts?.shift();
-      if (folioFont !== undefined) {
-        pairs.push([line.fontName, folioFont]);
+      const folioLine = folioLinesByText.get(line.normText)?.pop();
+      if (folioLine?.fontName !== undefined) {
+        pairs.push({
+          referenceFont: line.fontName,
+          folioFont: folioLine.fontName,
+          referenceWidthPt: line.widthPt,
+          folioWidthPt: folioLine.widthPt,
+        });
       }
     }
   }
   return pairs;
 };
 
-/** Classify the actual fonts resolved by Word and Chromium. Requested-font
+const hasFontMetricMismatch = (pairs: FontPair[]): boolean => {
+  const ratios = pairs
+    .filter(
+      ({ referenceFont, folioFont, referenceWidthPt, folioWidthPt }) =>
+        fontFamiliesMatch(referenceFont, folioFont) &&
+        referenceWidthPt >= MIN_FONT_METRIC_WIDTH_PT &&
+        folioWidthPt >= MIN_FONT_METRIC_WIDTH_PT &&
+        referenceWidthPt <= MAX_FONT_METRIC_WIDTH_PT &&
+        folioWidthPt <= MAX_FONT_METRIC_WIDTH_PT,
+    )
+    .map(({ referenceWidthPt, folioWidthPt }) => folioWidthPt / referenceWidthPt)
+    .toSorted((a, b) => a - b);
+  if (ratios.length < MIN_FONT_METRIC_SAMPLES) return false;
+
+  const middle = Math.floor(ratios.length / 2);
+  const median =
+    ratios.length % 2 === 0
+      ? ((ratios[middle - 1] ?? 1) + (ratios[middle] ?? 1)) / 2
+      : (ratios[middle] ?? 1);
+  if (Math.abs(median - 1) > FONT_METRIC_RELATIVE_TOLERANCE) return true;
+
+  const wider = ratios.filter((ratio) => ratio > 1 + FONT_METRIC_RELATIVE_TOLERANCE).length;
+  const narrower = ratios.filter((ratio) => ratio < 1 - FONT_METRIC_RELATIVE_TOLERANCE).length;
+  return Math.max(wider, narrower) / ratios.length >= MIN_FONT_METRIC_OUTLIER_SHARE;
+};
+
+/** Classify the actual fonts resolved by the reference renderer and Chromium. Requested-font
  * substitution is harmless for geometric parity when both renderers resolve
  * every comparable line to the same family. */
 export const assessFontEnvironment = (
   requestedFonts: string[],
-  wordGeom: DocGeom,
+  referenceGeom: DocGeom,
   folioGeom: DocGeom,
 ): FontEnvironmentAssessment => {
-  const observedWordFonts = wordGeom.pages.flatMap((page) =>
+  const observedReferenceFonts = referenceGeom.pages.flatMap((page) =>
     page.lines.flatMap((line) => (line.fontName === undefined ? [] : [line.fontName])),
   );
-  const substitutionTags = computeFontSubstitutionTags(requestedFonts, observedWordFonts);
-  const pairs = collectFontPairs(wordGeom, folioGeom);
-  const matchingLines = pairs.filter(([wordFont, folioFont]) =>
-    fontFamiliesMatch(wordFont, folioFont),
+  const substitutionTags = computeFontSubstitutionTags(requestedFonts, observedReferenceFonts);
+  const pairs = collectFontPairs(referenceGeom, folioGeom);
+  const matchingLines = pairs.filter(({ referenceFont, folioFont }) =>
+    fontFamiliesMatch(referenceFont, folioFont),
   ).length;
+  const metricMismatch = hasFontMetricMismatch(pairs);
 
   if (pairs.length === 0) {
     return {
@@ -465,10 +516,14 @@ export const assessFontEnvironment = (
       matchingLines: 0,
     };
   }
-  if (matchingLines !== pairs.length) {
+  if (matchingLines !== pairs.length || metricMismatch) {
     return {
       status: "mismatch",
-      tags: ["font-renderer-mismatch", ...substitutionTags],
+      tags: [
+        ...(matchingLines !== pairs.length ? ["font-renderer-mismatch"] : []),
+        ...(metricMismatch ? ["font-renderer-metric-mismatch"] : []),
+        ...substitutionTags,
+      ],
       comparedLines: pairs.length,
       matchingLines,
     };
@@ -506,8 +561,8 @@ const collectRequestedFonts = (docxPath: string): string[] => {
 };
 
 /**
- * Detects when the Word ground truth itself was rendered with substituted
- * fonts (the machine driving Word lacks a font the document requests, e.g. a
+ * Detects when the reference renderer used substituted fonts (the rendering
+ * environment lacks a font the document requests, e.g. a
  * web font like "Inter"). Divergences in such documents may reflect font
  * availability rather than folio layout bugs, so the report must carry the
  * warning. Returned tags (e.g. "font-substituted:inter") are meant to be
@@ -515,10 +570,10 @@ const collectRequestedFonts = (docxPath: string): string[] => {
  */
 export const detectFontEnvironment = (
   docxPath: string,
-  wordGeom: DocGeom,
+  referenceGeom: DocGeom,
   folioGeom: DocGeom,
 ): FontEnvironmentAssessment =>
-  assessFontEnvironment(collectRequestedFonts(docxPath), wordGeom, folioGeom);
+  assessFontEnvironment(collectRequestedFonts(docxPath), referenceGeom, folioGeom);
 
 // ---------------------------------------------------------------------------
 // divergence -> paragraph attribution
@@ -528,8 +583,10 @@ export const detectFontEnvironment = (
  * no associated text (it is a whole-document divergence). */
 const divergenceSearchText = (divergence: Divergence): string | undefined => {
   if (divergence.kind === "page-count") return undefined;
-  if (divergence.kind === "line-break") return divergence.wordTexts[0] ?? divergence.folioTexts[0];
-  if (divergence.kind === "text-mismatch") return divergence.wordText;
+  if (divergence.kind === "line-break") {
+    return divergence.referenceTexts[0] ?? divergence.folioTexts[0];
+  }
+  if (divergence.kind === "text-mismatch") return divergence.referenceText;
   return divergence.text;
 };
 

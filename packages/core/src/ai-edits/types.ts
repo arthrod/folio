@@ -15,6 +15,8 @@ export type FolioAIBlock = {
   id: string;
   kind: FolioAIBlockKind;
   text: string;
+  /** One-based heading depth when the block has outline semantics. */
+  headingLevel?: number;
   displayLabel?: string;
   styleId?: string;
   previewRuns?: FolioAIBlockPreviewRun[];
@@ -23,6 +25,8 @@ export type FolioAIBlock = {
 export type FolioAIEditSnapshot = {
   blocks: FolioAIBlock[];
   anchors: Record<string, FolioAIBlockAnchor>;
+  /** Hidden empty paragraph used to anchor insertions when `blocks` is empty. */
+  emptyDocumentAnchorId?: string;
 };
 
 export type FolioAIBlockAnchor = {
@@ -69,6 +73,50 @@ export type FolioAITextRangeHandle = {
   endOffset: number;
   selectedTextHash: string;
 };
+
+/**
+ * Stable handle for the logical document section introduced by one heading.
+ * The section runs until the next heading at the same or a higher level.
+ * `headingTextHash` makes a renamed heading fail stale instead of silently
+ * resolving to content whose meaning may have changed.
+ */
+export type FolioDocumentSectionHandle = {
+  type: "headingSection";
+  story: "main";
+  headingBlockId: string;
+  headingTextHash: string;
+  /** One-based depth used to detect structural section-boundary changes. */
+  headingLevel: number;
+};
+
+export type FolioDocumentOutlineEntry = {
+  handle: FolioDocumentSectionHandle;
+  headingBlockId: string;
+  text: string;
+  /** One-based heading depth. */
+  level: number;
+  parentHandle?: FolioDocumentSectionHandle;
+};
+
+export type FolioDocumentOutline = {
+  sections: FolioDocumentOutlineEntry[];
+};
+
+export type FolioDocumentSection = {
+  handle: FolioDocumentSectionHandle;
+  heading: FolioDocumentOutlineEntry;
+  /** Heading block followed by every block in its logical section. */
+  blocks: FolioAIBlock[];
+};
+
+export type FolioDocumentSectionReadResult =
+  | { status: "found"; section: FolioDocumentSection }
+  | { status: "missing" }
+  | { status: "stale" };
+
+export type FolioDocumentNavigationTarget =
+  | { type: "block"; story: "main"; blockId: string }
+  | FolioAITextRangeHandle;
 
 export type FolioAIInlineFormatting = {
   bold?: boolean;
@@ -173,6 +221,36 @@ export type FolioAIEditOperation = FolioAIEditReviewMeta & {
         position?: "after" | "before";
         parties: FolioAISignatureParty[];
         comment?: FolioAIComment;
+      }
+    | {
+        id: string;
+        type: "insertTableRow";
+        /** Stable paragraph anchor inside the row that receives the new sibling. */
+        blockId: string;
+        position?: "after" | "before";
+        /** Initial text for each physical cell in source order; omitted cells stay empty. */
+        cellTexts?: string[];
+      }
+    | {
+        id: string;
+        type: "deleteTableRow";
+        /** Stable paragraph anchor inside the row to delete. */
+        blockId: string;
+      }
+    | {
+        id: string;
+        type: "insertTableColumn";
+        /** Stable paragraph anchor inside the cell that receives the new sibling column. */
+        blockId: string;
+        position?: "after" | "before";
+        /** Initial text for newly created physical cells in row order. */
+        cellTexts?: string[];
+      }
+    | {
+        id: string;
+        type: "deleteTableColumn";
+        /** Stable paragraph anchor inside the column to delete. */
+        blockId: string;
       }
   );
 

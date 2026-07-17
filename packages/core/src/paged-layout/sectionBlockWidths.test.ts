@@ -58,5 +58,27 @@ describe("section block measurement inputs", () => {
     });
 
     expect(inputs.marginTops).toEqual([64, 64, BODY_CONFIG.margins.top]);
+    expect(inputs.pageWidths).toEqual([600, 600, BODY_CONFIG.pageSize.w]);
+    expect(inputs.marginLefts).toEqual([50, 50, BODY_CONFIG.margins.left]);
+    expect(inputs.marginRights).toEqual([50, 50, BODY_CONFIG.margins.right]);
+  });
+
+  test("uses the authored width after a forced break in unequal columns", () => {
+    const blocks: FlowBlock[] = [
+      paragraph("first-column"),
+      { kind: "columnBreak", id: "column-break" },
+      paragraph("second-column"),
+    ];
+
+    const widths = computePerBlockWidths({
+      blocks,
+      bodyConfig: BODY_CONFIG,
+      finalConfig: {
+        ...BODY_CONFIG,
+        columns: { count: 2, gap: 20, widths: [200, 300], gaps: [100] },
+      },
+    });
+
+    expect(widths).toEqual([200, 200, 300]);
   });
 });

@@ -1,9 +1,15 @@
 import type {
   FolioBlockDiff,
+  FolioCompareDocxVersionsOptions,
   FolioVersionDiff,
   FolioVersionDiffSegment,
+  GenerateRedlineDocxOptions,
+  GenerateRedlineDocxResult,
 } from "@stll/folio-core/server";
-import { compareDocxVersions as compareDocxVersionsCore } from "@stll/folio-core/server";
+import {
+  compareDocxVersions as compareDocxVersionsCore,
+  generateRedlineDocx as generateRedlineDocxCore,
+} from "@stll/folio-core/server";
 
 /** Backward-compatible name for a core word-level version-diff segment. */
 export type FolioAgentVersionDiffSegment = FolioVersionDiffSegment;
@@ -14,11 +20,28 @@ export type FolioAgentBlockDiff = FolioBlockDiff;
 /** Backward-compatible name for a structured core version diff. */
 export type FolioAgentVersionDiff = FolioVersionDiff;
 
+/** Backward-compatible name for core comparison options. */
+export type FolioAgentCompareDocxVersionsOptions = FolioCompareDocxVersionsOptions;
+
+/** Agent-facing name for core redline-generation options. */
+export type FolioAgentGenerateRedlineDocxOptions = GenerateRedlineDocxOptions;
+
+/** Agent-facing name for the core redline-generation result. */
+export type FolioAgentGenerateRedlineDocxResult = GenerateRedlineDocxResult;
+
 /** Compare two `.docx` buffers using folio-core's version comparison semantics. */
 export const compareDocxVersions = (
   base: ArrayBuffer,
   revised: ArrayBuffer,
-): Promise<FolioAgentVersionDiff> => compareDocxVersionsCore(base, revised);
+  options: FolioAgentCompareDocxVersionsOptions = {},
+): Promise<FolioAgentVersionDiff> => compareDocxVersionsCore(base, revised, options);
+
+/** Generate a reviewed package from two `.docx` buffers. */
+export const generateRedlineDocx = (
+  base: ArrayBuffer,
+  revised: ArrayBuffer,
+  options: FolioAgentGenerateRedlineDocxOptions = {},
+): Promise<FolioAgentGenerateRedlineDocxResult> => generateRedlineDocxCore(base, revised, options);
 
 const ELLIPSIS = "…";
 const UNCHANGED_EDGE_CHARS = 30;
@@ -44,18 +67,42 @@ const renderSegment = (segment: FolioVersionDiffSegment): string => {
 };
 
 const formatChangeLine = (change: FolioBlockDiff): string => {
-  if (change.type === "added") {
-    return `+ [${change.blockId}] added: ${change.text}`;
+  switch (change.type) {
+    case "added":
+      return `+ [${change.blockId}] added: ${change.text}`;
+    case "deleted":
+      return `- [${change.blockId}] deleted: ${change.text}`;
+    case "modified":
+      return `~ [${change.blockId}] modified: ${change.segments.map(renderSegment).join("")}`;
+    case "formatChanged":
+      return `~ [${change.blockId}] format changed (${change.changedProperties.join(", ")}): ${truncateUnchangedRun(change.text)}`;
+    case "movedFrom":
+      return `< [${change.blockId}] moved away (move ${change.moveGroupId}): ${truncateUnchangedRun(change.text)}`;
+    case "movedTo":
+      return `> [${change.blockId}] moved here (move ${change.moveGroupId}): ${truncateUnchangedRun(change.text)}`;
+    default:
+      return "";
   }
-  if (change.type === "deleted") {
-    return `- [${change.blockId}] deleted: ${change.text}`;
-  }
-  return `~ [${change.blockId}] modified: ${change.segments.map(renderSegment).join("")}`;
 };
 
 /** Render a structured version diff as compact, deterministic model input. */
 export const formatVersionDiffForLLM = (diff: FolioAgentVersionDiff): string => {
-  const { added, deleted, modified, unchanged } = diff.summaryCounts;
-  const header = `Version diff: ${added} added, ${deleted} deleted, ${modified} modified, ${unchanged} unchanged`;
-  return [header, ...diff.changes.map(formatChangeLine)].join("\n");
+  const { added, deleted, modified, formatChanged, moved, metadataChanged, unchanged } =
+    diff.summaryCounts;
+  const metadataSummary = metadataChanged > 0 ? `, ${metadataChanged} metadata-changed` : "";
+  const header = `Version diff: ${added} added, ${deleted} deleted, ${modified} modified, ${formatChanged} format-changed, ${moved} moved${metadataSummary}, ${unchanged} unchanged`;
+  const metadataLines = diff.metadataChanges.map(
+    ({ property, baseValue, revisedValue }) =>
+      `~ metadata.${property}: ${JSON.stringify(baseValue)} -> ${JSON.stringify(revisedValue)}`,
+  );
+  const privacyLines =
+    diff.privacyReport.appliedTransforms.length === 0
+      ? []
+      : [
+          `Privacy transforms: ${diff.privacyReport.appliedTransforms.join(", ")}`,
+          `Removed metadata fields: ${diff.privacyReport.removedMetadataProperties.join(", ") || "none"}`,
+        ];
+  return [header, ...privacyLines, ...diff.changes.map(formatChangeLine), ...metadataLines].join(
+    "\n",
+  );
 };

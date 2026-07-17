@@ -183,6 +183,7 @@ async function bodyScopedPictDocx(bodyInnerXml: string): Promise<ArrayBuffer> {
 }
 
 const PICT_WITH_IMAGE = `<w:pict><v:shape id="Picture 1" type="#_x0000_t75" style="width:2in;height:1in"><v:imagedata r:id="rIdImg" o:title="logo"/></v:shape></w:pict>`;
+const OBJECT_WITH_PREVIEW = `<w:object><v:shape id="Object 1" type="#_x0000_t75" style="width:20pt;height:18pt"><v:imagedata r:id="rIdImg" o:title="preview"/></v:shape><w:control r:id="rIdControl" w:name="Control 1" w:shapeid="Object 1"/></w:object>`;
 
 // A VML shape/imagedata whose prefixes (`v2`, `r2`) are declared on an ancestor
 // wrapper rather than the document root; used to prove the in-scope xmlns set
@@ -232,15 +233,101 @@ describe("VML w:pict inline images", () => {
     expect(zip.file("word/media/image1.png")).not.toBeNull();
   });
 
-  test("skips a w:pict with no imagedata without throwing", async () => {
+  test("parses an embedded object's VML preview with its authored dimensions", async () => {
+    const doc = await parseDocx(await pictDocx({ runXml: OBJECT_WITH_PREVIEW }), {
+      preloadFonts: false,
+    });
+
+    const drawing = firstDrawing(doc.package.document.content.at(0));
+    expect(drawing?.image.rId).toBe("rIdImg");
+    expect(drawing?.image.size).toEqual({ width: 254_000, height: 228_600 });
+    expect(drawing?.image.wrap.type).toBe("inline");
+    expect(drawing?.image.src).toStartWith("data:image/png");
+    expect(drawing?.image.title).toBe("preview");
+    expect(drawing?.rawXml).toContain("<w:object");
+    expect(drawing?.rawXml).toContain("<w:control");
+  });
+
+  test("preserves an embedded object wrapper when saving its preview", async () => {
+    const original = await pictDocx({ runXml: OBJECT_WITH_PREVIEW });
+    const doc = await parseDocx(original, { preloadFonts: false });
+    const out = await repackDocx(doc, { updateModifiedDate: false });
+
+    expect((await validateDocx(out)).valid).toBe(true);
+    const zip = await JSZip.loadAsync(out);
+    const docXml = await zip.file("word/document.xml")!.async("text");
+    expect(docXml).toContain("<w:object");
+    expect(docXml).toContain("<w:control");
+    expect(docXml).toContain('r:id="rIdImg"');
+    expect(docXml).not.toContain("<w:drawing");
+  });
+
+  test("rejects an embedded-object preview with unsafe authored dimensions", async () => {
     const doc = await parseDocx(
       await pictDocx({
-        runXml: `<w:pict><v:rect style="width:1in;height:1in"/></w:pict>`,
+        runXml: OBJECT_WITH_PREVIEW.replace("width:20pt", "width:30000px"),
       }),
       { preloadFonts: false },
     );
 
-    // No image node is produced; the run simply carries no drawing content.
+    expect(firstDrawing(doc.package.document.content.at(0))).toBeUndefined();
+  });
+
+  test("renders a positioned solid rectangle without embedded image data", async () => {
+    const doc = await parseDocx(
+      await pictDocx({
+        runXml: `<w:pict><v:rect style="position:absolute;margin-left:12pt;margin-top:6pt;width:1in;height:.5in;z-index:1;mso-position-horizontal-relative:page;mso-position-vertical-relative:page" fillcolor="black" stroked="f"/></w:pict>`,
+      }),
+      { preloadFonts: false },
+    );
+
+    const drawing = firstDrawing(doc.package.document.content.at(0));
+    expect(drawing?.image.size).toEqual({ width: 914_400, height: 457_200 });
+    expect(drawing?.image.wrap.type).toBe("inFront");
+    expect(drawing?.image.position).toEqual({
+      horizontal: { relativeTo: "page", posOffset: 152_400 },
+      vertical: { relativeTo: "page", posOffset: 76_200 },
+    });
+    expect(drawing?.image.src).toStartWith("data:image/svg+xml");
+    expect(decodeURIComponent(drawing?.image.src?.split(",").at(1) ?? "")).toContain(
+      'fill="black"',
+    );
+    expect(drawing?.rawXml).toContain("<w:pict");
+  });
+
+  test("renders bounded rectangle and line children from a positioned VML group", async () => {
+    const doc = await parseDocx(
+      await pictDocx({
+        runXml: `<w:pict><v:group style="position:absolute;margin-left:10pt;margin-top:20pt;width:100pt;height:50pt;z-index:-1;mso-position-horizontal-relative:page" coordorigin="100,200" coordsize="1000,500"><v:line from="100,200" to="1100,700"/><v:rect style="left:200;top:250;width:400;height:100" fillcolor="#112233" stroked="f"/></v:group></w:pict>`,
+      }),
+      { preloadFonts: false },
+    );
+
+    const drawing = firstDrawing(doc.package.document.content.at(0));
+    expect(drawing?.image.size).toEqual({ width: 1_270_000, height: 635_000 });
+    expect(drawing?.image.wrap.type).toBe("behind");
+    expect(drawing?.image.position?.horizontal).toEqual({
+      relativeTo: "page",
+      posOffset: 127_000,
+    });
+    expect(drawing?.image.position?.vertical).toEqual({
+      relativeTo: "paragraph",
+      posOffset: 254_000,
+    });
+    const svg = decodeURIComponent(drawing?.image.src?.split(",").at(1) ?? "");
+    expect(svg).toContain('viewBox="100 200 1000 500"');
+    expect(svg).toContain("<line");
+    expect(svg).toContain("<rect");
+  });
+
+  test("skips solid-shape previews with unsafe dimensions", async () => {
+    const doc = await parseDocx(
+      await pictDocx({
+        runXml: `<w:pict><v:rect style="width:999999px;height:1in" fillcolor="black"/></w:pict>`,
+      }),
+      { preloadFonts: false },
+    );
+
     expect(firstDrawing(doc.package.document.content.at(0))).toBeUndefined();
   });
 
