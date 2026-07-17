@@ -122,10 +122,22 @@ export {
 export {
   generateRedlineDocx,
   InvalidGenerateRedlineDocxOptionsError,
+  storyRedlineEngine,
   type GenerateRedlineDocxOptions,
   type GenerateRedlineDocxResult,
   type GenerateRedlineUnprocessedStory,
 } from "./redline";
+export {
+  createJubarteWasmRedlineEngine,
+  RedlineEngineExhaustedError,
+  type JubarteWasmModule,
+  type RedlineCompareOptions,
+  type RedlineCompareResult,
+  type RedlineEngine,
+  type RedlineEngineAttempt,
+  type RedlineRevision,
+  type RedlineRevisionType,
+} from "./redline-engine";
 export type {
   FolioAIComment,
   FolioAIEditApplyMode,

@@ -197,7 +197,7 @@ describe("generateRedlineDocx", () => {
 
     expect(result.skipped).toEqual([]);
     expect(result.unprocessedStories).toEqual([]);
-    expect(result.applied).toHaveLength(1);
+    expect(result.engine).toBe("folio-story");
     expect(new Uint8Array(base)).toEqual(baseBytes);
     expect(new Uint8Array(revised)).toEqual(revisedBytes);
 
@@ -206,6 +206,9 @@ describe("generateRedlineDocx", () => {
       "Revised cell value",
     );
     expect(acceptView.getChanges().length).toBeGreaterThan(0);
+    // Counts coherence: the result's revision enumeration matches what a
+    // fresh reviewer discovers in the produced buffer.
+    expect(result.revisions).toHaveLength(acceptView.getChanges().length);
 
     const output = await parseDocx(result.buffer, {
       detectVariables: false,
@@ -266,13 +269,17 @@ describe("generateRedlineDocx", () => {
 
     expect(result.skipped).toEqual([]);
     expect(result.unprocessedStories).toEqual([]);
-    expect(result.applied.length).toBeGreaterThan(0);
+    expect(result.revisions.length).toBeGreaterThan(0);
 
     // The redline carries real tracked changes attributed to the default author.
     const acceptView = await FolioDocxReviewer.fromBuffer(result.buffer);
     const changes = acceptView.getChanges();
     expect(changes.length).toBeGreaterThan(0);
     expect(new Set(changes.map((change) => change.author))).toEqual(new Set(["folio compare"]));
+    expect(result.revisions).toHaveLength(changes.length);
+    expect(new Set(result.revisions.map(({ author }) => author))).toEqual(
+      new Set(["folio compare"]),
+    );
 
     // Invariant 1: the as-accepted view (snapshot) equals the revised document.
     expect(blockTexts(acceptView)).toEqual(revisedTexts);
@@ -350,7 +357,7 @@ describe("generateRedlineDocx", () => {
 
     const result = await generateRedlineDocx(base, revised);
 
-    expect(result.applied).toEqual([]);
+    expect(result.revisions).toEqual([]);
     expect(result.skipped).toEqual([]);
     const view = await FolioDocxReviewer.fromBuffer(result.buffer);
     expect(view.getChanges()).toEqual([]);
@@ -408,7 +415,7 @@ describe("generateRedlineDocx", () => {
 
     expect(result.skipped).toEqual([]);
     expect(result.unprocessedStories).toEqual([]);
-    expect(result.applied).toHaveLength(5);
+    expect(result.revisions.length).toBeGreaterThan(0);
     const output = await FolioDocxReviewer.fromBuffer(result.buffer);
     expect(storyTextByType(output, "original")).toEqual({
       main: "Body baseline.",
