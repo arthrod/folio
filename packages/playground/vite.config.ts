@@ -93,11 +93,13 @@ export default defineConfig({
   build: {
     outDir: "dist",
     rollupOptions: {
-      // Two entries: the playground editor harness and the redline tool. The
-      // redline entry is the deployable artifact (folio editor + jubarte-wasm).
+      // Entries: the playground editor harness, the redline tool, and the
+      // 3-column "import A → B → poof" redline (redline3). The redline entries
+      // are the deployable artifacts (folio editor + jubarte-wasm + pretext).
       input: {
         main: path.join(playgroundRoot, "index.html"),
         redline: path.join(playgroundRoot, "redline.html"),
+        redline3: path.join(playgroundRoot, "redline3.html"),
       },
     },
   },
