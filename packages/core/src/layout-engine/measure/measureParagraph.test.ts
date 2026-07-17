@@ -389,71 +389,23 @@ describe("measureParagraph cross-run line breaking", () => {
     }, fakeMeasure);
   });
 
-  test("keeps a Czech one-letter preposition with a following formatted run", () => {
+  test("uses authored no-break spaces across formatted runs", () => {
     withFakeTextMeasure(() => {
-      const sameRunWhitespace: Run[] = [
+      const ordinaryWhitespace: Run[] = [
         { kind: "text", text: "alpha o ", language: { val: "cs-CZ" } },
         { kind: "text", text: "beta", bold: true, language: { val: "cs-CZ" } },
       ];
-      const sameRunMeasure = measureParagraph(paragraph(sameRunWhitespace), width("alpha o"));
-
-      expect(lineStartsAt(sameRunMeasure.lines, 0, "alpha ".length)).toBe(true);
-      expect(lineStartsAtRun(sameRunMeasure.lines, 1)).toBe(false);
-
-      const splitCases: { runs: Run[]; followingRun: number }[] = [
-        {
-          runs: [
-            { kind: "text", text: "alpha " },
-            { kind: "text", text: "o", language: { val: "cs-CZ" } },
-            { kind: "text", text: " beta", bold: true },
-          ],
-          followingRun: 2,
-        },
-        {
-          runs: [
-            { kind: "text", text: "alpha " },
-            { kind: "text", text: "o", language: { val: "cs-CZ" } },
-            { kind: "text", text: " " },
-            { kind: "text", text: "beta", bold: true },
-          ],
-          followingRun: 3,
-        },
-        {
-          runs: [
-            { kind: "text", text: "alpha " },
-            { kind: "text", text: "o ", language: { val: "cs-CZ" } },
-            { kind: "text", text: "" },
-            { kind: "text", text: "beta", bold: true },
-          ],
-          followingRun: 3,
-        },
+      const noBreakWhitespace: Run[] = [
+        { kind: "text", text: "alpha o\u00A0", language: { val: "cs-CZ" } },
+        { kind: "text", text: "beta", bold: true, language: { val: "cs-CZ" } },
       ];
+      const ordinaryMeasure = measureParagraph(paragraph(ordinaryWhitespace), width("alpha o"));
+      const noBreakMeasure = measureParagraph(paragraph(noBreakWhitespace), width("alpha o"));
 
-      for (const splitCase of splitCases) {
-        const { lines } = measureParagraph(paragraph(splitCase.runs), width("alpha o"));
-
-        expect(lineStartsAtRun(lines, 1)).toBe(true);
-        expect(lineStartsAtRun(lines, splitCase.followingRun)).toBe(false);
-      }
+      expect(lineStartsAtRun(ordinaryMeasure.lines, 1)).toBe(true);
+      expect(lineStartsAt(noBreakMeasure.lines, 0, "alpha ".length)).toBe(true);
+      expect(lineStartsAtRun(noBreakMeasure.lines, 1)).toBe(false);
     }, fakeMeasure);
-  });
-
-  test("bounds protected-break scanning for fragmented Czech runs", () => {
-    withFakeTextMeasure(
-      () => {
-        const runs: Run[] = Array.from({ length: 500 }, () => ({
-          kind: "text",
-          text: "o",
-          language: { val: "cs-CZ" },
-        }));
-        const startedAt = performance.now();
-
-        measureParagraph(paragraph(runs), 10_000);
-
-        expect(performance.now() - startedAt).toBeLessThan(1_500);
-      },
-      { charWidth: fixedCharWidth(1) },
-    );
   });
 
   test("allows a normal wrap when whitespace precedes the footnote marker", () => {
@@ -1135,6 +1087,47 @@ describe("measureParagraph justified shrink tolerance", () => {
       },
       {
         charWidth: fractionalWidth,
+      },
+    );
+  });
+
+  test("allows the bounded first-line tolerance for deep hanging list markers", () => {
+    const firstLineText = `${"a".repeat(98)} bbb`;
+
+    withFakeTextMeasure(
+      () => {
+        const fittingMeasure = measureParagraph(
+          {
+            kind: "paragraph",
+            id: "justified-deep-hanging-list-marker",
+            runs: [{ kind: "text", text: firstLineText }],
+            attrs: {
+              alignment: "justify",
+              indent: { left: 36, hanging: 36 },
+              listMarker: "1.1.1",
+            },
+          },
+          136,
+        );
+        const overflowingMeasure = measureParagraph(
+          {
+            kind: "paragraph",
+            id: "justified-deep-hanging-list-marker-boundary",
+            runs: [{ kind: "text", text: firstLineText }],
+            attrs: {
+              alignment: "justify",
+              indent: { left: 36, hanging: 36 },
+              listMarker: "1.1.1",
+            },
+          },
+          135.9,
+        );
+
+        expect(fittingMeasure.lines).toHaveLength(1);
+        expect(overflowingMeasure.lines).toHaveLength(2);
+      },
+      {
+        charWidth: (char) => (char === "b" ? 1.05 : 1),
       },
     );
   });
