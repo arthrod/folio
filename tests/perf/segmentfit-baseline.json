@@ -1,0 +1,44 @@
+{
+  "harness": "segmentfit-baseline",
+  "doc": {
+    "paragraphs": 1500
+  },
+  "relayoutsSampled": 80,
+  "note": "relayoutMs = one forced full-document relayout (re-measure + re-paginate every paragraph) to the next painted frame; this is the hot path the segment-fit seam changes. Real fonts (not the deterministic canvas), so absolute ms are machine-specific — compare pretext vs legacy from the SAME run. No budget assertion is committed until a TARGET_MS is signed (plan §12.6).",
+  "interpretation": "This measures the WARM-CACHE steady state, where pretext is expected to be at parity with the legacy walk (folio's text-width cache already covers repeat measurement). Pretext's win is first-pass / cold-cache / overlong-token measurement cost (199->127 and 82->3 canvas calls), characterized in @stll/premirror-bridge's pretextParity.test.ts — NOT warm relayout. A near-zero p50 delta here is the correct, expected result and confirms no steady-state regression.",
+  "pretextMinusLegacyP50Ms": 0,
+  "results": {
+    "pretext": {
+      "engineLabel": "pretext",
+      "url": "http://localhost:4173/?paragraphs=1500",
+      "flags": {
+        "segmentFitLineBreaking": true
+      },
+      "pages": 69,
+      "samples": 77,
+      "relayoutMs": {
+        "p50": 16.69999999552965,
+        "p95": 18.700000002980232,
+        "min": 14.5,
+        "max": 18.80000000447035
+      },
+      "initialSettleMs": 1331,
+      "pageErrors": []
+    },
+    "legacy": {
+      "engineLabel": "legacy",
+      "url": "http://localhost:4173/?paragraphs=1500&segmentfit=off",
+      "flags": null,
+      "pages": 69,
+      "samples": 77,
+      "relayoutMs": {
+        "p50": 16.69999999552965,
+        "p95": 17.299999997019768,
+        "min": 15.699999995529652,
+        "max": 17.600000001490116
+      },
+      "initialSettleMs": 1330,
+      "pageErrors": []
+    }
+  }
+}
