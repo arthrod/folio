@@ -697,7 +697,7 @@ function serializeSimpleField(field: SimpleField): string {
   // End field character
   parts.push(`<w:r>${rPrXml}<w:fldChar w:fldCharType="end"/></w:r>`);
 
-  return parts.join("");
+  return wrapFieldTrackedChange(field, parts.join(""));
 }
 
 /**
@@ -750,7 +750,7 @@ function serializeComplexField(field: ComplexField): string {
   // End field character
   parts.push(`<w:r>${rPrXml}<w:fldChar w:fldCharType="end"/></w:r>`);
 
-  return parts.join("");
+  return wrapFieldTrackedChange(field, parts.join(""));
 }
 
 /**
@@ -942,11 +942,7 @@ function rewriteRunTextAsDeleted(xml: string): string {
     .replace(/<\/w:instrText>/gu, "</w:delInstrText>");
 }
 
-function serializeTrackedChange(
-  tag: "ins" | "del" | "moveFrom" | "moveTo",
-  change: Insertion | Deletion | MoveFrom | MoveTo,
-): string {
-  const info = change.info;
+function normalizedTrackedChangeAttrs(info: TrackedChangeInfo): string {
   const normalizedId = Number.isInteger(info.id) && info.id >= 0 ? info.id : 0;
   const authorCandidate = typeof info.author === "string" ? info.author.trim() : "";
   const normalizedAuthor = authorCandidate.length > 0 ? authorCandidate : "Unknown";
@@ -959,6 +955,39 @@ function serializeTrackedChange(
   if (normalizedDateUtc) {
     attrs.push(`w16du:dateUtc="${escapeXml(normalizedDateUtc)}"`);
   }
+  return attrs.join(" ");
+}
+
+const FIELD_TRACKED_CHANGE_TAGS = {
+  insertion: "ins",
+  deletion: "del",
+  moveFrom: "moveFrom",
+  moveTo: "moveTo",
+} as const;
+
+/**
+ * Wrap a serialized field in the `w:ins`/`w:del`/`w:moveFrom`/`w:moveTo`
+ * element recorded on the field's `trackedChange` marker. For deletions the
+ * field's result and instruction runs are rewritten to
+ * `w:delText`/`w:delInstrText`; without the wrapper, a tracked-deleted
+ * field's text re-emerges as accepted `w:t` content.
+ */
+function wrapFieldTrackedChange(field: SimpleField | ComplexField, xml: string): string {
+  const change = field.trackedChange;
+  if (!change) {
+    return xml;
+  }
+  const tag = FIELD_TRACKED_CHANGE_TAGS[change.kind];
+  const inner =
+    change.kind === "deletion" || change.kind === "moveFrom" ? rewriteRunTextAsDeleted(xml) : xml;
+  return `<w:${tag} ${normalizedTrackedChangeAttrs(change.info)}>${inner}</w:${tag}>`;
+}
+
+function serializeTrackedChange(
+  tag: "ins" | "del" | "moveFrom" | "moveTo",
+  change: Insertion | Deletion | MoveFrom | MoveTo,
+): string {
+  const attrs = normalizedTrackedChangeAttrs(change.info);
 
   const serializeDeletedRun = (run: Run): string => {
     const xml = serializeRun(run);
@@ -1000,7 +1029,7 @@ function serializeTrackedChange(
     })
     .join("");
 
-  return `<w:${tag} ${attrs.join(" ")}>${contentXml}</w:${tag}>`;
+  return `<w:${tag} ${attrs}>${contentXml}</w:${tag}>`;
 }
 
 /** Emit the `<w:commentReference>` run Word places after a comment range end. */

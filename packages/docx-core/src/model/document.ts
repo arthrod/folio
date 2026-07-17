@@ -81,6 +81,7 @@ export type {
   BookmarkStart,
   BookmarkEnd,
   FieldType,
+  FieldTrackedChange,
   SimpleField,
   ComplexField,
   Field,
