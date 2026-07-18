@@ -43,7 +43,7 @@ export type RedlineOutcome = {
 let wasmModulePromise: Promise<JubarteWasmModule> | null = null;
 
 /** Load and initialise the jubarte wasm module once, then reuse it. */
-const loadWasmModule = async (): Promise<JubarteWasmModule> => {
+const loadWasmModule = (): Promise<JubarteWasmModule> => {
   if (!wasmModulePromise) {
     wasmModulePromise = (async () => {
       // wasm-bindgen deprecated the positional-path form; pass the options object.

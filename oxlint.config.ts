@@ -79,6 +79,9 @@ export default library({
     // skip them. scripts/no-untranslated-jsx-literal.test.ts lints them
     // explicitly with `--no-ignore` to assert the rule's behaviour.
     "test/__fixtures__/**",
+    // wasm-bindgen output vendored for the redline demo; generated code is not
+    // held to the hand-written rule set and must never be hand-edited to appease it.
+    "packages/playground/src/redline/jubarte-wasm/**",
   ],
   overrides: [
     {

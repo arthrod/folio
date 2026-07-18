@@ -71,14 +71,26 @@ const parseRevisionsJson = (json: string): RedlineRevision[] => {
 };
 
 /** Wrap an injected jubarte wasm module as a `RedlineEngine`. */
+// The wasm module is synchronous; the engine port is Promise-based. Route sync
+// throws into rejections, matching what the previous `async` wrappers did.
+const asResolved = <T>(compute: () => T): Promise<T> => {
+  try {
+    return Promise.resolve(compute());
+  } catch (error) {
+    return Promise.reject(error);
+  }
+};
+
 export const createJubarteWasmRedlineEngine = (module: JubarteWasmModule): RedlineEngine => ({
   name: "jubarte-wasm",
-  compare: async (base, revised, { author }) => ({
-    buffer: toArrayBuffer(
-      module.compareDocuments(new Uint8Array(base), new Uint8Array(revised), author),
-    ),
-  }),
-  acceptAll: async (docx) => toArrayBuffer(module.acceptRevisions(new Uint8Array(docx))),
-  rejectAll: async (docx) => toArrayBuffer(module.rejectRevisions(new Uint8Array(docx))),
-  getRevisions: async (docx) => parseRevisionsJson(module.getRevisions(new Uint8Array(docx))),
+  compare: (base, revised, { author }) =>
+    asResolved(() => ({
+      buffer: toArrayBuffer(
+        module.compareDocuments(new Uint8Array(base), new Uint8Array(revised), author),
+      ),
+    })),
+  acceptAll: (docx) => asResolved(() => toArrayBuffer(module.acceptRevisions(new Uint8Array(docx)))),
+  rejectAll: (docx) => asResolved(() => toArrayBuffer(module.rejectRevisions(new Uint8Array(docx)))),
+  getRevisions: (docx) =>
+    asResolved(() => parseRevisionsJson(module.getRevisions(new Uint8Array(docx)))),
 });
