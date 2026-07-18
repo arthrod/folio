@@ -969,6 +969,9 @@ function rewriteRunTextAsDeletedDrawingAware(xml: string): string {
   const rewritten = rewriteRunTextAsDeleted(protectedXml);
 
   return rewritten.replace(
+    // NUL is the sentinel precisely because it can never occur in valid XML
+    // text, so the placeholder cannot collide with document content.
+    // eslint-disable-next-line no-control-regex
     /\x00FIELD_DEL_(DRAWING|PICT)_(\d+)\x00/gu,
     (_match, _key: string, idx: string) => subtrees[Number(idx)] ?? "",
   );
