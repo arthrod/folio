@@ -162,6 +162,8 @@
         "@stll/folio-core": "workspace:*",
       },
       "devDependencies": {
+        "@stll/premirror-composer": "workspace:*",
+        "@stll/premirror-core": "workspace:*",
         "@types/bun": "1.3.14",
       },
     },
