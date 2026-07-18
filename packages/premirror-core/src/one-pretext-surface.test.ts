@@ -3,8 +3,10 @@ import { readFileSync } from "node:fs";
 
 /**
  * ONE-pretext-surface invariant (E-4 unification): `@stll/premirror-bridge` is
- * the only workspace package allowed to reference `@chenglou/pretext`; the
- * premirror packages consume an injected `SegmentFitEngineLike` instead. Crude,
+ * the only workspace package allowed to reference the pretext package (the
+ * `@chenglou` scope one this guard scans for; the specifier is spelled split
+ * below so the guard cannot match its own prose either). The premirror
+ * packages consume an injected `SegmentFitEngineLike` instead. Crude,
  * dependency-free string scan of this package's own src so a reintroduced
  * import fails the suite, not a code review. The needle is split so this guard
  * does not match itself.
