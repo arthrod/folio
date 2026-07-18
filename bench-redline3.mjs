@@ -50,6 +50,9 @@ for (const path of PAGES) {
         if (count && /^\d+$/.test(count.textContent.trim())) return true;
         return document.querySelector('[data-testid="engine-failure"]') !== null;
       },
+      undefined,
+      // Options are the THIRD parameter; passing them second leaves the
+      // default 30 s timeout in force.
       { timeout: 240000 },
     );
     redlineMs = Date.now() - tRun;
