@@ -65,6 +65,11 @@ jobs:
         # Guard their manual memoization so a cleanup cannot create render loops.
         run: bun run check:react-compiler
 
+      - name: Build @stll/folio-vue dist types
+        # folio-vue's exports map types to dist/ (its src is .vue SFCs, unusable
+        # by plain tsc), so consumers' typecheck needs the built declarations.
+        run: bun --filter '@stll/folio-vue' build
+
       - name: Typecheck
         run: bun run typecheck
 

@@ -505,7 +505,7 @@ export function decodeDataUrl(dataUrl: string): {
   const mime = (params[0] || "").trim();
   const isBase64 = params.slice(1).some((p) => p.trim().toLowerCase() === "base64");
 
-  let bytes: Uint8Array;
+  let bytes;
   if (isBase64) {
     const binary = atob(rawData);
     bytes = new Uint8Array(binary.length);
