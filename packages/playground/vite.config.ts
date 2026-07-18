@@ -70,9 +70,20 @@ function installFixtureMiddleware(
   });
 }
 
+// jubarte-first (the TypeScript lossless engine) is bundled straight from its
+// SOURCE tree: its dist is stale vs branch HEAD and its tsdown build is broken
+// on this machine, and the standing rule is "no old artifacts". Its internal
+// `./x.js` specifiers resolve to `.ts` sources via rolldown's TS resolution.
+const jubarteFirstSrc = path.resolve(playgroundRoot, "../../../../jubarte-first/src");
+
 export default defineConfig({
   plugins: [tailwindcss(), react(), serveFixtures()],
   root: playgroundRoot,
+  resolve: {
+    alias: {
+      "jubarte-src": jubarteFirstSrc,
+    },
+  },
   // When launched by the parity harness (which sets FOLIO_PLAYGROUND_PORT),
   // serve the workspace packages as live source instead of pre-bundling them
   // into `.vite/deps`. Vite's dep-optimizer caches the bundled snapshot on
@@ -89,6 +100,9 @@ export default defineConfig({
     port: Number(process.env["FOLIO_PLAYGROUND_PORT"]) || 4200,
     strictPort: true,
     open: false,
+    fs: {
+      allow: [repoRoot, jubarteFirstSrc, path.resolve(jubarteFirstSrc, "..")],
+    },
   },
   build: {
     outDir: "dist",
@@ -100,6 +114,14 @@ export default defineConfig({
         main: path.join(playgroundRoot, "index.html"),
         redline: path.join(playgroundRoot, "redline.html"),
         redline3: path.join(playgroundRoot, "redline3.html"),
+        "redline3-view": path.join(playgroundRoot, "redline3-view.html"),
+        "redline3-ts": path.join(playgroundRoot, "redline3-ts.html"),
+        "redline3-ts-view": path.join(playgroundRoot, "redline3-ts-view.html"),
+        "redline3-native": path.join(playgroundRoot, "redline3-native.html"),
+        "redline3-native-view": path.join(playgroundRoot, "redline3-native-view.html"),
+        "redline3-vue": path.join(playgroundRoot, "redline3-vue.html"),
+        "redline3-vue-ts": path.join(playgroundRoot, "redline3-vue-ts.html"),
+        "redline3-vue-native": path.join(playgroundRoot, "redline3-vue-native.html"),
       },
     },
   },

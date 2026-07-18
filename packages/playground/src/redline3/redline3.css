@@ -455,3 +455,43 @@ body {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ---------- variant switcher + Vue HTML panes ---------- */
+
+.r3-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  padding: 6px 2px 0;
+}
+
+.r3-switch-link {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+  padding-bottom: 1px;
+}
+
+.r3-switch-link:hover {
+  color: var(--ink);
+  border-bottom-color: var(--faint);
+}
+
+.r3-switch-link[aria-current="page"] {
+  color: var(--ink);
+  border-bottom-color: var(--mark);
+}
+
+.r3-grid--vue {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.15fr);
+}
+
+.r3-htmlframe {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  background: #fff;
+}
