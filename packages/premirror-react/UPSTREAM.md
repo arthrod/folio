@@ -13,5 +13,7 @@
 
 - 2026-07-11 phase 3: `buildFragmentDecorations` lifted from the demo into `@premirror/react` (`src/fragmentProjection.tsx`, + prosemirror-model/view deps); demo now imports it. Candidate upstream PR.
 
+- 2026-07-18 (E-4 unification): no code change — the engine option passes through untouched (`PremirrorOptions.engine` reaches the adapter via `createPremirror`, `LayoutInput.engine` reaches the composer via `usePremirrorEngine`'s `layoutInput`); this package has no measurement logic of its own. The tsconfig `paths` entry pointing at the (now deleted) adapter pretext stub is removed. Guard: `src/one-pretext-surface.test.ts`.
+
 Keep this log current: every local edit to vendored files gets a line here.
 Generic fixes should be PR'd upstream, not fork-drifted.
