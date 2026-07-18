@@ -86,18 +86,22 @@ function normalizeDeletionContentElement(node: XmlElement): XmlElement {
   return result;
 }
 
-/** Parse `w:id`/`w:author`/`w:date` off a tracked-change wrapper. */
+/** Parse `w:id`/`w:author`/`w:date`/`w16du:dateUtc` off a tracked-change wrapper. */
 function parseTrackedChangeInfo(node: XmlElement): TrackedChangeInfo {
   const rawId = getAttribute(node, "w", "id");
   const parsedId = rawId ? Number.parseInt(rawId, 10) : 0;
   const author = (getAttribute(node, "w", "author") ?? "").trim();
   const date = (getAttribute(node, "w", "date") ?? "").trim();
+  const dateUtc = (getAttribute(node, "w16du", "dateUtc") ?? "").trim();
   const info: TrackedChangeInfo = {
     id: Number.isInteger(parsedId) && parsedId >= 0 ? parsedId : 0,
     author: author.length > 0 ? author : "Unknown",
   };
   if (date.length > 0) {
     info.date = date;
+  }
+  if (dateUtc.length > 0) {
+    info.dateUtc = dateUtc;
   }
   return info;
 }

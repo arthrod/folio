@@ -63,4 +63,34 @@ describe("w16du:dateUtc tracked-change fidelity", () => {
     const xml = serializeParagraph(paragraph);
     expect(xml).toContain('w16du:dateUtc="2026-07-11T01:47:00Z"');
   });
+
+  test("hyperlink-nested deletion keeps its UTC companion timestamp", () => {
+    const root = parse(`
+      <w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+           xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+           xmlns:w16du="http://schemas.microsoft.com/office/word/2023/wordml/word16du">
+        <w:hyperlink r:id="rId1">
+          <w:del w:id="99" w:author="Reviewer" w:date="2026-07-10T21:47:00Z" w16du:dateUtc="2026-07-11T01:47:00Z">
+            <w:r><w:delText>old link text</w:delText></w:r>
+          </w:del>
+        </w:hyperlink>
+      </w:p>
+    `);
+
+    const paragraph = parseParagraph(root, null, null, null, null, null);
+    const hyperlink = paragraph.content.find((c) => c.type === "hyperlink");
+    expect(hyperlink?.type).toBe("hyperlink");
+    if (hyperlink?.type !== "hyperlink") {
+      return;
+    }
+    const deletion = hyperlink.children.find((c) => c.type === "deletion");
+    expect(deletion?.type).toBe("deletion");
+    if (deletion?.type !== "deletion") {
+      return;
+    }
+    expect(deletion.info.dateUtc).toBe("2026-07-11T01:47:00Z");
+
+    const xml = serializeParagraph(paragraph);
+    expect(xml).toContain('w16du:dateUtc="2026-07-11T01:47:00Z"');
+  });
 });
