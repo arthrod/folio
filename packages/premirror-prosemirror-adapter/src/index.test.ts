@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, mock } from "bun:test";
+import { describe, expect, it } from "bun:test";
 
+import type { SegmentFitEngineLike } from "@stll/premirror-core";
 import { defaultPremirrorOptions } from "@stll/premirror-core";
 import { Schema } from "prosemirror-model";
 import { AllSelection, EditorState } from "prosemirror-state";
@@ -9,23 +10,12 @@ import { addListNodes } from "prosemirror-schema-list";
 import { createPremirror, premirrorInvalidationKey } from "./index";
 
 /**
- * `@chenglou/pretext` resolves to the deterministic local stub under `bun test`
- * (see UPSTREAM.md), so `measureSnapshotImpl`'s real-measurement success path
- * and its throw/catch fallback path are never exercised by the tests above
- * (the stub always returns `null` without throwing). We mock the module
- * boundary (transport layer) to cover both paths explicitly, without
- * patching the pretext stub's exported functions directly.
+ * `measureSnapshotImpl` measures through the injected `SegmentFitEngineLike`
+ * (E-4 unification; see UPSTREAM.md). Tests below cover the engine success
+ * path, the throwing-engine fallback, and the absent-engine fallback by
+ * injecting deterministic fakes through `PremirrorOptions.engine` — no module
+ * mocking involved.
  */
-function restorePretextStub(): void {
-  mock.module("@chenglou/pretext", () => ({
-    prepareWithSegments: () => ({}),
-    layoutNextLine: () => null,
-  }));
-}
-
-afterEach(() => {
-  restorePretextStub();
-});
 
 const paragraphSpec = basicSchema.spec.nodes.get("paragraph");
 
@@ -115,25 +105,24 @@ describe("@premirror/prosemirror-adapter", () => {
     expect(runtime.getInvalidationRange(next)).toEqual(inval);
   });
 
-  it("measures using the real pretext line width when measurement succeeds (upstream pretext path)", () => {
-    // Simulate the real @chenglou/pretext package succeeding, as it would in
-    // production (Vite aliases to the real package; only `bun test` resolves
-    // the deterministic stub via tsconfig paths). Mocking the module
-    // boundary here exercises the `firstLine.width` success branch that the
-    // stub can never produce.
-    mock.module("@chenglou/pretext", () => ({
-      prepareWithSegments: (text: string) => ({ text }),
-      layoutNextLine: (prepared: unknown) => {
+  it("measures using the injected engine's line width when measurement succeeds", () => {
+    // Inject a deterministic engine, as the bridge would in production.
+    // Exercises the `firstLine.width` success branch (formerly the
+    // pretext-module success path, then covered by mocking the module
+    // boundary; the seam makes plain injection sufficient).
+    const engine: SegmentFitEngineLike = {
+      prepare: (text: string) => ({ text }),
+      fitLine: (prepared) => {
         const { text } = prepared as { text: string };
         return {
-          text,
+          endChar: text.length,
           width: text.length * 50,
-          end: { segmentIndex: 0, graphemeIndex: text.length },
+          cursor: null,
         };
       },
-    }));
+    };
 
-    const runtime = createPremirror(defaultPremirrorOptions());
+    const runtime = createPremirror(defaultPremirrorOptions({ engine }));
     const state = EditorState.create({
       schema,
       doc: schema.node("doc", null, [schema.node("paragraph", null, [schema.text("Hi")])]),
@@ -145,18 +134,18 @@ describe("@premirror/prosemirror-adapter", () => {
     expect(measured.measuredRuns[firstKey!]?.widthPx).toBe(100);
   });
 
-  it("falls back to deterministic width when pretext measurement throws", () => {
-    // Prior/baseline behavior: when pretext itself is unavailable (throws),
+  it("falls back to deterministic width when engine measurement throws", () => {
+    // Prior/baseline behavior: when the engine is unavailable (throws),
     // measureSnapshotImpl must still produce a stable, deterministic width
     // and mark the measurement as a fallback rather than propagating.
-    mock.module("@chenglou/pretext", () => ({
-      prepareWithSegments: () => {
-        throw new Error("pretext unavailable");
+    const engine: SegmentFitEngineLike = {
+      prepare: () => {
+        throw new Error("engine unavailable");
       },
-      layoutNextLine: () => null,
-    }));
+      fitLine: () => null,
+    };
 
-    const runtime = createPremirror(defaultPremirrorOptions());
+    const runtime = createPremirror(defaultPremirrorOptions({ engine }));
     const state = EditorState.create({
       schema,
       doc: schema.node("doc", null, [schema.node("paragraph", null, [schema.text("Yo")])]),
@@ -186,5 +175,23 @@ describe("insertPageBreak at document root (PR #110 review)", () => {
       });
     }).not.toThrow();
     expect(applied).not.toBeNull();
+  });
+});
+
+describe("segment-fit engine injection (E-4 unification)", () => {
+  it("uses the deterministic fallback marker when no engine is injected", () => {
+    const runtime = createPremirror(defaultPremirrorOptions());
+    const state = EditorState.create({
+      schema,
+      doc: schema.node("doc", null, [schema.node("paragraph", null, [schema.text("NoEngine")])]),
+      plugins: runtime.plugins,
+    });
+    const measured = runtime.measureSnapshot(runtime.toSnapshot(state));
+    const firstKey = Object.keys(measured.measuredRuns)[0];
+    expect(firstKey).toBeDefined();
+    expect(measured.measuredRuns[firstKey!]?.widthPx).toBe(56);
+    expect(measured.measuredRuns[firstKey!]?.prepared).toMatchObject({
+      kind: "premirror-measurement-fallback",
+    });
   });
 });

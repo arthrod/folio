@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { describe, expect, it } from "bun:test";
 
 import type { BlockSnapshot } from "@stll/premirror-core";
 import { defaultPremirrorOptions } from "@stll/premirror-core";
@@ -14,23 +14,9 @@ import { createPremirror } from "./index";
  * Snapshot-extraction coverage for the adapter: list items, blockquotes,
  * headings, nesting, hard breaks, empty blocks, mark resolution, and the
  * no-op invalidation path — the block walkers the paragraph-only tests never
- * reach. `@chenglou/pretext` resolves to the deterministic stub under
- * `bun test`.
+ * reach. No segment-fit engine is injected (E-4 unification): measurement
+ * takes the deterministic fallback, which extraction does not depend on.
  */
-function restorePretextStub(): void {
-  mock.module("@chenglou/pretext", () => ({
-    prepareWithSegments: () => ({}),
-    layoutNextLine: () => null,
-  }));
-}
-
-beforeEach(() => {
-  restorePretextStub();
-});
-
-afterEach(() => {
-  restorePretextStub();
-});
 
 const paragraphSpec = basicSchema.spec.nodes.get("paragraph");
 if (!paragraphSpec) throw new Error("Missing paragraph spec");

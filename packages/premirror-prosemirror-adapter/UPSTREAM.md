@@ -14,5 +14,7 @@
 - 2026-07-11 (PR #110 / ce21ed65): local regression tests in `src/index.test.ts` — mocked measurement-path coverage and root-selection (`ResolvedPos.before(1)` at depth 0 does not throw). **Upstream disposition:** tests-only local additions; candidate to PR upstream with the adapter suite.
 - 2026-07-15 (PR #110 / c4043db1): `src/snapshot-extraction.test.ts` — list/blockquote/heading/nesting/hard-break snapshot extraction + no-op invalidation path.
 
+- 2026-07-18 (E-4 unification): the adapter no longer imports `@chenglou/pretext`. `measureSnapshotImpl` measures through the injected `SegmentFitEngineLike` (`PremirrorOptions.engine`, closed over in `createPremirror`): `prepare` + first `fitLine` unbounded; the engine's `prepared` handle still lands on `MeasuredRun.prepared` for the composer. Absent/declining/throwing engine yields the existing deterministic fallback (7px/char, 'premirror-measurement-fallback' marker). The `src/shims/pretext-stub.ts` shim and tsconfig `paths` mapping are gone; tests inject deterministic fakes instead of `mock.module`. Guard: `src/one-pretext-surface.test.ts`. **Upstream disposition:** candidate PR to samwillis/premirror with the premirror-core seam type.
+
 Keep this log current: every local edit to vendored files gets a line here.
 Generic fixes should be PR'd upstream, not fork-drifted.
