@@ -31,6 +31,17 @@ describe("decodeDataUrl", () => {
     expect(new TextDecoder().decode(data)).toBe(svg);
   });
 
+  test("falls back to verbatim payload when an SVG data URL contains a bare %", () => {
+    // Regression: browsers emit inline SVG data URLs whose payload carries
+    // literal `%` characters that are not part of a valid percent escape
+    // (e.g. `width="100%"`). `decodeURIComponent` throws `URIError` on those,
+    // crashing the whole save. The decoder must keep the payload verbatim.
+    const svg = '<svg width="100%" height="100%"></svg>';
+    const { data, extension } = decodeDataUrl(`data:image/svg+xml,${svg}`);
+    expect(extension).toBe("svg");
+    expect(new TextDecoder().decode(data)).toBe(svg);
+  });
+
   test("panics only on a genuinely malformed data URL", () => {
     expect(() => decodeDataUrl("not-a-data-url")).toThrow();
   });
