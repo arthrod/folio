@@ -62,36 +62,33 @@ export function RedlineApp() {
   const [status, setStatus] = useState("Load a base and a revised .docx, or the comment demo.");
   const [busy, setBusy] = useState(false);
 
-  const generate = useCallback(
-    async (baseBuffer: ArrayBuffer, revisedBuffer: ArrayBuffer) => {
-      setBusy(true);
-      setStatus("Comparing…");
-      try {
-        const { result, engine, elapsedMs } = await runRedline(
-          baseBuffer,
-          revisedBuffer,
-          DEFAULT_AUTHOR,
-        );
-        setState({
-          redline: result.buffer,
-          shown: result.buffer,
-          view: "redline",
-          revisions: result.revisions,
-          engine,
-          elapsedMs,
-          commentAnchors: 0,
-        });
-        setStatus(
-          `Redline via ${engine} in ${elapsedMs.toFixed(0)} ms — ${result.revisions.length} revision(s).`,
-        );
-      } catch (error) {
-        setStatus(`Compare failed: ${error instanceof Error ? error.message : String(error)}`);
-      } finally {
-        setBusy(false);
-      }
-    },
-    [],
-  );
+  const generate = useCallback(async (baseBuffer: ArrayBuffer, revisedBuffer: ArrayBuffer) => {
+    setBusy(true);
+    setStatus("Comparing…");
+    try {
+      const { result, engine, elapsedMs } = await runRedline(
+        baseBuffer,
+        revisedBuffer,
+        DEFAULT_AUTHOR,
+      );
+      setState({
+        redline: result.buffer,
+        shown: result.buffer,
+        view: "redline",
+        revisions: result.revisions,
+        engine,
+        elapsedMs,
+        commentAnchors: 0,
+      });
+      setStatus(
+        `Redline via ${engine} in ${elapsedMs.toFixed(0)} ms — ${result.revisions.length} revision(s).`,
+      );
+    } catch (error) {
+      setStatus(`Compare failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, []);
 
   const loadDemo = useCallback(async () => {
     setStatus("Loading comment demo…");
@@ -129,28 +126,25 @@ export function RedlineApp() {
     [],
   );
 
-  const setView = useCallback(
-    (view: View) => {
-      setState((prev) => {
-        if (!prev) {
-          return prev;
-        }
-        if (view === "redline") {
-          return { ...prev, view, shown: prev.redline };
-        }
-        // Accept/reject are computed lazily off the verified redline.
-        void (async () => {
-          const shown =
-            view === "accepted"
-              ? await acceptAllRevisions(prev.redline)
-              : await rejectAllRevisions(prev.redline);
-          setState((current) => (current ? { ...current, view, shown } : current));
-        })();
+  const setView = useCallback((view: View) => {
+    setState((prev) => {
+      if (!prev) {
         return prev;
-      });
-    },
-    [],
-  );
+      }
+      if (view === "redline") {
+        return { ...prev, view, shown: prev.redline };
+      }
+      // Accept/reject are computed lazily off the verified redline.
+      void (async () => {
+        const shown =
+          view === "accepted"
+            ? await acceptAllRevisions(prev.redline)
+            : await rejectAllRevisions(prev.redline);
+        setState((current) => (current ? { ...current, view, shown } : current));
+      })();
+      return prev;
+    });
+  }, []);
 
   // Surface the painted comment-anchor count once the shown buffer lays out.
   // Layout runs a few frames after the view is created, so re-read across a
@@ -220,7 +214,12 @@ export function RedlineApp() {
             <div className="rl-group">
               <label className="rl-file">
                 <span>Base .docx</span>
-                <input type="file" accept=".docx" onChange={pickFile("base")} data-testid="base-input" />
+                <input
+                  type="file"
+                  accept=".docx"
+                  onChange={pickFile("base")}
+                  data-testid="base-input"
+                />
                 <em>{baseName || "none"}</em>
               </label>
               <label className="rl-file">

@@ -292,7 +292,12 @@ export const FvueApp = defineComponent({
             const label = `${combo.framework}·${combo.engine}${combo.viewOnly && combo.framework === "react" ? "·view" : ""}`;
             return h(
               "a",
-              { key: path, href: path, class: "r3-switch-link", "aria-current": current ? "page" : undefined },
+              {
+                key: path,
+                href: path,
+                class: "r3-switch-link",
+                "aria-current": current ? "page" : undefined,
+              },
               label,
             );
           }),
@@ -327,7 +332,11 @@ export const FvueApp = defineComponent({
                 ? [
                     h("span", { class: "r3-meta", "data-testid": "engine" }, engineLabel.value),
                     h("span", { class: "r3-meta" }, [
-                      h("strong", { "data-testid": "revision-count" }, String(revisionCount.value ?? "…")),
+                      h(
+                        "strong",
+                        { "data-testid": "revision-count" },
+                        String(revisionCount.value ?? "…"),
+                      ),
                       " revisions",
                     ]),
                     elapsedMs.value !== null
