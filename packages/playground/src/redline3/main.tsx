@@ -3,6 +3,7 @@ import { pretextSegmentFitEngine } from "@stll/premirror-bridge";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
+import { resolvePageConfig } from "./config";
 import { Redline3App } from "./Redline3App";
 import "../styles.css";
 import "./redline3.css";
@@ -24,6 +25,6 @@ if (!container) {
 }
 createRoot(container).render(
   <StrictMode>
-    <Redline3App />
+    <Redline3App config={resolvePageConfig("react")} />
   </StrictMode>,
 );

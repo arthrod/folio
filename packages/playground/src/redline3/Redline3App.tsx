@@ -8,69 +8,29 @@ import { getFolioMessages } from "@stll/folio-react/messages";
 import type { RedlineRevision } from "@stll/folio-core/server";
 
 import {
-  acceptAllRevisions,
-  listRevisions,
-  RedlineEngineExhaustedError,
-  rejectAllRevisions,
-  runRedline,
-} from "../redline/engine";
+  DISSERTATION,
+  EXAMPLES,
+  GIANTS,
+  PAGE_MATRIX,
+  pagePath,
+  type PresetPair,
+  type R3PageConfig,
+} from "./config";
+import { engineFacade, RedlineEngineExhaustedError } from "./engines";
+import { aggregateMonolith } from "./monolith";
 
 const DEFAULT_AUTHOR = "Jubarte";
 
-// Ready-to-play pairs. All of these run jubarte-wasm live in the browser.
-const EXAMPLES = [
-  {
-    label: "Services",
-    blurb: "Master Services Agreement",
-    a: "/redline3/pair1-a.docx",
-    b: "/redline3/pair1-b.docx",
-  },
-  {
-    label: "Lease",
-    blurb: "Commercial Lease Agreement",
-    a: "/redline3/pair2-a.docx",
-    b: "/redline3/pair2-b.docx",
-  },
-  {
-    label: "NDA",
-    blurb: "Mutual Non-Disclosure Agreement",
-    a: "/redline3/pair3-a.docx",
-    b: "/redline3/pair3-b.docx",
-  },
-] as const;
-
-// ~200-page pairs; jubarte-wasm compares these live in ~10–20 s.
-const GIANTS = [
-  {
-    label: "Giant Services",
-    blurb: "~200pp Master Services Agreement",
-    a: "/redline3/giant1-a.docx",
-    b: "/redline3/giant1-b.docx",
-  },
-  {
-    label: "Giant Credit",
-    blurb: "~200pp Credit Facility Agreement",
-    a: "/redline3/giant2-a.docx",
-    b: "/redline3/giant2-b.docx",
-  },
-] as const;
-
-// A real ~1000-page dissertation (9.8 MB, 276k runs). Its compare peaks at
-// ~11.9 GB of memory — beyond wasm32's 4 GiB address space — so the redline is
-// precomputed by the SAME jubarte engine compiled natively (the server path).
-// Everything else on this page runs the wasm build live.
-const DISSERTATION = {
-  label: "Dissertation",
-  blurb: "Doctoral dissertation, ~1000pp — redline precomputed by native jubarte",
-  a: "/redline3/dissertacao-a.docx",
-  b: "/redline3/dissertacao-b.docx",
-  redline: "/redline3/dissertacao-redline.docx",
-  engineLabel: "jubarte-native (server)",
-} as const;
-
-type View = "redline" | "accepted" | "rejected";
+type View = "redline" | "monolith" | "accepted" | "rejected";
 type Side = "a" | "b";
 type Doc = { id: number; buffer: ArrayBuffer; name: string };
+
+type MonolithState = {
+  buffer: ArrayBuffer;
+  elementsBefore: number;
+  elementsAfter: number;
+  revisions: RedlineRevision[];
+};
 
 type RedlineState = {
   redline: ArrayBuffer;
@@ -79,6 +39,7 @@ type RedlineState = {
   revisions: RedlineRevision[];
   engine: string;
   elapsedMs: number | null;
+  monolith: MonolithState | null;
 };
 
 type EngineFailure = {
@@ -93,20 +54,25 @@ declare global {
         loadExample: (index: number) => Promise<void>;
         loadGiant: (index: number) => Promise<void>;
         loadDissertation: () => Promise<void>;
+        setView: (view: View) => void;
         rerun: () => Promise<void>;
         swap: () => void;
+        /** Base64 of the aggregated monolith buffer (null until computed). */
+        getMonolithBase64: () => string | null;
         getState: () => {
           view: View;
           revisions: RedlineRevision[];
           engine: string;
           elapsedMs: number | null;
+          monolith: { elementsBefore: number; elementsAfter: number; revisions: number } | null;
           failure: EngineFailure | null;
         } | null;
       }
     | undefined;
 }
 
-export function Redline3App() {
+export function Redline3App({ config }: { config: R3PageConfig }) {
+  const facade = engineFacade(config.engine);
   const editorARef = useRef<DocxEditorRef>(null);
   const editorBRef = useRef<DocxEditorRef>(null);
   const idRef = useRef(0);
@@ -117,65 +83,78 @@ export function Redline3App() {
   const [failure, setFailure] = useState<EngineFailure | null>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState(
-    "Drop two versions, or pick a pair — the redline is computed by jubarte, verified by folio.",
+    facade.live
+      ? `Drop two versions, or pick a pair — computed by ${facade.label}, verified by folio.`
+      : "Pick a pair — the redlines on this page were precomputed by native jubarte server-side.",
   );
 
-  const generate = useCallback(async (a: Doc, b: Doc) => {
-    setBusy(true);
-    setFailure(null);
-    setStatus(`jubarte-wasm comparing ${a.name} → ${b.name}…`);
-    try {
-      const { result, engine, elapsedMs } = await runRedline(a.buffer, b.buffer, DEFAULT_AUTHOR);
-      setState({
-        redline: result.buffer,
-        shown: result.buffer,
-        view: "redline",
-        revisions: result.revisions,
-        engine,
-        elapsedMs,
-      });
-      setStatus(
-        `Redline by ${engine} in ${(elapsedMs / 1000).toFixed(1)} s — ${result.revisions.length} revision(s), verified by folio's self-check.`,
-      );
-    } catch (error) {
-      setState(null);
-      if (error instanceof RedlineEngineExhaustedError) {
-        setFailure({ headline: "jubarte-wasm failed — no fallback, this is the real error", attempts: error.attempts });
-        setStatus("Engine failure. The error above is genuine; nothing was silently substituted.");
-      } else {
-        const message = error instanceof Error ? error.message : String(error);
-        setFailure({ headline: "Compare crashed before the engine ladder", attempts: [{ engine: "-", phase: "load", message }] });
-        setStatus("Compare failed.");
+  const generate = useCallback(
+    async (a: Doc, b: Doc) => {
+      setBusy(true);
+      setFailure(null);
+      setStatus(`${facade.label} comparing ${a.name} → ${b.name}…`);
+      try {
+        const { result, engine, elapsedMs } = await facade.run(a.buffer, b.buffer, DEFAULT_AUTHOR);
+        setState({
+          redline: result.buffer,
+          shown: result.buffer,
+          view: "redline",
+          revisions: result.revisions,
+          engine,
+          elapsedMs,
+          monolith: null,
+        });
+        setStatus(
+          `Redline by ${engine} in ${(elapsedMs / 1000).toFixed(1)} s — ${result.revisions.length} revision(s), verified by folio's self-check.`,
+        );
+      } catch (error) {
+        setState(null);
+        if (error instanceof RedlineEngineExhaustedError) {
+          setFailure({
+            headline: `${facade.label} failed — no fallback, this is the real error`,
+            attempts: error.attempts,
+          });
+          setStatus("Engine failure. The error above is genuine; nothing was silently substituted.");
+        } else {
+          const message = error instanceof Error ? error.message : String(error);
+          setFailure({
+            headline: "Compare crashed before the engine ladder",
+            attempts: [{ engine: facade.label, phase: "load", message }],
+          });
+          setStatus("Compare failed.");
+        }
+      } finally {
+        setBusy(false);
       }
-    } finally {
-      setBusy(false);
-    }
-  }, []);
+    },
+    [facade],
+  );
 
-  // The moment both documents land, redline them. Presets that carry a
-  // precomputed redline suppress this (they set the result themselves).
   useEffect(() => {
     if (docA && docB && !suppressAutoRun.current) {
       void generate(docA, docB);
     }
   }, [docA, docB, generate]);
 
-  const setDoc = useCallback((side: Side, doc: Doc) => {
-    suppressAutoRun.current = false;
-    if (side === "a") {
-      setDocA(doc);
-    } else {
-      setDocB(doc);
-    }
-  }, []);
-
   const readFile = useCallback(
     async (file: File, side: Side) => {
+      if (!facade.live) {
+        setStatus(
+          "This page's engine runs server-side (native binary); uploads cannot be compared here. Use the presets, or the wasm/ts pages for live compares.",
+        );
+        return;
+      }
       const buffer = await file.arrayBuffer();
       idRef.current += 1;
-      setDoc(side, { id: idRef.current, buffer, name: file.name });
+      suppressAutoRun.current = false;
+      const doc = { id: idRef.current, buffer, name: file.name };
+      if (side === "a") {
+        setDocA(doc);
+      } else {
+        setDocB(doc);
+      }
     },
-    [setDoc],
+    [facade],
   );
 
   const pickFile = useCallback(
@@ -201,10 +180,10 @@ export function Redline3App() {
   );
 
   const swap = useCallback(() => {
-    suppressAutoRun.current = false;
+    suppressAutoRun.current = !facade.live;
     setDocA(docB);
     setDocB(docA);
-  }, [docA, docB]);
+  }, [docA, docB, facade]);
 
   const clear = useCallback(() => {
     setDocA(null);
@@ -214,10 +193,8 @@ export function Redline3App() {
     setStatus("Cleared. Drop two versions or pick a pair.");
   }, []);
 
-  // Re-run the compare from the CURRENT editor contents, so edits made in the
-  // A/B columns feed the next redline.
   const rerun = useCallback(async () => {
-    if (!docA || !docB) {
+    if (!docA || !docB || !facade.live) {
       return;
     }
     setStatus("Serializing edited documents…");
@@ -228,114 +205,168 @@ export function Redline3App() {
     const a: Doc = bufA ? { ...docA, buffer: bufA } : docA;
     const b: Doc = bufB ? { ...docB, buffer: bufB } : docB;
     await generate(a, b);
-  }, [docA, docB, generate]);
+  }, [docA, docB, facade, generate]);
 
-  const setView = useCallback((view: View) => {
-    setState((prev) => {
-      if (!prev) {
+  const setView = useCallback(
+    (view: View) => {
+      setState((prev) => {
+        if (!prev) {
+          return prev;
+        }
+        if (view === "redline") {
+          return { ...prev, view, shown: prev.redline };
+        }
+        void (async () => {
+          try {
+            if (view === "monolith") {
+              const monolith =
+                prev.monolith ??
+                (await (async () => {
+                  const aggregated = await aggregateMonolith(prev.redline);
+                  const revisions = await facade.listRevisions(aggregated.buffer);
+                  return { ...aggregated, revisions };
+                })());
+              setStatus(
+                `Monolith: ${monolith.elementsBefore} revision elements aggregated into ${monolith.elementsAfter} — ${monolith.revisions.length} revision(s) after clustering.`,
+              );
+              setState((current) =>
+                current ? { ...current, view, shown: monolith.buffer, monolith } : current,
+              );
+              return;
+            }
+            const shown =
+              view === "accepted"
+                ? await facade.acceptAll(prev.redline)
+                : await facade.rejectAll(prev.redline);
+            setState((current) => (current ? { ...current, view, shown } : current));
+          } catch (error) {
+            setStatus(`${view} view failed: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        })();
         return prev;
-      }
-      if (view === "redline") {
-        return { ...prev, view, shown: prev.redline };
-      }
-      void (async () => {
-        const shown =
-          view === "accepted"
-            ? await acceptAllRevisions(prev.redline)
-            : await rejectAllRevisions(prev.redline);
-        setState((current) => (current ? { ...current, view, shown } : current));
-      })();
-      return prev;
-    });
-  }, []);
+      });
+    },
+    [facade],
+  );
 
-  const loadPair = useCallback(async (urlA: string, urlB: string, nameA: string, nameB: string, label: string) => {
-    setStatus(`Loading ${label}…`);
-    try {
-      const [ra, rb] = await Promise.all([fetch(urlA), fetch(urlB)]);
-      if (!ra.ok || !rb.ok) {
-        throw new Error(`fetch ${ra.status}/${rb.status}`);
+  const applyPrecomputed = useCallback(
+    async (redlineUrl: string, engineLabel: string) => {
+      const response = await fetch(redlineUrl);
+      if (!response.ok) {
+        throw new Error(`fetch ${redlineUrl}: ${response.status}`);
       }
-      const [ba, bb] = await Promise.all([ra.arrayBuffer(), rb.arrayBuffer()]);
-      idRef.current += 1;
-      const aDoc = { id: idRef.current, buffer: ba, name: nameA };
-      idRef.current += 1;
-      const bDoc = { id: idRef.current, buffer: bb, name: nameB };
-      setDocA(aDoc);
-      setDocB(bDoc);
-    } catch (error) {
-      setStatus(`Load failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }, []);
+      const buffer = await response.arrayBuffer();
+      setBusy(true);
+      setStatus("Enumerating revisions…");
+      try {
+        const revisions = await facade.listRevisions(buffer);
+        setState({
+          redline: buffer,
+          shown: buffer,
+          view: "redline",
+          revisions,
+          engine: engineLabel,
+          elapsedMs: null,
+          monolith: null,
+        });
+        setStatus(`Redline by ${engineLabel} — ${revisions.length} revision(s), precomputed server-side.`);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [facade],
+  );
+
+  const loadPair = useCallback(
+    async (preset: PresetPair, nameA: string, nameB: string) => {
+      setStatus(`Loading ${preset.blurb}…`);
+      setFailure(null);
+      try {
+        const [ra, rb] = await Promise.all([fetch(preset.a), fetch(preset.b)]);
+        if (!ra.ok || !rb.ok) {
+          throw new Error(`fetch ${ra.status}/${rb.status}`);
+        }
+        const [ba, bb] = await Promise.all([ra.arrayBuffer(), rb.arrayBuffer()]);
+        suppressAutoRun.current = !facade.live;
+        idRef.current += 1;
+        setDocA({ id: idRef.current, buffer: ba, name: nameA });
+        idRef.current += 1;
+        setDocB({ id: idRef.current, buffer: bb, name: nameB });
+        if (!facade.live) {
+          await applyPrecomputed(preset.nativeRedline, facade.label);
+        }
+      } catch (error) {
+        setStatus(`Load failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+    [applyPrecomputed, facade],
+  );
 
   const loadExample = useCallback(
-    (index: number) => {
-      suppressAutoRun.current = false;
-      const ex = EXAMPLES[index] ?? EXAMPLES[0];
-      return loadPair(ex.a, ex.b, `${ex.label} A.docx`, `${ex.label} B.docx`, ex.blurb);
+    async (index: number) => {
+      const preset = EXAMPLES.at(index);
+      if (preset) {
+        await loadPair(preset, `${preset.label} A.docx`, `${preset.label} B.docx`);
+      }
     },
     [loadPair],
   );
 
   const loadGiant = useCallback(
-    (index: number) => {
-      suppressAutoRun.current = false;
-      const g = GIANTS[index] ?? GIANTS[0];
-      return loadPair(g.a, g.b, `${g.label} A.docx`, `${g.label} B.docx`, g.blurb);
+    async (index: number) => {
+      const preset = GIANTS.at(index);
+      if (preset) {
+        await loadPair(preset, `${preset.label} A.docx`, `${preset.label} B.docx`);
+      }
     },
     [loadPair],
   );
 
-  // The dissertation ships its redline precomputed by native jubarte: the pair
-  // needs ~11.9 GB to compare, past wasm32's 4 GiB ceiling. The wasm build
-  // still enumerates the revisions and drives the accept/reject views live.
   const loadDissertation = useCallback(async () => {
     setStatus(`Loading ${DISSERTATION.blurb}…`);
     setFailure(null);
     try {
       suppressAutoRun.current = true;
-      const [ra, rb, rr] = await Promise.all([
-        fetch(DISSERTATION.a),
-        fetch(DISSERTATION.b),
-        fetch(DISSERTATION.redline),
-      ]);
-      if (!ra.ok || !rb.ok || !rr.ok) {
-        throw new Error(`fetch ${ra.status}/${rb.status}/${rr.status}`);
+      const [ra, rb] = await Promise.all([fetch(DISSERTATION.a), fetch(DISSERTATION.b)]);
+      if (!ra.ok || !rb.ok) {
+        throw new Error(`fetch ${ra.status}/${rb.status}`);
       }
-      const [ba, bb, br] = await Promise.all([ra.arrayBuffer(), rb.arrayBuffer(), rr.arrayBuffer()]);
+      const [ba, bb] = await Promise.all([ra.arrayBuffer(), rb.arrayBuffer()]);
       idRef.current += 1;
       setDocA({ id: idRef.current, buffer: ba, name: "Dissertação (original).docx" });
       idRef.current += 1;
       setDocB({ id: idRef.current, buffer: bb, name: "Dissertação (revisada).docx" });
-      setBusy(true);
-      setStatus("Enumerating revisions (jubarte-wasm)…");
-      const revisions = await listRevisions(br);
-      setState({
-        redline: br,
-        shown: br,
-        view: "redline",
-        revisions,
-        engine: DISSERTATION.engineLabel,
-        elapsedMs: null,
-      });
+      const { url, label } = DISSERTATION.redlineByEngine[config.engine];
+      await applyPrecomputed(url, label);
       setStatus(
-        `Dissertation redline by ${DISSERTATION.engineLabel} — ${revisions.length} revision(s). ` +
-          "This pair needs ~11.9 GB to compare, past wasm32's 4 GiB; the identical engine ran natively.",
+        `Dissertation redline by ${label}. Comparing this pair needs ~11.9 GB — past wasm32's 4 GiB and browser heaps — so the identical engine ran server-side.`,
       );
     } catch (error) {
       setStatus(`Load failed: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      setBusy(false);
     }
-  }, []);
+  }, [applyPrecomputed, config.engine]);
 
   useEffect(() => {
     globalThis.__redline3 = {
       loadExample,
       loadGiant,
       loadDissertation,
+      setView,
       rerun,
       swap,
+      getMonolithBase64: () => {
+        const buffer = state?.monolith?.buffer;
+        if (!buffer) {
+          return null;
+        }
+        const bytes = new Uint8Array(buffer);
+        let binary = "";
+        const chunk = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunk) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+        }
+        return btoa(binary);
+      },
       getState: () =>
         state || failure
           ? {
@@ -343,6 +374,13 @@ export function Redline3App() {
               revisions: state?.revisions ?? [],
               engine: state?.engine ?? "-",
               elapsedMs: state?.elapsedMs ?? null,
+              monolith: state?.monolith
+                ? {
+                    elementsBefore: state.monolith.elementsBefore,
+                    elementsAfter: state.monolith.elementsAfter,
+                    revisions: state.monolith.revisions.length,
+                  }
+                : null,
               failure,
             }
           : null,
@@ -350,7 +388,7 @@ export function Redline3App() {
     return () => {
       globalThis.__redline3 = undefined;
     };
-  }, [loadExample, loadGiant, loadDissertation, rerun, swap, state, failure]);
+  }, [loadExample, loadGiant, loadDissertation, setView, rerun, swap, state, failure]);
 
   const bothLoaded = Boolean(docA && docB);
 
@@ -367,33 +405,34 @@ export function Redline3App() {
               jubarte<span className="r3-wordmark-x">×</span>folio
             </span>
             <p className="r3-tagline">
-              Word-grade redlines, computed by <mark>jubarte</mark>, verified &amp; rendered by folio.
+              Word-grade redlines by <mark>{facade.label}</mark>
+              {config.viewOnly ? " · view-only" : ""}, verified &amp; rendered by folio.
             </p>
           </div>
           <nav className="r3-presets" aria-label="Sample document pairs">
-            {EXAMPLES.map((ex, i) => (
+            {EXAMPLES.map((preset, i) => (
               <button
-                key={ex.label}
+                key={preset.label}
                 type="button"
                 className="r3-preset"
                 onClick={() => void loadExample(i)}
                 data-testid={`example-${i}`}
-                title={ex.blurb}
+                title={preset.blurb}
               >
-                {ex.label}
+                {preset.label}
               </button>
             ))}
             <span className="r3-preset-rule" aria-hidden="true" />
-            {GIANTS.map((g, i) => (
+            {GIANTS.map((preset, i) => (
               <button
-                key={g.label}
+                key={preset.label}
                 type="button"
                 className="r3-preset"
                 onClick={() => void loadGiant(i)}
                 data-testid={`giant-${i}`}
-                title={`${g.blurb} — compared live by jubarte-wasm`}
+                title={preset.blurb}
               >
-                {g.label}
+                {preset.label}
               </button>
             ))}
             <span className="r3-preset-rule" aria-hidden="true" />
@@ -413,6 +452,19 @@ export function Redline3App() {
             )}
           </nav>
         </header>
+
+        <nav className="r3-switch" aria-label="Demo variants">
+          {PAGE_MATRIX.map((combo) => {
+            const path = pagePath(combo);
+            const current = path === pagePath(config);
+            const label = `${combo.framework}·${combo.engine}${combo.viewOnly && combo.framework === "react" ? "·view" : ""}`;
+            return (
+              <a key={path} href={path} className="r3-switch-link" aria-current={current ? "page" : undefined}>
+                {label}
+              </a>
+            );
+          })}
+        </nav>
 
         {failure && (
           <div className="r3-failure" role="alert" data-testid="engine-failure">
@@ -434,6 +486,7 @@ export function Redline3App() {
             doc={docA}
             testid="doc-a-input"
             editorRef={editorARef}
+            viewOnly={config.viewOnly}
             onPick={pickFile("a")}
             onDrop={onDrop("a")}
           />
@@ -450,7 +503,7 @@ export function Redline3App() {
             >
               &#8646;
             </button>
-            {bothLoaded && state && (
+            {bothLoaded && state && facade.live && !config.viewOnly && (
               <button
                 type="button"
                 className="r3-rerun"
@@ -470,6 +523,7 @@ export function Redline3App() {
             doc={docB}
             testid="doc-b-input"
             editorRef={editorBRef}
+            viewOnly={config.viewOnly}
             onPick={pickFile("b")}
             onDrop={onDrop("b")}
           />
@@ -490,7 +544,7 @@ export function Redline3App() {
                   )}
                   <span className="r3-spacer" />
                   <div className="r3-views" role="group" aria-label="Redline view">
-                    {(["redline", "accepted", "rejected"] as const).map((view) => (
+                    {(["redline", "monolith", "accepted", "rejected"] as const).map((view) => (
                       <button
                         key={view}
                         type="button"
@@ -517,7 +571,8 @@ export function Redline3App() {
                   document={null}
                   documentBuffer={state.shown}
                   author={DEFAULT_AUTHOR}
-                  mode="editing"
+                  mode={config.viewOnly ? "viewing" : "editing"}
+                  readOnly={config.viewOnly}
                   showRuler={false}
                   initialZoom={0.72}
                   onError={(error) => setStatus(`Editor: ${error.message}`)}
@@ -527,7 +582,7 @@ export function Redline3App() {
                   {busy ? (
                     <>
                       <div className="r3-spinner" aria-hidden="true" />
-                      <p>jubarte is comparing — the result is verified before it is shown.</p>
+                      <p>{facade.label} is working — results are verified before they are shown.</p>
                     </>
                   ) : (
                     <p>The verified redline lands here.</p>
@@ -552,11 +607,12 @@ type DocPaneProps = {
   doc: Doc | null;
   testid: string;
   editorRef: RefObject<DocxEditorRef | null>;
+  viewOnly: boolean;
   onPick: (event: ChangeEvent<HTMLInputElement>) => void;
   onDrop: (event: DragEvent<HTMLElement>) => void;
 };
 
-function DocPane({ label, title, doc, testid, editorRef, onPick, onDrop }: DocPaneProps) {
+function DocPane({ label, title, doc, testid, editorRef, viewOnly, onPick, onDrop }: DocPaneProps) {
   return (
     <section
       className={`r3-panel r3-pane${doc ? " r3-pane--ready" : ""}`}
@@ -583,7 +639,8 @@ function DocPane({ label, title, doc, testid, editorRef, onPick, onDrop }: DocPa
             document={null}
             documentBuffer={doc.buffer}
             author={DEFAULT_AUTHOR}
-            mode="editing"
+            mode={viewOnly ? "viewing" : "editing"}
+            readOnly={viewOnly}
             showRuler={false}
             initialZoom={0.72}
           />
