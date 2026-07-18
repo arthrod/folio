@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["bun"],
+    "noPropertyAccessFromIndexSignature": false,
+    "paths": {
+      "@chenglou/pretext": ["../premirror-prosemirror-adapter/src/shims/pretext-stub.ts"]
+    }
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "dist"]
+}
