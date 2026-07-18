@@ -116,12 +116,11 @@ const COMMENTS_HEADER =
   'xmlns:w10="urn:schemas-microsoft-com:office:word" ' +
   'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ' +
   'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" ' +
-  'xmlns:w16du="http://schemas.microsoft.com/office/word/2023/wordml/word16du" ' +
   'xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" ' +
   'xmlns:wpi="http://schemas.microsoft.com/office/word/2010/wordprocessingInk" ' +
   'xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" ' +
   'xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" ' +
-  'mc:Ignorable="w14 wp14 w16du">';
+  'mc:Ignorable="w14 wp14">';
 
 /**
  * Serialize comments array to comments.xml content. Returns a valid empty
@@ -301,8 +300,7 @@ const COMMENTS_EXTENDED_HEADER =
   '<w15:commentsEx xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" ' +
   'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ' +
   'xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" ' +
-  'xmlns:w16du="http://schemas.microsoft.com/office/word/2023/wordml/word16du" ' +
-  'mc:Ignorable="w15 w16du">';
+  'mc:Ignorable="w15">';
 
 /**
  * Serialize `commentsExtended.xml` (`w15:commentsEx`) for reply threading and

@@ -1,8 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import type { Comment } from "../../types/content";
 import type { HeaderFooter } from "../../types/document";
-import { serializeComments } from "./commentSerializer";
 import { serializeHeaderFooter } from "./headerFooterSerializer";
 import { serializeEndnotes, serializeFootnotes } from "./noteSerializer";
 
@@ -39,26 +37,6 @@ describe("w16du namespace declaration on part roots", () => {
     const xml = serializeHeaderFooter(hf);
     expect(xml).toContain(W16DU_NS);
     expect(xml).toContain("w16du:dateUtc");
-    expect(xml).toContain(W16DU_IGNORABLE);
-  });
-
-  test("comments root declares xmlns:w16du", () => {
-    const comment: Comment = {
-      id: 1,
-      author: "Reviewer",
-      date: "2026-01-01T00:00:00Z",
-      content: [
-        {
-          type: "paragraph",
-          formatting: {},
-          content: [
-            { type: "run", formatting: {}, content: [{ type: "text", text: "body" }] },
-          ],
-        },
-      ],
-    };
-    const xml = serializeComments([comment]);
-    expect(xml).toContain(W16DU_NS);
     expect(xml).toContain(W16DU_IGNORABLE);
   });
 
