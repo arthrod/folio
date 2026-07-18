@@ -419,6 +419,11 @@ const validateHyperlinkChild = (
     return;
   }
 
+  if (child.type === "insertion" || child.type === "deletion") {
+    validateTrackedRunChange(child, path, ctx);
+    return;
+  }
+
   if (child.type === "bookmarkStart") {
     increment(ctx.bookmarkStarts, child.id);
     return;

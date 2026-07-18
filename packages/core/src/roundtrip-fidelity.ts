@@ -41,8 +41,11 @@ export type RoundtripDiff = {
   net: RoundtripNetDiff[];
 };
 
-const ab = (bytes: Uint8Array): ArrayBuffer =>
-  bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+const ab = (bytes: Uint8Array): ArrayBuffer => {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+};
 
 /**
  * Multiset of body lines → count. Header/footer stories are id-local; the body
