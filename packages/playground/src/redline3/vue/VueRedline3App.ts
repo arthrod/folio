@@ -12,6 +12,7 @@ import {
   DISSERTATION,
   EXAMPLES,
   GIANTS,
+  idleStatusLabel,
   PAGE_MATRIX,
   pagePath,
   resolvePageConfig,
@@ -112,7 +113,7 @@ export const VueRedline3App = defineComponent({
       }
     };
 
-    const loadPane = async (side: "a" | "b", name: string, buffer: ArrayBuffer) => {
+    const loadPane = (side: "a" | "b", name: string, buffer: ArrayBuffer) => {
       status.value = `Rendering ${name}…`;
       const html = docxToHtml(buffer, false);
       const doc: PaneDoc = { name, buffer, html };
@@ -332,7 +333,7 @@ export const VueRedline3App = defineComponent({
                     h(
                       "span",
                       { class: "r3-meta r3-meta--muted" },
-                      busy.value ? "working…" : bothLoaded.value ? "…" : "waiting for A and B",
+                      idleStatusLabel(busy.value, bothLoaded.value, "working…"),
                     ),
                   ]),
             ]),

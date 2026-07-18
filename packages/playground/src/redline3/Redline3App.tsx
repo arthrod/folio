@@ -11,6 +11,7 @@ import {
   DISSERTATION,
   EXAMPLES,
   GIANTS,
+  idleStatusLabel,
   PAGE_MATRIX,
   pagePath,
   type PresetPair,
@@ -562,7 +563,7 @@ export function Redline3App({ config }: { config: R3PageConfig }) {
                 </>
               ) : (
                 <span className="r3-meta r3-meta--muted">
-                  {busy ? "comparing…" : bothLoaded ? "…" : "waiting for A and B"}
+                  {idleStatusLabel(busy, bothLoaded, "comparing…")}
                 </span>
               )}
             </header>

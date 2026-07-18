@@ -126,9 +126,10 @@ const losslessListRevisions = (redline: ArrayBuffer): RedlineRevision[] => {
 
 const tsLadderEngine: LadderEngine = {
   name: "jubarte-first-lossless",
-  compare: async (base, revised, { author }) => ({
-    buffer: toArrayBuffer(losslessCompareBytes(base, revised, author)),
-  }),
+  compare: (base, revised, { author }) =>
+    Promise.resolve({
+      buffer: toArrayBuffer(losslessCompareBytes(base, revised, author)),
+    }),
   acceptAll: async (docx) => {
     ensureLosslessWired();
     const { acceptRevisionsDocxBytes } = await import("jubarte-src/lossless/lib/ooxml-package-jszip.ts");
@@ -139,7 +140,7 @@ const tsLadderEngine: LadderEngine = {
     const { rejectRevisionsDocxBytes } = await import("jubarte-src/lossless/lib/ooxml-package-jszip.ts");
     return toArrayBuffer(rejectRevisionsDocxBytes(new Uint8Array(docx)));
   },
-  getRevisions: async (docx) => losslessListRevisions(docx),
+  getRevisions: (docx) => Promise.resolve(losslessListRevisions(docx)),
 };
 
 const runTsRedline = async (

@@ -15,6 +15,7 @@ import {
   DISSERTATION,
   EXAMPLES,
   GIANTS,
+  idleStatusLabel,
   PAGE_MATRIX,
   pagePath,
   resolvePageConfig,
@@ -367,7 +368,7 @@ export const FvueApp = defineComponent({
                     h(
                       "span",
                       { class: "r3-meta r3-meta--muted" },
-                      busy.value ? "comparing…" : bothLoaded.value ? "…" : "waiting for A and B",
+                      idleStatusLabel(busy.value, bothLoaded.value, "comparing…"),
                     ),
                   ]),
             ]),

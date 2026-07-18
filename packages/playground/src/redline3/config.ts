@@ -18,10 +18,19 @@ export type R3PageConfig = {
 };
 
 declare global {
+  // Global augmentation requires interface merging; a type alias cannot extend Window.
+  // eslint-disable-next-line typescript/consistent-type-definitions
   interface Window {
     __R3_CONFIG?: { engine?: EngineKind; viewOnly?: boolean };
   }
 }
+
+/** Idle-state label for the redline panel header, shared by all three tiers. */
+export const idleStatusLabel = (busyNow: boolean, bothLoaded: boolean, busyLabel: string): string => {
+  if (busyNow) return busyLabel;
+  if (bothLoaded) return "…";
+  return "waiting for A and B";
+};
 
 export const resolvePageConfig = (framework: FrameworkKind): R3PageConfig => ({
   engine: window.__R3_CONFIG?.engine ?? "wasm",

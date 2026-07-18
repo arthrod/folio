@@ -237,7 +237,9 @@ export function RedlineApp() {
                 type="button"
                 className="rl-btn rl-btn--primary"
                 disabled={!canGenerate}
-                onClick={() => base && revised && void generate(base, revised)}
+                onClick={() => {
+                  if (base && revised) void generate(base, revised);
+                }}
                 data-testid="generate"
               >
                 Generate redline
