@@ -52,6 +52,9 @@ export type CreateEmptyDocumentOptions = CreateEmptyDocumentBaseOptions & Create
 export const createFolioAITextRangeHandle: (input: CreateFolioAITextRangeHandleOptions) => FolioAITextRangeHandle | null;
 
 // @public (undocumented)
+export const createJubarteWasmRedlineEngine: (module: JubarteWasmModule) => RedlineEngine;
+
+// @public (undocumented)
 export const createStellaStyleDocumentPreset: () => DocumentPreset;
 
 // @public
@@ -904,18 +907,21 @@ export type GenerateRedlineDocxOptions = {
     baseView?: FolioResolvedReviewedView; /** Resolved revised input state. (default: `"final"`) */
     revisedView?: FolioResolvedReviewedView; /** Optional output-only package-metadata privacy transforms. */
     privacy?: FolioDocumentPrivacyOptions;
+    engines?: RedlineEngine[];
+    selfCheck?: RedlineSelfCheckMode;
 };
 
 // @public
 export type GenerateRedlineDocxResult = {
-    buffer: ArrayBuffer; /** Operations applied across every matched story. */
-    applied: FolioAIEditAppliedOperation[]; /** Block operations that could not be applied. */
-    skipped: FolioAIEditSkippedOperation[]; /** Package parts that could not be represented as story-scoped text edits. */
+    buffer: ArrayBuffer; /** Tracked revisions enumerated from the produced buffer. */
+    revisions: RedlineRevision[]; /** Name of the engine that produced (and passed verification for) the buffer. */
+    engine: string;
+    skipped: FolioAIEditSkippedOperation[];
     unprocessedStories: GenerateRedlineUnprocessedStory[]; /** Privacy transforms applied to the generated package. */
     privacyReport: FolioDocumentPrivacyReport;
 };
 
-// @public (undocumented)
+// @public
 export type GenerateRedlineUnprocessedStory = {
     baseStory: FolioDocumentStoryHandle | null;
     revisedStory: FolioDocumentStoryHandle | null;
@@ -982,11 +988,67 @@ export const isSequentialFolioBlockId: (id: string) => boolean;
 // @public (undocumented)
 export const isSupportedFolioDocumentOperationVersion: (value: unknown) => value is typeof FOLIO_DOCUMENT_OPERATION_CONTRACT_VERSION;
 
+// @public
+export type JubarteWasmModule = {
+    compareDocuments(original: Uint8Array, modified: Uint8Array, author: string): Uint8Array;
+    acceptRevisions(docx: Uint8Array): Uint8Array;
+    rejectRevisions(docx: Uint8Array): Uint8Array; /** JSON array string of {@link RedlineRevision} objects. */
+    getRevisions(docx: Uint8Array): string;
+};
+
 // @public (undocumented)
 export const parseFolioDocumentOperationBatch: (value: unknown) => FolioDocumentOperationBatch;
 
 // @public
 export const readFolioDocumentSection: (snapshot: FolioAIEditSnapshot, handle: FolioDocumentSectionHandle) => FolioDocumentSectionReadResult;
+
+// @public (undocumented)
+export type RedlineCompareOptions = {
+    author: string;
+};
+
+// @public (undocumented)
+export type RedlineCompareResult = {
+    buffer: ArrayBuffer; /** Story-engine coverage gaps; package-level engines omit these. */
+    skipped?: FolioAIEditSkippedOperation[];
+    unprocessedStories?: GenerateRedlineUnprocessedStory[];
+};
+
+// @public
+export type RedlineEngine = {
+    name: string;
+    compare(base: ArrayBuffer, revised: ArrayBuffer, options: RedlineCompareOptions): Promise<RedlineCompareResult>;
+    acceptAll(docx: ArrayBuffer): Promise<ArrayBuffer>;
+    rejectAll(docx: ArrayBuffer): Promise<ArrayBuffer>;
+    getRevisions(docx: ArrayBuffer): Promise<RedlineRevision[]>;
+};
+
+// @public
+export type RedlineEngineAttempt = {
+    engine: string;
+    phase: "compare" | "self-check" | "revisions";
+    message: string;
+};
+
+// @public
+export class RedlineEngineExhaustedError extends RedlineEngineExhaustedError_base {}
+
+// @public
+export type RedlineRevision = {
+    type: RedlineRevisionType;
+    author: string;
+    date: string;
+    part: string;
+    moveGroupId: number | null;
+    isMoveSource: boolean | null;
+    formatChange: {
+        changedProperties: string[];
+    } | null;
+    text: string;
+};
+
+// @public
+export type RedlineRevisionType = "Inserted" | "Deleted" | "Moved" | "FormatChanged";
 
 // @public
 export const replyToComment: (doc: import__stll_docx_core_model.Document, parentCommentId: number, input: CreateCommentReplyInput) => import__stll_docx_core_model.Comment | null;
@@ -1002,6 +1064,9 @@ export type RewriteDocxMetadataPrivacyResult = {
 
 // @public (undocumented)
 export const STELLA_STYLE_SET_NAME = "Stella Style";
+
+// @public
+export const storyRedlineEngine: RedlineEngine;
 
 // @public (undocumented)
 export class UnsupportedFolioDocumentOperationVersionError extends UnsupportedFolioDocumentOperationVersionError_base {}

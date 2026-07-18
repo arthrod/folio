@@ -123,7 +123,8 @@ export type ComplexField = {
     fieldResult: Run[];
     formatting?: TextFormatting; /** Field is locked */
     fldLock?: boolean; /** Field is dirty */
-    dirty?: boolean;
+    dirty?: boolean; /** Tracked change (w:ins/w:del/…) that wrapped this field's runs */
+    trackedChange?: FieldTrackedChange;
 };
 
 // @public
@@ -280,6 +281,12 @@ export type FieldCharContent = {
 };
 
 // @public
+export type FieldTrackedChange = {
+    kind: "insertion" | "deletion" | "moveFrom" | "moveTo";
+    info: TrackedChangeInfo;
+};
+
+// @public
 export type FieldType = "PAGE" | "NUMPAGES" | "NUMWORDS" | "NUMCHARS" | "DATE" | "TIME" | "CREATEDATE" | "SAVEDATE" | "PRINTDATE" | "AUTHOR" | "TITLE" | "SUBJECT" | "KEYWORDS" | "COMMENTS" | "FILENAME" | "FILESIZE" | "TEMPLATE" | "DOCPROPERTY" | "DOCVARIABLE" | "REF" | "PAGEREF" | "NOTEREF" | "HYPERLINK" | "TOC" | "TOA" | "INDEX" | "SEQ" | "STYLEREF" | "AUTONUM" | "AUTONUMLGL" | "AUTONUMOUT" | "LISTNUM" | "IF" | "MERGEFIELD" | "NEXT" | "NEXTIF" | "ASK" | "SET" | "QUOTE" | "INCLUDETEXT" | "INCLUDEPICTURE" | "SYMBOL" | "ADVANCE" | "EDITTIME" | "REVNUM" | "SECTION" | "SECTIONPAGES" | "USERADDRESS" | "USERNAME" | "USERINITIALS" | "UNKNOWN";
 
 // @public
@@ -376,8 +383,8 @@ export type Hyperlink = {
     tooltip?: string; /** Target frame */
     target?: string; /** Link history tracking */
     history?: boolean; /** Document location */
-    docLocation?: string; /** Child runs */
-    children: (Run | BookmarkStart | BookmarkEnd)[];
+    docLocation?: string;
+    children: (Run | BookmarkStart | BookmarkEnd | Deletion | Insertion)[];
 };
 
 // @public
@@ -982,7 +989,8 @@ export type SimpleField = {
     fieldType: FieldType; /** Current display value */
     content: (Run | Hyperlink)[]; /** Field is locked */
     fldLock?: boolean; /** Field is dirty */
-    dirty?: boolean;
+    dirty?: boolean; /** Tracked change (w:ins/w:del/…) that wrapped this field's runs */
+    trackedChange?: FieldTrackedChange;
 };
 
 // @public
@@ -1349,8 +1357,9 @@ export type ThemeFontScheme = {
 // @public
 export type TrackedChangeInfo = {
     id: number; /** Author who made the change */
-    author: string; /** Date of the change */
+    author: string; /** Date of the change (local time, `w:date`) */
     date?: string;
+    dateUtc?: string;
 };
 
 // @public
