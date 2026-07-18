@@ -513,8 +513,17 @@ export function decodeDataUrl(dataUrl: string): {
       bytes[i] = binary.codePointAt(i) ?? 0;
     }
   } else {
-    // Percent-encoded text payload (e.g. inline SVG markup).
-    bytes = new TextEncoder().encode(decodeURIComponent(rawData));
+    // Percent-encoded text payload (e.g. inline SVG markup). Browsers emit
+    // SVG payloads whose literal `%` characters are not valid percent escapes
+    // (e.g. `width="100%"`); `decodeURIComponent` throws `URIError` on those,
+    // so fall back to the verbatim payload when decoding fails.
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(rawData);
+    } catch {
+      decoded = rawData;
+    }
+    bytes = new TextEncoder().encode(decoded);
   }
 
   return {
