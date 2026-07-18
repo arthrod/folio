@@ -12,7 +12,11 @@ import { diffRoundtripContent } from "./roundtrip-fidelity";
  * shape assertions below still document the harness contract in prose.
  */
 const CORPUS = process.env.ROUNDTRIP_CORPUS_DIR;
-const files = CORPUS ? readdirSync(CORPUS).filter((f) => f.endsWith(".docx")).sort() : [];
+const files = CORPUS
+  ? readdirSync(CORPUS)
+      .filter((f) => f.endsWith(".docx"))
+      .sort()
+  : [];
 const ledger = knownDiffs as Record<string, string>;
 
 describe.if(Boolean(CORPUS))("PM round-trip preserves body text (corpus sweep)", () => {
@@ -25,7 +29,10 @@ describe.if(Boolean(CORPUS))("PM round-trip preserves body text (corpus sweep)",
         // A ledgered file is a KNOWN, triaged drop awaiting its fix. An empty
         // net means the fix landed and the entry is stale — fail so the ledger
         // ratchets down (entries may only be removed, never left dangling).
-        expect(net.length, `stale ledger entry "${known}" — round-trip is now clean, remove it`).toBeGreaterThan(0);
+        expect(
+          net.length,
+          `stale ledger entry "${known}" — round-trip is now clean, remove it`,
+        ).toBeGreaterThan(0);
         return;
       }
       // Un-ledgered: any drop or addition is a NEW regression. The failing

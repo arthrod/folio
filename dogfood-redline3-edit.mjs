@@ -21,7 +21,10 @@ const before = Number((await page.textContent('[data-testid="revision-count"]'))
 // visible surface is the layout page. Click a text position on column B's
 // first page to place the caret, then type.
 const bPane = page.locator(".r3-pane").nth(1);
-await bPane.locator(".layout-page").first().click({ position: { x: 300, y: 300 }, timeout: 30000 });
+await bPane
+  .locator(".layout-page")
+  .first()
+  .click({ position: { x: 300, y: 300 }, timeout: 30000 });
 await page.waitForTimeout(500);
 await page.keyboard.type(` ${SENTINEL} `, { delay: 20 });
 await page.waitForTimeout(500);

@@ -29,7 +29,9 @@ const report = (label, expected, actual) => {
     return;
   }
   const ctx = 120;
-  console.log(`${label}: DIVERGES at char ${i} (expected ${expected.length} chars, actual ${actual.length})`);
+  console.log(
+    `${label}: DIVERGES at char ${i} (expected ${expected.length} chars, actual ${actual.length})`,
+  );
   console.log(`  expected …${JSON.stringify(expected.slice(Math.max(0, i - ctx), i + ctx))}…`);
   console.log(`  actual   …${JSON.stringify(actual.slice(Math.max(0, i - ctx), i + ctx))}…`);
 };

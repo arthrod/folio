@@ -3,10 +3,7 @@
 // with per-phase attempts instead of being swallowed by the story fallback.
 import { readFile } from "node:fs/promises";
 
-import {
-  createJubarteWasmRedlineEngine,
-  generateRedlineDocx,
-} from "@stll/folio-core/server";
+import { createJubarteWasmRedlineEngine, generateRedlineDocx } from "@stll/folio-core/server";
 
 import initWasm, {
   acceptRevisions,
@@ -18,7 +15,9 @@ import initWasm, {
 
 const toArrayBuffer = (buf) => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 
-const wasmBytes = await readFile(new URL("./src/redline/jubarte-wasm/jubarte_wasm_bg.wasm", import.meta.url));
+const wasmBytes = await readFile(
+  new URL("./src/redline/jubarte-wasm/jubarte_wasm_bg.wasm", import.meta.url),
+);
 await initWasm({ module_or_path: wasmBytes });
 initPanicHook();
 const wasmEngine = createJubarteWasmRedlineEngine({

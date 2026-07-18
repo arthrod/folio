@@ -28,10 +28,7 @@ import {
   type RedlineEngine,
   type RedlineRevision,
 } from "./redline-engine";
-import {
-  createJubarteWasmRedlineEngine,
-  type JubarteWasmModule,
-} from "./redline-engine-jubarte";
+import { createJubarteWasmRedlineEngine, type JubarteWasmModule } from "./redline-engine-jubarte";
 import { createEmptyDocument } from "./utils/createDocument";
 
 type ParagraphSpec = { text: string; paraId?: string };
@@ -185,10 +182,7 @@ describe("RedlineEngine port", () => {
       if (!(error instanceof RedlineEngineExhaustedError)) {
         throw error;
       }
-      expect(error.attempts.map(({ engine }) => engine)).toEqual([
-        "double-lying",
-        "double-broken",
-      ]);
+      expect(error.attempts.map(({ engine }) => engine)).toEqual(["double-lying", "double-broken"]);
       expect(error.attempts.at(0)?.phase).toBe("self-check");
       expect(error.attempts.at(1)?.phase).toBe("compare");
     }
@@ -312,23 +306,30 @@ const haveCorpusPair =
   existsSync(join(corpusDir, "comments.docx")) &&
   existsSync(join(corpusDir, "complex_style_attr.docx"));
 
-describe.if(haveCorpusPair)("jubarte-wasm real-world header/footer self-check (REDLINE_CORPUS_DIR)", () => {
-  test("a real header/footer pair verifies via the wasm engine, not a fallback", async () => {
-    const require = createRequire(import.meta.url);
-    const module = require(wasmPkgPath as string) as JubarteWasmModule & {
-      initPanicHook?: () => void;
-    };
-    module.initPanicHook?.();
+describe.if(haveCorpusPair)(
+  "jubarte-wasm real-world header/footer self-check (REDLINE_CORPUS_DIR)",
+  () => {
+    test("a real header/footer pair verifies via the wasm engine, not a fallback", async () => {
+      const require = createRequire(import.meta.url);
+      const module = require(wasmPkgPath as string) as JubarteWasmModule & {
+        initPanicHook?: () => void;
+      };
+      module.initPanicHook?.();
 
-    const read = (name: string): ArrayBuffer => {
-      const bytes = readFileSync(join(corpusDir as string, name));
-      return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-    };
-    const result = await generateRedlineDocx(read("comments.docx"), read("complex_style_attr.docx"), {
-      engines: [createJubarteWasmRedlineEngine(module)],
+      const read = (name: string): ArrayBuffer => {
+        const bytes = readFileSync(join(corpusDir as string, name));
+        return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      };
+      const result = await generateRedlineDocx(
+        read("comments.docx"),
+        read("complex_style_attr.docx"),
+        {
+          engines: [createJubarteWasmRedlineEngine(module)],
+        },
+      );
+
+      expect(result.engine).toBe("jubarte-wasm");
+      expect(result.revisions.length).toBeGreaterThan(0);
     });
-
-    expect(result.engine).toBe("jubarte-wasm");
-    expect(result.revisions.length).toBeGreaterThan(0);
-  });
-});
+  },
+);

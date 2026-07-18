@@ -40,15 +40,15 @@ Playwright 1.61.1 (headless Chromium), 1680x1000 viewport.
 
 ## Per page (n = 30: 10 fixtures x 3 reps)
 
-| page | outcomes | load | redline wall | engine compare | heap@end raw | heap@end after GC | peak heap total | DOM nodes | layout CPU | script CPU |
-|---|---|---|---|---|---|---|---|---|---|---|
-| /redline3 (react-wasm, edit) | ok:30 | 203±35ms | 9.42±1.86s | 9.17±1.83s | 458±102M | 201±13M | 623M | 24.0k | 86ms | 1716ms |
-| /redline3-view (react-wasm, view) | ok:30 | 195±31ms | 9.37±1.90s | 9.14±1.88s | 469±74M | 199±13M | 612M | 23.6k | 84ms | 1687ms |
-| /redline3-ts (react-ts) | ok:30 | 202±44ms | 45.2±7.4s | 45.1±7.4s | 1083±545M | 202±12M | 1942M | 24.4k | 88ms | 1731ms |
-| /redline3-native (react, precomputed) | ok:30 | 202±38ms | 0.74±0.31s | n/a | 264±46M | 208±18M | 425M | 21.6k | 63ms | 1189ms |
-| /redline3-vue (vue-wasm) | ok:30 | 234±26ms | 14.6±2.8s | 7.07±1.40s | 328±106M | 33±2M | 596M | 172.9k | 156ms | 382ms |
-| /redline3-vue-ts (vue-ts) | ok:30 | 250±28ms | 44.9±4.7s | 37.2±4.0s | 586±710M | 35±2M | 2164M | 173.1k | 152ms | 355ms |
-| /redline3-vue-native (vue, precomputed) | ok:30 | 246±33ms | 7.48±0.88s | n/a | 362±172M | 30±2M | 706M | 172.9k | 145ms | 31ms |
+| page                                    | outcomes | load     | redline wall | engine compare | heap@end raw | heap@end after GC | peak heap total | DOM nodes | layout CPU | script CPU |
+| --------------------------------------- | -------- | -------- | ------------ | -------------- | ------------ | ----------------- | --------------- | --------- | ---------- | ---------- |
+| /redline3 (react-wasm, edit)            | ok:30    | 203±35ms | 9.42±1.86s   | 9.17±1.83s     | 458±102M     | 201±13M           | 623M            | 24.0k     | 86ms       | 1716ms     |
+| /redline3-view (react-wasm, view)       | ok:30    | 195±31ms | 9.37±1.90s   | 9.14±1.88s     | 469±74M      | 199±13M           | 612M            | 23.6k     | 84ms       | 1687ms     |
+| /redline3-ts (react-ts)                 | ok:30    | 202±44ms | 45.2±7.4s    | 45.1±7.4s      | 1083±545M    | 202±12M           | 1942M           | 24.4k     | 88ms       | 1731ms     |
+| /redline3-native (react, precomputed)   | ok:30    | 202±38ms | 0.74±0.31s   | n/a            | 264±46M      | 208±18M           | 425M            | 21.6k     | 63ms       | 1189ms     |
+| /redline3-vue (vue-wasm)                | ok:30    | 234±26ms | 14.6±2.8s    | 7.07±1.40s     | 328±106M     | 33±2M             | 596M            | 172.9k    | 156ms      | 382ms      |
+| /redline3-vue-ts (vue-ts)               | ok:30    | 250±28ms | 44.9±4.7s    | 37.2±4.0s      | 586±710M     | 35±2M             | 2164M           | 173.1k    | 152ms      | 355ms      |
+| /redline3-vue-native (vue, precomputed) | ok:30    | 246±33ms | 7.48±0.88s   | n/a            | 362±172M     | 30±2M             | 706M            | 172.9k    | 145ms      | 31ms       |
 
 Notes: "engine compare" is the app-reported compare time (React debug hook or
 status footer); "redline wall" is click-to-revision-count. The native rows
@@ -59,17 +59,17 @@ pages); the after-GC column is the retained set.
 ## Revision parity per fixture
 
 | fixture | rust (wasm = native) | ts (jubarte-first-lossless) |
-|---|---|---|
-| slice0 | 0 | **30** |
-| slice1 | 0 | 0 |
-| slice2 | 0 | **6** |
-| slice3 | 49 | **47** |
-| slice4 | 1 | **15** |
-| slice5 | 2 | 2 |
-| slice6 | 0 | 0 |
-| slice7 | 27 | **26** |
-| slice8 | 0 | **2** |
-| slice9 | 0 | **12** |
+| ------- | -------------------- | --------------------------- |
+| slice0  | 0                    | **30**                      |
+| slice1  | 0                    | 0                           |
+| slice2  | 0                    | **6**                       |
+| slice3  | 49                   | **47**                      |
+| slice4  | 1                    | **15**                      |
+| slice5  | 2                    | 2                           |
+| slice6  | 0                    | 0                           |
+| slice7  | 27                   | **26**                      |
+| slice8  | 0                    | **2**                       |
+| slice9  | 0                    | **12**                      |
 
 Counts were identical across all 3 reps of every page (deterministic engines).
 The wasm and native builds agree everywhere, as they must (same Rust engine,
@@ -81,18 +81,18 @@ already-known table-document defect, and worth a dedicated investigation.
 
 ## Redline wall per fixture (mean±sd over 3 reps)
 
-| fixture | /redline3 | /redline3-view | /redline3-ts | /redline3-native | /redline3-vue | /redline3-vue-ts | /redline3-vue-native |
-|---|---|---|---|---|---|---|---|
-| slice0 | 7.95±1.79s | 7.96±1.75s | 40.8±6.6s | 0.56s | 12.9±3.0s | 39.6±4.1s | 6.73s |
-| slice1 | 9.35±2.14s | 9.24±2.08s | 43.6±6.4s | 0.58s | 14.9±3.5s | 44.4±6.4s | 7.54s |
-| slice2 | 8.90±2.10s | 8.85±2.01s | 37.7±6.5s | 0.90s | 14.0±3.3s | 40.4±4.6s | 7.04s |
-| slice3 | 9.50±2.11s | 9.44±2.10s | 47.9±5.4s | 0.94s | 15.4±3.4s | 45.0±3.6s | 7.75s |
-| slice4 | 9.77±2.15s | 9.67±2.19s | 51.2±5.4s | 0.93s | 15.6±3.6s | 47.1±4.8s | 7.70s |
-| slice5 | 9.90±2.10s | 9.78±2.24s | 48.8±9.0s | 0.62s | 15.8±3.5s | 47.6±5.2s | 7.69s |
-| slice6 | 10.5±2.3s | 10.5±2.4s | 50.0±9.7s | 0.99s | 16.9±3.6s | 48.7±2.5s | 8.15s |
-| slice7 | 9.99±2.14s | 10.1±2.4s | 47.4±7.1s | 0.65s | 14.8±1.5s | 46.8±5.4s | 7.74s |
-| slice8 | 9.18±2.02s | 9.11±2.13s | 42.1±8.3s | 0.62s | 13.0±0.8s | 44.8±4.9s | 7.26s |
-| slice9 | 9.16±2.02s | 9.11±2.11s | 42.4±7.0s | 0.59s | 12.8±0.4s | 44.6±2.3s | 7.21s |
+| fixture | /redline3  | /redline3-view | /redline3-ts | /redline3-native | /redline3-vue | /redline3-vue-ts | /redline3-vue-native |
+| ------- | ---------- | -------------- | ------------ | ---------------- | ------------- | ---------------- | -------------------- |
+| slice0  | 7.95±1.79s | 7.96±1.75s     | 40.8±6.6s    | 0.56s            | 12.9±3.0s     | 39.6±4.1s        | 6.73s                |
+| slice1  | 9.35±2.14s | 9.24±2.08s     | 43.6±6.4s    | 0.58s            | 14.9±3.5s     | 44.4±6.4s        | 7.54s                |
+| slice2  | 8.90±2.10s | 8.85±2.01s     | 37.7±6.5s    | 0.90s            | 14.0±3.3s     | 40.4±4.6s        | 7.04s                |
+| slice3  | 9.50±2.11s | 9.44±2.10s     | 47.9±5.4s    | 0.94s            | 15.4±3.4s     | 45.0±3.6s        | 7.75s                |
+| slice4  | 9.77±2.15s | 9.67±2.19s     | 51.2±5.4s    | 0.93s            | 15.6±3.6s     | 47.1±4.8s        | 7.70s                |
+| slice5  | 9.90±2.10s | 9.78±2.24s     | 48.8±9.0s    | 0.62s            | 15.8±3.5s     | 47.6±5.2s        | 7.69s                |
+| slice6  | 10.5±2.3s  | 10.5±2.4s      | 50.0±9.7s    | 0.99s            | 16.9±3.6s     | 48.7±2.5s        | 8.15s                |
+| slice7  | 9.99±2.14s | 10.1±2.4s      | 47.4±7.1s    | 0.65s            | 14.8±1.5s     | 46.8±5.4s        | 7.74s                |
+| slice8  | 9.18±2.02s | 9.11±2.13s     | 42.1±8.3s    | 0.62s            | 13.0±0.8s     | 44.8±4.9s        | 7.26s                |
+| slice9  | 9.16±2.02s | 9.11±2.11s     | 42.4±7.0s    | 0.59s            | 12.8±0.4s     | 44.6±2.3s        | 7.21s                |
 
 Compare cost is dominated by document size, not edit count: the zero-diff
 slices cost nearly as much as the edit-heavy ones on every live engine.
