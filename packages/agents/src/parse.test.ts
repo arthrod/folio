@@ -10,7 +10,11 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { parseAddCommentInput, parseSuggestChangesInput } from "./parse";
+import {
+  MAX_TOTAL_OPERATION_TEXT_LENGTH,
+  parseAddCommentInput,
+  parseSuggestChangesInput,
+} from "./parse";
 import { SUGGEST_CHANGES_OPERATION_TYPES } from "./tools";
 
 describe("parseAddCommentInput", () => {
@@ -35,6 +39,32 @@ describe("parseAddCommentInput", () => {
       throw new Error("expected ok:true");
     }
     expect(result.operation).toMatchObject({ quote: "the quoted text" });
+  });
+
+  test("valid input with a precondition includes it on the operation", () => {
+    const result = parseAddCommentInput({
+      blockId: "b1",
+      text: "note",
+      precondition: { blockTextHash: "h1a2b3" },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("expected ok:true");
+    }
+    expect(result.operation).toMatchObject({ precondition: { blockTextHash: "h1a2b3" } });
+  });
+
+  test("rejects a malformed precondition", () => {
+    const result = parseAddCommentInput({
+      blockId: "b1",
+      text: "note",
+      precondition: { blockTextHash: "not-a-hash" },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected ok:false");
+    }
+    expect(result.error).toContain("precondition.blockTextHash");
   });
 
   test("rejects non-object args", () => {
@@ -144,6 +174,44 @@ describe("parseSuggestChangesInput", () => {
     expect(result.operations).toEqual([
       { id: "op-1", type: "replaceInBlock", blockId: "b1", find: "Heading", replace: "Intro" },
     ]);
+  });
+
+  test("a caller-supplied precondition is attached to the operation", () => {
+    const result = parseSuggestChangesInput({
+      operations: [
+        {
+          type: "replaceInBlock",
+          blockId: "b1",
+          find: "Heading",
+          replace: "Intro",
+          precondition: { blockTextHash: "h1a2b3" },
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("expected ok:true");
+    }
+    expect(result.operations[0]?.precondition).toEqual({ blockTextHash: "h1a2b3" });
+  });
+
+  test("rejects a precondition with a malformed blockTextHash", () => {
+    const result = parseSuggestChangesInput({
+      operations: [
+        {
+          type: "replaceInBlock",
+          blockId: "b1",
+          find: "Heading",
+          replace: "Intro",
+          precondition: { blockTextHash: "not-a-hash" },
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected ok:false");
+    }
+    expect(result.error).toContain("precondition.blockTextHash");
   });
 
   test("a caller-supplied id is preserved instead of the auto-generated one", () => {
@@ -303,6 +371,44 @@ describe("parseSuggestChangesInput", () => {
       throw new Error("expected ok:false");
     }
     expect(result.error).toContain("50-operation limit");
+  });
+
+  test("rejects a batch whose combined text exceeds the aggregate budget even though every field is within its own per-field cap", () => {
+    // Regression guard for the aggregate text budget: each `text` field alone
+    // is under MAX_OPERATION_TEXT_LENGTH (100,000) and the batch is under the
+    // 50-operation cap, but the SUM (21 * 100,000 = 2,100,000) exceeds
+    // MAX_TOTAL_OPERATION_TEXT_LENGTH. Without this aggregate check a batch
+    // shaped like this (or a much larger one using cellTexts arrays) could
+    // still push an unbounded total into the tracked-changes engine in one
+    // suggest_changes call.
+    const nearCapText = "x".repeat(100_000);
+    const operations = Array.from({ length: 21 }, (_, i) => ({
+      type: "replaceBlock",
+      blockId: `block-${i}`,
+      text: nearCapText,
+    }));
+
+    const result = parseSuggestChangesInput({ operations });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected ok:false");
+    }
+    expect(result.error).toContain("aggregate limit");
+  });
+
+  test("accepts a batch whose combined text stays within the aggregate budget", () => {
+    const okText = "x".repeat(50_000);
+    const operations = Array.from({ length: 10 }, (_, i) => ({
+      type: "replaceBlock",
+      blockId: `block-${i}`,
+      text: okText,
+    }));
+    expect(10 * 50_000).toBeLessThan(MAX_TOTAL_OPERATION_TEXT_LENGTH);
+
+    const result = parseSuggestChangesInput({ operations });
+
+    expect(result.ok).toBe(true);
   });
 
   test("rejects an unknown operation type", () => {

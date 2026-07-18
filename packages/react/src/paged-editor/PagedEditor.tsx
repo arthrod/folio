@@ -97,6 +97,7 @@ import type {
   CaretPosition,
 } from "@stll/folio-core/layout-bridge/engine/selectionRects";
 import type * as SelectionGeometry from "@stll/folio-core/layout-bridge/engine/selectionRects";
+import { setEmbeddedFontFamilyMap } from "@stll/folio-core/utils/fontResolver";
 // Layout engine
 import { resolveSectionHeaderFooterRefs, type ColumnLayout } from "@stll/folio-core/layout-engine";
 import { recordLayoutPhase } from "@stll/folio-core/layout-engine/layoutInstrumentation";
@@ -3495,6 +3496,15 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
         }
 
         if (e.button !== 0) {
+          // Non-left buttons (e.g. middle-click) can trigger a native
+          // auxclick navigation on an <a> before any click-time sanitization
+          // runs. Block navigation for those, matching the left-click
+          // preventDefault below; everything else in this handler is
+          // left-click only.
+          const auxTarget = e.target instanceof HTMLElement ? e.target : null;
+          if (auxTarget?.closest("a[href]") instanceof HTMLAnchorElement) {
+            e.preventDefault();
+          }
           return;
         } // Only handle left click
 
@@ -5562,15 +5572,21 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
       }
       let cancelled = false;
       let registered: FontFace[] = [];
-      void loadEmbeddedFontFaces(embeddedFontBuffer).then((faces) => {
+      void loadEmbeddedFontFaces(embeddedFontBuffer).then(({ faces, familyMap }) => {
         if (cancelled) {
           removeFontFaces(faces);
           return undefined;
         }
         registered = faces;
-        if (faces.length === 0) {
+        if (faces.length === 0 && familyMap.size === 0) {
           return undefined;
         }
+        // Activate this document's original→scoped embedded-font family map
+        // before invalidating the resolved-font cache, so every run that
+        // resolves after this point (measurement + paint) picks up the
+        // scoped family instead of the raw DOCX name — which is never
+        // registered on `document.fonts` (see `fonts/embeddedFonts.ts`).
+        setEmbeddedFontFamilyMap(familyMap.size > 0 ? familyMap : null);
         const view = hiddenPMRef.current?.getView();
         if (!view) {
           return undefined;
@@ -5584,6 +5600,7 @@ export const PagedEditor = forwardRef<PagedEditorRef, PagedEditorProps>(
       return () => {
         cancelled = true;
         removeFontFaces(registered);
+        setEmbeddedFontFamilyMap(null);
       };
     }, [embeddedFontBuffer]);
 

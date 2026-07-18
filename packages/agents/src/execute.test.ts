@@ -361,6 +361,93 @@ describe("executeFolioToolCall: happy path against a real FolioDocxReviewer", ()
     expect(result.receipts).toEqual([]);
   });
 
+  test("suggest_changes honors a caller-supplied precondition, catching staleness a fresh same-call snapshot cannot", async () => {
+    const reviewer = await FolioDocxReviewer.fromBuffer(readFixture());
+    const bridge = createReviewerBridge(reviewer);
+
+    const blocks = expectOk(
+      executeFolioToolCall(FOLIO_AGENT_TOOL_NAMES.readDocument, {}, bridge),
+    ) as FolioAgentBlock[];
+    const heading = blocks.find((block) => block.text.includes("Heading"));
+    if (!heading) {
+      throw new Error("expected a block containing 'Heading'");
+    }
+    expect(heading.blockTextHash).toMatch(/^h[0-9a-z]+$/);
+    const staleBlockTextHash = heading.blockTextHash;
+
+    // Someone else edits the block between the read above and the apply
+    // below — exactly the gap a precondition stamped fresh at apply time
+    // (from a snapshot taken in THIS call) can never observe.
+    expectOk(
+      executeFolioToolCall(
+        FOLIO_AGENT_TOOL_NAMES.suggestChanges,
+        {
+          operations: [
+            {
+              type: "replaceInBlock",
+              blockId: heading.blockId,
+              find: "Heading",
+              replace: "Renamed",
+            },
+          ],
+        },
+        bridge,
+      ),
+    );
+
+    // Echoing the now-stale hash from the ORIGINAL read must be skipped,
+    // not silently applied against the block's new content.
+    const staleResult = expectOk(
+      executeFolioToolCall(
+        FOLIO_AGENT_TOOL_NAMES.suggestChanges,
+        {
+          operations: [
+            {
+              type: "replaceInBlock",
+              blockId: heading.blockId,
+              find: "Renamed",
+              replace: "Changed again",
+              precondition: { blockTextHash: staleBlockTextHash },
+            },
+          ],
+        },
+        bridge,
+      ),
+    ) as FolioAgentApplyOperationsSummary;
+    expect(staleResult.applied).toEqual([]);
+    expect(staleResult.skipped).toHaveLength(1);
+    expect(staleResult.skipped[0]?.reason).toContain("re-read the document");
+
+    // Echoing the CURRENT hash (from a fresh read) applies normally.
+    const freshBlocks = expectOk(
+      executeFolioToolCall(FOLIO_AGENT_TOOL_NAMES.readDocument, {}, bridge),
+    ) as FolioAgentBlock[];
+    const freshHeading = freshBlocks.find((block) => block.blockId === heading.blockId);
+    if (!freshHeading) {
+      throw new Error("expected the block to still exist");
+    }
+    expect(freshHeading.blockTextHash).not.toBe(staleBlockTextHash);
+    const freshResult = expectOk(
+      executeFolioToolCall(
+        FOLIO_AGENT_TOOL_NAMES.suggestChanges,
+        {
+          operations: [
+            {
+              type: "replaceInBlock",
+              blockId: freshHeading.blockId,
+              find: "Renamed",
+              replace: "Changed again",
+              precondition: { blockTextHash: freshHeading.blockTextHash },
+            },
+          ],
+        },
+        bridge,
+      ),
+    ) as FolioAgentApplyOperationsSummary;
+    expect(freshResult.applied).toHaveLength(1);
+    expect(freshResult.skipped).toEqual([]);
+  });
+
   test("suggest_changes explains an unsupported mutation mode", async () => {
     const reviewer = await FolioDocxReviewer.fromBuffer(readFixture());
     const reviewerBridge = createReviewerBridge(reviewer);
@@ -624,6 +711,38 @@ describe("find_text edge cases", () => {
     ) as FolioAgentFindTextResult;
 
     expect(result.totalMatches).toBe(2);
+  });
+
+  test("whole-word matching stays correct for a match far into a very large block", async () => {
+    // Regression guard for bounding find_text's whole-word boundary check to
+    // a small fixed window instead of slicing the whole block on either side
+    // of every match (previously O(block.text.length) per match). Both
+    // occurrences sit tens of thousands of characters into the block;
+    // "prefixedTARGET" directly abuts a word character on its left, so the
+    // exclusion must still trigger from a window that only looks a few
+    // characters either side of the match.
+    const reviewer = await FolioDocxReviewer.fromBuffer(readFixture());
+    const bridge = createReviewerBridge(reviewer);
+    const target = reviewer.snapshot().blocks.at(0);
+    if (target === undefined) {
+      throw new Error("expected at least one block");
+    }
+    const filler = "x".repeat(20_000);
+    const text = `${filler} TARGET ${filler} prefixedTARGET ${filler}`;
+    reviewer.applyOperations(
+      [{ id: "large-block", type: "replaceBlock", blockId: target.id, text }],
+      { mode: "direct" },
+    );
+
+    const result = expectOk(
+      executeFolioToolCall(
+        FOLIO_AGENT_TOOL_NAMES.findText,
+        { query: "TARGET", wholeWord: true },
+        bridge,
+      ),
+    ) as FolioAgentFindTextResult;
+
+    expect(result.totalMatches).toBe(1);
   });
 
   test("limits main-story search to real page mappings and exposes the page on matches", async () => {
