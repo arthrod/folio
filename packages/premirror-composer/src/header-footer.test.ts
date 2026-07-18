@@ -1,30 +1,22 @@
-import { afterEach, describe, expect, it, mock } from "bun:test";
+import { describe, expect, it } from "bun:test";
 
 import type {
   LayoutInput,
   MeasuredDocumentSnapshot,
   MeasuredRun,
   PremirrorOptions,
+  SegmentFitEngineLike,
 } from "@stll/premirror-core";
 import { createLayoutInputFromOptions, defaultPremirrorOptions } from "@stll/premirror-core";
 
 import { composeLayout } from "./index";
 
 /**
- * Header/footer page furniture, composed through the SAME pretext-measured
- * line-breaking pipeline as the body. Under `bun test`, `@chenglou/pretext`
- * resolves to the deterministic stub, so widths come from `measuredRuns`.
+ * Header/footer page furniture, composed through the SAME engine-measured
+ * line-breaking pipeline as the body (E-4 unification). With no engine
+ * injected, widths come from `measuredRuns`; the engine success/failure
+ * paths are exercised below by injecting deterministic fakes.
  */
-function restorePretextStub(): void {
-  mock.module("@chenglou/pretext", () => ({
-    prepareWithSegments: () => ({}),
-    layoutNextLine: () => null,
-  }));
-}
-
-afterEach(() => {
-  restorePretextStub();
-});
 
 const FONT = "normal 400 16px Inter";
 
@@ -233,28 +225,28 @@ describe("composer footer band", () => {
   });
 });
 
-describe("composer furniture width sources (transport-layer pretext mocking)", () => {
-  it("composes footer content via the real pretext-measured width path (changed code)", () => {
+describe("composer furniture width sources (engine injection)", () => {
+  it("composes footer content via the engine-measured width path (changed code)", () => {
     // No measuredRuns entry for the footer run, so runWidthPx must fall
-    // through to widthByPretext. Mocking the @chenglou/pretext module
-    // boundary (not composeFurniture/runWidthPx internals) exercises the
-    // upstream-success branch for the newly bottom-anchored footer band.
-    mock.module("@chenglou/pretext", () => ({
-      prepareWithSegments: (text: string) => ({ text }),
-      layoutNextLine: (prepared: unknown) => {
+    // through to widthBySegmentFit. Injecting a deterministic engine (not
+    // patching composeFurniture/runWidthPx internals) exercises the
+    // engine-success branch for the newly bottom-anchored footer band.
+    const engine: SegmentFitEngineLike = {
+      prepare: (text: string) => ({ text }),
+      fitLine: (prepared) => {
         const { text } = prepared as { text: string };
         return {
-          text,
+          endChar: text.length,
           width: text.length * 50,
-          end: { segmentIndex: 0, graphemeIndex: text.length },
+          cursor: null,
         };
       },
-    }));
+    };
 
     const body = singleBlockSnapshot("short body", 60);
     const footerText = "Foot";
     const input: LayoutInput = {
-      ...makeInput({ page: { widthPx: 1000, heightPx: 200, preset: "letter" } }),
+      ...makeInput({ page: { widthPx: 1000, heightPx: 200, preset: "letter" }, engine }),
       footer: { snapshot: unmeasuredBlockSnapshot(footerText), distancePx: 24 },
     };
 
@@ -268,21 +260,21 @@ describe("composer furniture width sources (transport-layer pretext mocking)", (
     expect(run?.width).toBe(footerText.length * 50);
   });
 
-  it("falls back to the deterministic header width when pretext is unavailable (prior)", () => {
+  it("falls back to the deterministic header width when the engine is unavailable (prior)", () => {
     // The header (top anchor) predates this PR; this pins that its
-    // pre-existing pretext-failure fallback still behaves identically after
-    // composeFurniture was generalized to take an `anchor` parameter.
-    mock.module("@chenglou/pretext", () => ({
-      prepareWithSegments: () => {
-        throw new Error("pretext unavailable");
+    // pre-existing measurement-failure fallback still behaves identically
+    // after composeFurniture was generalized to take an `anchor` parameter.
+    const engine: SegmentFitEngineLike = {
+      prepare: () => {
+        throw new Error("engine unavailable");
       },
-      layoutNextLine: () => null,
-    }));
+      fitLine: () => null,
+    };
 
     const body = singleBlockSnapshot("short body", 60);
     const headerText = "XY";
     const input: LayoutInput = {
-      ...makeInput({ page: { widthPx: 400, heightPx: 200, preset: "letter" } }),
+      ...makeInput({ page: { widthPx: 400, heightPx: 200, preset: "letter" }, engine }),
       header: { snapshot: unmeasuredBlockSnapshot(headerText), distancePx: 24 },
     };
 

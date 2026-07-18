@@ -26,7 +26,6 @@
     "benchmark": "bun scripts/benchmark.ts"
   },
   "dependencies": {
-    "@chenglou/pretext": "^0.0.3",
     "@stll/premirror-core": "workspace:*"
   },
   "devDependencies": {

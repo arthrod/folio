@@ -2,10 +2,7 @@
   "$schema": "https://json.schemastore.org/tsconfig",
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "types": ["bun"],
-    "paths": {
-      "@chenglou/pretext": ["./src/shims/pretext-stub.ts"]
-    }
+    "types": ["bun"]
   },
   "include": ["src"],
   "exclude": ["node_modules", "dist"]

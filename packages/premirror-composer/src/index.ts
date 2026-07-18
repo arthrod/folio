@@ -1,4 +1,3 @@
-import { layoutNextLine, prepareWithSegments } from "@chenglou/pretext";
 import type {
   BandObstacle,
   BlockFragment,
@@ -18,6 +17,7 @@ import type {
   PageLayout,
   PlacedRun,
   Rect,
+  SegmentFitEngineLike,
   StyledRun,
 } from "@stll/premirror-core";
 import { DEFAULT_LAYOUT_POLICIES } from "@stll/premirror-core";
@@ -25,28 +25,41 @@ import { DEFAULT_LAYOUT_POLICIES } from "@stll/premirror-core";
 const UNBOUNDED_WIDTH = 1_000_000_000;
 // Bounded LRU: long editing sessions probe many transient substrings; an
 // uncapped map is a slow leak. Refresh-on-get keeps hot fonts/words resident.
-const PRETEXT_WIDTH_CACHE_MAX = 4000;
-const pretextWidthCache = new Map<string, number>();
+const SEGMENT_FIT_WIDTH_CACHE_MAX = 4000;
+const segmentFitWidthCache = new Map<string, number>();
 
-function widthByPretext(text: string, font: string): number | null {
+/**
+ * Full-run width via the injected segment-fit engine (E-4 unification: the
+ * composer never talks to a concrete measurement engine — `@stll/premirror-
+ * bridge` or the host injects one through `LayoutInput.engine`). Absent,
+ * declining, or failing engine returns null: the caller's deterministic
+ * fallback chain takes over, exactly as when pretext was unavailable before.
+ */
+function widthBySegmentFit(
+  engine: SegmentFitEngineLike | undefined,
+  text: string,
+  font: string,
+): number | null {
+  if (!engine) return null;
+  if (engine.supportsText && !engine.supportsText(text)) return null;
   const key = `${font}\n${text}`;
-  const cached = pretextWidthCache.get(key);
+  const cached = segmentFitWidthCache.get(key);
   if (cached !== undefined) {
-    pretextWidthCache.delete(key);
-    pretextWidthCache.set(key, cached);
+    segmentFitWidthCache.delete(key);
+    segmentFitWidthCache.set(key, cached);
     return cached;
   }
   try {
-    const prepared = prepareWithSegments(text, font, { whiteSpace: "pre-wrap" });
-    const line = layoutNextLine(prepared, { segmentIndex: 0, graphemeIndex: 0 }, UNBOUNDED_WIDTH);
+    const prepared = engine.prepare(text, font);
+    const line = engine.fitLine(prepared, null, UNBOUNDED_WIDTH);
     if (!line && text.length > 0) {
       return null;
     }
     const width = Math.max(0, line?.width ?? 0);
-    pretextWidthCache.set(key, width);
-    if (pretextWidthCache.size > PRETEXT_WIDTH_CACHE_MAX) {
-      const oldest = pretextWidthCache.keys().next().value;
-      if (oldest !== undefined) pretextWidthCache.delete(oldest);
+    segmentFitWidthCache.set(key, width);
+    if (segmentFitWidthCache.size > SEGMENT_FIT_WIDTH_CACHE_MAX) {
+      const oldest = segmentFitWidthCache.keys().next().value;
+      if (oldest !== undefined) segmentFitWidthCache.delete(oldest);
     }
     return width;
   } catch {
@@ -96,7 +109,11 @@ function readWidthFromPrepared(prepared: unknown): number | null {
   return null;
 }
 
-function runWidthPx(run: StyledRun, measured: MeasuredDocumentSnapshot["measuredRuns"]): number {
+function runWidthPx(
+  run: StyledRun,
+  measured: MeasuredDocumentSnapshot["measuredRuns"],
+  engine: SegmentFitEngineLike | undefined,
+): number {
   const m = measured[run.id];
   const w = m ? readWidthFromPrepared(m.prepared) : null;
   // prepared.widthPx is for the full measured run; only use it when lengths match.
@@ -109,8 +126,8 @@ function runWidthPx(run: StyledRun, measured: MeasuredDocumentSnapshot["measured
   ) {
     return Math.max(0, w);
   }
-  const pretextWidth = widthByPretext(run.text, run.font);
-  if (pretextWidth !== null) return pretextWidth;
+  const engineWidth = widthBySegmentFit(engine, run.text, run.font);
+  if (engineWidth !== null) return engineWidth;
   if (
     m &&
     typeof m.widthPx === "number" &&
@@ -220,13 +237,14 @@ type LineDraft = {
 function pushPlacedSegment(
   run: StyledRun,
   measured: MeasuredDocumentSnapshot["measuredRuns"],
+  engine: SegmentFitEngineLike | undefined,
   text: string,
   charFrom: number,
   charTo: number,
   x: number,
   out: PlacedRun[],
 ): number {
-  const w = runWidthPx({ ...run, text }, measured);
+  const w = runWidthPx({ ...run, text }, measured, engine);
   const pm = pmPosAtRunOffset(run, charFrom, charTo);
   out.push({
     runId: run.id,
@@ -243,6 +261,7 @@ function pushPlacedSegment(
 function recalcLineDraft(
   line: LineDraft,
   measured: MeasuredDocumentSnapshot["measuredRuns"],
+  engine: SegmentFitEngineLike | undefined,
 ): void {
   let x = 0;
   let pmFrom = Number.POSITIVE_INFINITY;
@@ -258,6 +277,7 @@ function recalcLineDraft(
         pmRange: r.pmRange,
       },
       measured,
+      engine,
     );
     line.runs[i] = { ...r, x, width: w };
     x += w;
@@ -279,6 +299,7 @@ function splitPlacedRunAtWordBoundary(
   run: PlacedRun,
   keepLen: number,
   measured: MeasuredDocumentSnapshot["measuredRuns"],
+  engine: SegmentFitEngineLike | undefined,
 ): { left: PlacedRun; right: PlacedRun } {
   const totalLen = run.text.length;
   const span = Math.max(0, run.pmRange.to - run.pmRange.from);
@@ -294,6 +315,7 @@ function splitPlacedRunAtWordBoundary(
       pmRange: { from: run.pmRange.from, to: splitPos },
     },
     measured,
+    engine,
   );
   const rightWidth = runWidthPx(
     {
@@ -304,6 +326,7 @@ function splitPlacedRunAtWordBoundary(
       pmRange: { from: splitPos, to: run.pmRange.to },
     },
     measured,
+    engine,
   );
   return {
     left: {
@@ -324,6 +347,7 @@ function splitPlacedRunAtWordBoundary(
 function fixWordBoundarySplits(
   lines: LineDraft[],
   measured: MeasuredDocumentSnapshot["measuredRuns"],
+  engine: SegmentFitEngineLike | undefined,
 ): void {
   const lineText = (line: LineDraft): string => line.runs.map((r) => r.text).join("");
   const firstWordCharIndex = (text: string): number => {
@@ -358,15 +382,15 @@ function fixWordBoundarySplits(
         current.runs.pop();
         continue;
       }
-      const { left, right } = splitPlacedRunAtWordBoundary(last, j, measured);
+      const { left, right } = splitPlacedRunAtWordBoundary(last, j, measured, engine);
       current.runs[current.runs.length - 1] = left;
       moved.unshift(right);
       break;
     }
     if (moved.length === 0) continue;
     next.runs = [...moved, ...next.runs];
-    recalcLineDraft(current, measured);
-    recalcLineDraft(next, measured);
+    recalcLineDraft(current, measured, engine);
+    recalcLineDraft(next, measured, engine);
   }
 }
 
@@ -374,6 +398,7 @@ function breakBlockIntoLineDrafts(
   block: BlockSnapshot,
   snapshot: MeasuredDocumentSnapshot,
   contentWidth: number,
+  engine: SegmentFitEngineLike | undefined,
 ): LineDraft[] {
   const lines: LineDraft[] = [];
   const measuredRuns = snapshot.measuredRuns;
@@ -412,7 +437,16 @@ function breakBlockIntoLineDrafts(
       if (run.atomic) {
         if (piece.length === 0) continue;
         const placed: PlacedRun[] = [];
-        const width = pushPlacedSegment(run, measuredRuns, piece, 0, piece.length, 0, placed);
+        const width = pushPlacedSegment(
+          run,
+          measuredRuns,
+          engine,
+          piece,
+          0,
+          piece.length,
+          0,
+          placed,
+        );
         const pr = placed[0]!;
         if (lineWidthUsed > 0 && lineWidthUsed + width > contentWidth) flushCurrentLine();
         appendToLine(pr, pr.pmRange.from, pr.pmRange.to);
@@ -426,7 +460,7 @@ function breakBlockIntoLineDrafts(
         while (best < end) {
           const mid = best + 1;
           const sub = piece.slice(offset, mid);
-          const w = runWidthPx({ ...run, text: sub }, measuredRuns);
+          const w = runWidthPx({ ...run, text: sub }, measuredRuns, engine);
           if (lineWidthUsed + w > contentWidth) break;
           best = mid;
         }
@@ -464,12 +498,21 @@ function breakBlockIntoLineDrafts(
 
         if (best === offset) {
           const sub = piece.slice(offset, offset + 1);
-          const w = runWidthPx({ ...run, text: sub }, measuredRuns);
+          const w = runWidthPx({ ...run, text: sub }, measuredRuns, engine);
           if (lineWidthUsed > 0 && lineWidthUsed + w > contentWidth) {
             flushCurrentLine();
           }
           const placed: PlacedRun[] = [];
-          pushPlacedSegment(run, measuredRuns, sub, offset, offset + 1, lineWidthUsed, placed);
+          pushPlacedSegment(
+            run,
+            measuredRuns,
+            engine,
+            sub,
+            offset,
+            offset + 1,
+            lineWidthUsed,
+            placed,
+          );
           const pr = placed[0]!;
           appendToLine(pr, pr.pmRange.from, pr.pmRange.to);
           offset += 1;
@@ -504,7 +547,7 @@ function breakBlockIntoLineDrafts(
           const sub = candidate;
           const placed: PlacedRun[] = [];
           const x = lineWidthUsed;
-          pushPlacedSegment(run, measuredRuns, sub, offset, best, x, placed);
+          pushPlacedSegment(run, measuredRuns, engine, sub, offset, best, x, placed);
           const pr = placed[0]!;
           appendToLine(pr, pr.pmRange.from, pr.pmRange.to);
           offset = best;
@@ -525,7 +568,7 @@ function breakBlockIntoLineDrafts(
     });
   }
   flushCurrentLine();
-  fixWordBoundarySplits(lines, measuredRuns);
+  fixWordBoundarySplits(lines, measuredRuns, engine);
   return lines;
 }
 
@@ -646,7 +689,7 @@ function offsetRunsForSlot(runs: PlacedRun[], slotX: number): PlacedRun[] {
 
 /**
  * Compose header/footer content into a margin band using the same
- * pretext-measured line-breaking as the body. Furniture does not paginate: its
+ * engine-measured line-breaking as the body. Furniture does not paginate: its
  * blocks stack from the band top and the resulting frame repeats on every page.
  * Line `y` is frame-relative (like the body); `bounds` carries the band's
  * absolute top-left and content width.
@@ -693,7 +736,7 @@ function composeFurniture(
 
   for (const block of blocks) {
     // block.runs may be field-substituted; measuredRuns keys are unchanged.
-    const drafts = breakBlockIntoLineDrafts(block, snapshot, contentWidth);
+    const drafts = breakBlockIntoLineDrafts(block, snapshot, contentWidth, input.engine);
     if (drafts.length === 0) continue;
     const lines: LineBox[] = drafts.map((d, li) => ({
       y: y + li * lineHeight,
@@ -729,7 +772,7 @@ function composeFurniture(
 
 /**
  * Compose a run of notes (footnotes or endnotes) into `area`. Each note's
- * blocks stack from the top of `area` via the same pretext-measured
+ * blocks stack from the top of `area` via the same engine-measured
  * line-breaking as the body, in the order given. Line `y` is frame-relative;
  * `bounds` carries the band's absolute top-left and the content width.
  */
@@ -746,7 +789,7 @@ function composeNotes(
   for (const note of notes) {
     const snapshot = note.snapshot;
     for (const block of snapshot.blocks) {
-      const drafts = breakBlockIntoLineDrafts(block, snapshot, area.width);
+      const drafts = breakBlockIntoLineDrafts(block, snapshot, area.width, input.engine);
       if (drafts.length === 0) continue;
       const lines: LineBox[] = drafts.map((d, li) => ({
         y: y + li * lineHeight,
@@ -880,7 +923,7 @@ export function composeLayout(
 
   const estimateBlockHeight = (b: BlockSnapshot, yInFrame: number): number => {
     const w = contentWidthForBlockStart(yInFrame);
-    const d = breakBlockIntoLineDrafts(b, snapshot, w);
+    const d = breakBlockIntoLineDrafts(b, snapshot, w, input.engine);
     return d.length * lineHeight;
   };
 
@@ -947,7 +990,12 @@ export function composeLayout(
         }
       }
 
-      const drafts = breakBlockIntoLineDrafts(block, snapshot, contentWidthForBlockStart(currentY));
+      const drafts = breakBlockIntoLineDrafts(
+        block,
+        snapshot,
+        contentWidthForBlockStart(currentY),
+        input.engine,
+      );
       if (drafts.length === 0) continue;
 
       let lineCursor = 0;
