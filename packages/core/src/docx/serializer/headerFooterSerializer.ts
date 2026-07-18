@@ -46,6 +46,7 @@ const NAMESPACES: Record<string, string> = {
   w16cid: "http://schemas.microsoft.com/office/word/2016/wordml/cid",
   w16sdtdh: "http://schemas.microsoft.com/office/word/2020/wordml/sdtdatahash",
   w16se: "http://schemas.microsoft.com/office/word/2015/wordml/symex",
+  w16du: "http://schemas.microsoft.com/office/word/2023/wordml/word16du",
   wpg: "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup",
   wps: "http://schemas.microsoft.com/office/word/2010/wordprocessingShape",
 };
@@ -114,7 +115,7 @@ export function serializeHeaderFooter(hf: HeaderFooter): string {
     contentXml = "<w:p><w:pPr/></w:p>";
   }
 
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<${rootTag} ${nsDecl}>${contentXml}</${rootTag}>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<${rootTag} ${nsDecl} mc:Ignorable="w14 w15 wp14 w16du">${contentXml}</${rootTag}>`;
 }
 
 function serializeWatermarkParagraph(hf: HeaderFooter): string {
