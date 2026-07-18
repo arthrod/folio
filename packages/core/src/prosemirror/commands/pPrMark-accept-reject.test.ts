@@ -316,3 +316,86 @@ describe("pPrMark accept / reject — paragraph-mark resolution", () => {
     expect(view.state.doc.child(0).attrs["pPrMark"]).toBeNull();
   });
 });
+
+// Page-break schema for the paragraph-before-pageBreak join cases: mirrors the
+// real PageBreakExtension spec (a block-group atom with no content). PM's
+// `canJoin` approves the paragraph|pageBreak boundary — the atom's empty
+// content reads as "compatible" — but `join`'s structural ReplaceStep sees the
+// atom as content between the boundary tokens and throws `TransformError:
+// Structure replace would overwrite content`. Found by the D-2 bench
+// scoreboard on the reject view of 45 Word-canonical corpus redlines
+// (e.g. file_5_file_6_redline.docx).
+const pageBreakSchema = new Schema({
+  nodes: {
+    doc: { content: "block+" },
+    paragraph: {
+      content: "text*",
+      group: "block",
+      attrs: { pPrMark: { default: null } },
+    },
+    pageBreak: { group: "block", atom: true, selectable: true },
+    text: { marks: "_" },
+  },
+  marks: {
+    insertion: {
+      attrs: { revisionId: {}, author: {}, date: {} },
+      excludes: "",
+      toDOM: () => ["ins", 0],
+    },
+    deletion: {
+      attrs: { revisionId: {}, author: {}, date: {} },
+      excludes: "",
+      toDOM: () => ["del", 0],
+    },
+  },
+});
+
+describe("pPrMark resolution at a pageBreak boundary", () => {
+  test("rejectAll on an empty pPrMark='ins' paragraph before a pageBreak drops the paragraph, keeps the break", () => {
+    const doc = pageBreakSchema.node("doc", null, [
+      pageBreakSchema.node("paragraph", null, pageBreakSchema.text("before")),
+      pageBreakSchema.node("paragraph", { pPrMark: insMark({ id: 1 }) }),
+      pageBreakSchema.node("pageBreak"),
+      pageBreakSchema.node("paragraph", null, pageBreakSchema.text("after")),
+    ]);
+    const view = dispatcher(EditorState.create({ schema: pageBreakSchema, doc }));
+    rejectAllChanges()(view.state, view.dispatch);
+
+    expect(view.state.doc.textContent).toBe("beforeafter");
+    expect(view.state.doc.childCount).toBe(3);
+    expect(view.state.doc.child(1).type.name).toBe("pageBreak");
+  });
+
+  test("rejectAll on a non-empty pPrMark='ins' paragraph before a pageBreak resolves without destroying content", () => {
+    const doc = pageBreakSchema.node("doc", null, [
+      pageBreakSchema.node(
+        "paragraph",
+        { pPrMark: insMark({ id: 1 }) },
+        pageBreakSchema.text("kept"),
+      ),
+      pageBreakSchema.node("pageBreak"),
+      pageBreakSchema.node("paragraph", null, pageBreakSchema.text("after")),
+    ]);
+    const view = dispatcher(EditorState.create({ schema: pageBreakSchema, doc }));
+    rejectAllChanges()(view.state, view.dispatch);
+
+    // Nothing to merge into across an atom: the content and the break survive.
+    expect(view.state.doc.textContent).toBe("keptafter");
+    expect(view.state.doc.child(1).type.name).toBe("pageBreak");
+  });
+
+  test("acceptAll on an empty pPrMark='del' paragraph before a pageBreak drops the paragraph, keeps the break", () => {
+    const doc = pageBreakSchema.node("doc", null, [
+      pageBreakSchema.node("paragraph", null, pageBreakSchema.text("before")),
+      pageBreakSchema.node("paragraph", { pPrMark: delMark({ id: 1 }) }),
+      pageBreakSchema.node("pageBreak"),
+      pageBreakSchema.node("paragraph", null, pageBreakSchema.text("after")),
+    ]);
+    const view = dispatcher(EditorState.create({ schema: pageBreakSchema, doc }));
+    acceptAllChanges()(view.state, view.dispatch);
+
+    expect(view.state.doc.textContent).toBe("beforeafter");
+    expect(view.state.doc.childCount).toBe(3);
+    expect(view.state.doc.child(1).type.name).toBe("pageBreak");
+  });
+});
