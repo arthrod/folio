@@ -62,17 +62,17 @@ function getGraphemeSegmenter(): Intl.Segmenter {
 function buildHandle(text: string, cssFont: string): PreparedHandle {
   const prepared = prepareWithSegments(text, cssFont, { whiteSpace: "pre-wrap" });
   const segments = (prepared as unknown as { segments: string[] }).segments;
-  const segCharStart: number[] = new Array(segments.length);
+  const segCharStart: number[] = [];
   let offset = 0;
-  for (let i = 0; i < segments.length; i++) {
-    segCharStart[i] = offset;
-    offset += segments[i]!.length;
+  for (const segment of segments) {
+    segCharStart.push(offset);
+    offset += segment.length;
   }
   return {
     prepared,
     segments,
     segCharStart,
-    graphemeLengths: new Array(segments.length).fill(null),
+    graphemeLengths: Array.from({ length: segments.length }, () => null),
   };
 }
 
