@@ -41,7 +41,15 @@ for (const page_def of PAGES) {
       row.ok = text.includes("jubarte-first-lossless") && text.includes("self-check");
       row.detail = text.trim().slice(0, 160);
     } else {
-      await page.waitForSelector('[data-testid="revision-count"]', { timeout: 240000 });
+      // The Vue pages render "…" while revision enumeration is in flight;
+      // wait for the count to be numeric, not merely present.
+      await page.waitForFunction(
+        () => {
+          const el = document.querySelector('[data-testid="revision-count"]');
+          return el !== null && /^\d+$/.test(el.textContent.trim());
+        },
+        { timeout: 240000 },
+      );
       const revisions = Number((await page.textContent('[data-testid="revision-count"]')).trim());
       const engine = (await page.textContent('[data-testid="engine"]')).trim();
       const rendered =
