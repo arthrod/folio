@@ -238,7 +238,7 @@ export type ComposeMetrics = {
 
 /**
  * Page furniture (header/footer) content composed into a page margin band via
- * the same pretext-measured line-breaking as the body. `distancePx` is the
+ * the same engine-measured line-breaking as the body. `distancePx` is the
  * offset from the page edge to the band's top-left corner.
  */
 export type PageFurnitureInput = {

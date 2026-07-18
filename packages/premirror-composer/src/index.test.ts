@@ -1,29 +1,22 @@
-import { afterEach, describe, expect, it, mock } from "bun:test";
+import { describe, expect, it } from "bun:test";
 
-import type { LayoutInput, MeasuredDocumentSnapshot, PremirrorOptions } from "@stll/premirror-core";
+import type {
+  LayoutInput,
+  MeasuredDocumentSnapshot,
+  PremirrorOptions,
+  SegmentFitEngineLike,
+} from "@stll/premirror-core";
 import { createLayoutInputFromOptions, defaultPremirrorOptions } from "@stll/premirror-core";
 
 import { composeLayout } from "./index";
 
 /**
- * `@chenglou/pretext` resolves to the deterministic local stub under `bun test`
- * (see UPSTREAM.md), so the real-measurement success path is never exercised
- * by the tests above (they all supply `measuredRuns` widths instead). We mock
- * the module boundary (transport layer) to cover both the upstream/production
- * pretext-success path and the pre-existing no-measurement deterministic
- * fallback path, without patching the pretext stub's exported functions
- * directly.
+ * The composer measures through an injected `SegmentFitEngineLike`
+ * (E-4 unification; see UPSTREAM.md). Most tests supply `measuredRuns` widths
+ * and no engine, so widths are exact; the engine success and failure paths
+ * are covered explicitly below by injecting deterministic fakes — no module
+ * mocking involved.
  */
-function restorePretextStub(): void {
-  mock.module("@chenglou/pretext", () => ({
-    prepareWithSegments: () => ({}),
-    layoutNextLine: () => null,
-  }));
-}
-
-afterEach(() => {
-  restorePretextStub();
-});
 
 function makeInput(overrides?: Partial<PremirrorOptions>): LayoutInput {
   return createLayoutInputFromOptions(defaultPremirrorOptions(overrides));
@@ -126,23 +119,22 @@ describe("@premirror/composer", () => {
     expect(back).toBe(2);
   });
 
-  it("uses a real pretext-measured width when no measuredRuns entry exists (upstream pretext path)", () => {
-    // Simulate the real @chenglou/pretext package succeeding, as it would in
-    // production (Vite aliases to the real package; only `bun test` resolves
-    // the deterministic stub via tsconfig paths). Mocking the module boundary
-    // here, rather than patching the stub's functions, exercises the
-    // `widthByPretext` success branch that the stub can never produce.
-    mock.module("@chenglou/pretext", () => ({
-      prepareWithSegments: (text: string) => ({ text }),
-      layoutNextLine: (prepared: unknown) => {
+  it("uses an engine-measured width when no measuredRuns entry exists (engine success path)", () => {
+    // Inject a deterministic engine, as the bridge would in production.
+    // Exercises the `widthBySegmentFit` success branch (formerly the
+    // pretext-module success path, then covered by mocking the module
+    // boundary; the seam makes plain injection sufficient).
+    const engine: SegmentFitEngineLike = {
+      prepare: (text: string) => ({ text }),
+      fitLine: (prepared) => {
         const { text } = prepared as { text: string };
         return {
-          text,
+          endChar: text.length,
           width: text.length * 100,
-          end: { segmentIndex: 0, graphemeIndex: text.length },
+          cursor: null,
         };
       },
-    }));
+    };
 
     const snapshot: MeasuredDocumentSnapshot = {
       blocks: [
@@ -165,22 +157,22 @@ describe("@premirror/composer", () => {
       measuredRuns: {},
     };
 
-    const out = composeLayout(snapshot, null, makeInput());
+    const out = composeLayout(snapshot, null, makeInput({ engine }));
     const run = out.pages[0]?.frames[0]?.fragments[0]?.lines[0]?.runs[0];
     expect(run?.text).toBe("AB");
     expect(run?.width).toBe(200);
   });
 
-  it("falls back to the deterministic 7px/char width when no measuredRuns entry exists and pretext fails", () => {
-    // Prior/baseline behavior: when neither `prepared.widthPx` nor pretext
+  it("falls back to the deterministic 7px/char width when no measuredRuns entry exists and the engine fails", () => {
+    // Prior/baseline behavior: when neither `prepared.widthPx` nor engine
     // measurement is available, composeLayout must still produce stable
     // widths via the deterministic fallback rather than throwing or NaN-ing.
-    mock.module("@chenglou/pretext", () => ({
-      prepareWithSegments: () => {
-        throw new Error("pretext unavailable");
+    const engine: SegmentFitEngineLike = {
+      prepare: () => {
+        throw new Error("engine unavailable");
       },
-      layoutNextLine: () => null,
-    }));
+      fitLine: () => null,
+    };
 
     const snapshot: MeasuredDocumentSnapshot = {
       blocks: [
@@ -203,9 +195,65 @@ describe("@premirror/composer", () => {
       measuredRuns: {},
     };
 
-    const out = composeLayout(snapshot, null, makeInput());
+    const out = composeLayout(snapshot, null, makeInput({ engine }));
     const run = out.pages[0]?.frames[0]?.fragments[0]?.lines[0]?.runs[0];
     expect(run?.text).toBe("XY");
     expect(run?.width).toBe(14);
+  });
+});
+
+describe("segment-fit engine injection (E-4 unification)", () => {
+  // Unique font string: the module-level width LRU keys on (font, text), so
+  // sharing fonts with other suites would let a cached width cross tests.
+  const ENGINE_FONT = "normal 400 17px SeamProbe";
+
+  const fakeTenPxEngine: SegmentFitEngineLike = {
+    prepare: (text: string) => ({ text }),
+    fitLine: (prepared) => {
+      const { text } = prepared as { text: string };
+      if (text.length === 0) return null;
+      return { endChar: text.length, width: text.length * 10, cursor: null };
+    },
+  };
+
+  function unmeasuredSnapshot(text: string): MeasuredDocumentSnapshot {
+    return {
+      blocks: [
+        {
+          id: "b1",
+          type: "paragraph",
+          attrs: {},
+          pmRange: { from: 1, to: text.length + 2 },
+          runs: [
+            {
+              id: "seam-run",
+              text,
+              font: ENGINE_FONT,
+              marks: {},
+              pmRange: { from: 1, to: text.length + 1 },
+            },
+          ],
+        },
+      ],
+      measuredRuns: {},
+    };
+  }
+
+  it("measures unmeasured runs through the injected engine (fake 10px/char widths show up)", () => {
+    const out = composeLayout(
+      unmeasuredSnapshot("engine"),
+      null,
+      makeInput({ engine: fakeTenPxEngine }),
+    );
+    const run = out.pages[0]?.frames[0]?.fragments[0]?.lines[0]?.runs[0];
+    expect(run?.text).toBe("engine");
+    expect(run?.width).toBe(60);
+  });
+
+  it("hits the deterministic 7px/char fallback when no engine is injected", () => {
+    const out = composeLayout(unmeasuredSnapshot("fallback"), null, makeInput());
+    const run = out.pages[0]?.frames[0]?.fragments[0]?.lines[0]?.runs[0];
+    expect(run?.text).toBe("fallback");
+    expect(run?.width).toBe(56);
   });
 });

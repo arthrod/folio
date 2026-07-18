@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { describe, expect, it } from "bun:test";
 
 import type {
   BandObstacle,
@@ -16,23 +16,9 @@ import { composeLayout } from "./index";
  * Engine-behavior coverage for the vendored composer: line wrapping, the
  * widow/orphan fit decision and its page-flush branches, keep-with-next,
  * the position<->layout mapping index, the prepared-width fast path, and
- * obstacle slot carving. `@chenglou/pretext` resolves to the deterministic
- * stub under `bun test`, so widths come from `measuredRuns` and are exact.
+ * obstacle slot carving. No segment-fit engine is injected (E-4
+ * unification), so widths come from `measuredRuns` and are exact.
  */
-function restorePretextStub(): void {
-  mock.module("@chenglou/pretext", () => ({
-    prepareWithSegments: () => ({}),
-    layoutNextLine: () => null,
-  }));
-}
-
-beforeEach(() => {
-  restorePretextStub();
-});
-
-afterEach(() => {
-  restorePretextStub();
-});
 
 const FONT = "normal 400 16px Inter";
 

@@ -169,7 +169,6 @@
       "name": "@stll/premirror-composer",
       "version": "0.1.0",
       "dependencies": {
-        "@chenglou/pretext": "^0.0.3",
         "@stll/premirror-core": "workspace:*",
       },
       "devDependencies": {

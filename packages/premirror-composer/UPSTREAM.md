@@ -12,5 +12,7 @@
 
 - 2026-07-11 tooling reconcile: `prettier --write` (house format) + `eslint --fix` (2 prefer-const in composer). When re-diffing against upstream, run prettier over the upstream side first.
 
+- 2026-07-18 (E-4 unification): the composer no longer imports `@chenglou/pretext`. `widthByPretext(text, font)` became `widthBySegmentFit(engine, text, font)` over the injected `SegmentFitEngineLike` (`LayoutInput.engine`, threaded from `PremirrorOptions.engine`); the bounded width LRU is unchanged. Absent/declining/failing engine takes the same null path as before (measuredRuns ratio, then 7px/char). The `src/shims/pretext-stub.ts` shim and the tsconfig `paths` mapping are gone; tests inject deterministic fake engines instead of `mock.module`. Guard: `src/one-pretext-surface.test.ts`. **Upstream disposition:** candidate PR to samwillis/premirror with the premirror-core seam type.
+
 Keep this log current: every local edit to vendored files gets a line here.
 Generic fixes should be PR'd upstream, not fork-drifted.
