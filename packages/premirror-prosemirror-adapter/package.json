@@ -25,7 +25,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@chenglou/pretext": "^0.0.3",
     "@stll/premirror-core": "workspace:*",
     "prosemirror-keymap": "^1.2.0",
     "prosemirror-model": "^1.25.0",

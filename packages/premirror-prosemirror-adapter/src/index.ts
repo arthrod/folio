@@ -2,13 +2,13 @@
  * @premirror/prosemirror-adapter — ProseMirror integration for Milestone 1.
  */
 
-import { layoutNextLine, prepareWithSegments } from "@chenglou/pretext";
 import type {
   BlockSnapshot,
   MeasuredDocumentSnapshot,
   MeasuredRun,
   PremirrorOptions,
   ResolvedMarkSet,
+  SegmentFitEngineLike,
   StyledRun,
   TypographyConfig,
   UnmeasuredDocumentSnapshot,
@@ -350,18 +350,42 @@ function toSnapshotImpl(
 
 // --- Measurement -------------------------------------------------------------
 
-function measureSnapshotImpl(snapshot: UnmeasuredDocumentSnapshot): MeasuredDocumentSnapshot {
+/** Deterministic measurement when no engine is available: 7px per code unit. */
+function fallbackMeasuredRun(run: StyledRun): MeasuredRun {
+  return {
+    runId: run.id,
+    prepared: {
+      kind: "premirror-measurement-fallback",
+      text: run.text,
+      font: run.font,
+    },
+    widthPx: run.text.length * 7,
+    textLength: run.text.length,
+  };
+}
+
+/**
+ * Measure every run through the injected segment-fit engine (E-4
+ * unification; the adapter never talks to a concrete engine). The engine's
+ * `prepared` handle is stored on the MeasuredRun so the composer can consult
+ * it downstream — the same engine instance prepares here and fits there.
+ * Absent, declining, or throwing engine yields the deterministic fallback.
+ */
+function measureSnapshotImpl(
+  snapshot: UnmeasuredDocumentSnapshot,
+  engine: SegmentFitEngineLike | undefined,
+): MeasuredDocumentSnapshot {
   const measuredRuns: Record<string, MeasuredRun> = {};
   const UNBOUNDED_WIDTH = 1_000_000_000;
   for (const block of snapshot.blocks) {
     for (const run of block.runs) {
+      if (!engine || (engine.supportsText && !engine.supportsText(run.text))) {
+        measuredRuns[run.id] = fallbackMeasuredRun(run);
+        continue;
+      }
       try {
-        const prepared = prepareWithSegments(run.text, run.font, { whiteSpace: "pre-wrap" });
-        const firstLine = layoutNextLine(
-          prepared,
-          { segmentIndex: 0, graphemeIndex: 0 },
-          UNBOUNDED_WIDTH,
-        );
+        const prepared = engine.prepare(run.text, run.font);
+        const firstLine = engine.fitLine(prepared, null, UNBOUNDED_WIDTH);
         const measuredWidth =
           !firstLine && run.text.length > 0 ? run.text.length * 7 : (firstLine?.width ?? 0);
         measuredRuns[run.id] = {
@@ -371,16 +395,7 @@ function measureSnapshotImpl(snapshot: UnmeasuredDocumentSnapshot): MeasuredDocu
           textLength: run.text.length,
         };
       } catch {
-        measuredRuns[run.id] = {
-          runId: run.id,
-          prepared: {
-            kind: "premirror-measurement-fallback",
-            text: run.text,
-            font: run.font,
-          },
-          widthPx: run.text.length * 7,
-          textLength: run.text.length,
-        };
+        measuredRuns[run.id] = fallbackMeasuredRun(run);
       }
     }
   }
@@ -431,7 +446,7 @@ export function createPremirror(options: PremirrorOptions): PremirrorRuntime {
     commands,
     schemaExtensions: paginationSchemaExtensions,
     toSnapshot: (state) => toSnapshotImpl(state, options.typography),
-    measureSnapshot: measureSnapshotImpl,
+    measureSnapshot: (snapshot) => measureSnapshotImpl(snapshot, options.engine),
     getInvalidationRange: (state) => premirrorInvalidationKey.getState(state) ?? null,
   };
 }
