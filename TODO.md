@@ -36,12 +36,13 @@ On any PM bump, re-run those tests first. `suggestionMode.ts`'s
 its `dispatch` sits inside the try (the half-applied tr is discarded);
 add the `canJoin` gate there for symmetry.
 
-## 4. E-0 perf baseline debt (MEDIUM)
+## 4. E-0 perf baseline — harness LANDED, budget assertion pending (LOW)
 
-The playground runs `segmentFitLineBreaking` ON with parity dogfoods but no
-committed p50/p95 keystroke-to-paint baseline — violating the plan's own
-"E-0 runs before any flag flips" sequencing. Land E-0 or mark the playground
-flip demo-exempt in the plan.
+`tests/perf/segmentfit-baseline.mjs` + committed A/B JSON record forced-
+relayout p50/p95 for pretext vs the legacy walk (steady-state parity, as
+expected — pretext's win is cold-cache/overlong-token measurement,
+characterized in the bridge's parity tests). Remaining: Arthur signs a
+TARGET_MS (plan §12.6), then the budget assertion is committed as a test.
 
 ## 5. Playground follow-ups (LOW)
 
