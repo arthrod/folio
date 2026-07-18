@@ -29,6 +29,7 @@
  */
 
 import type { DrawingContent, Image, MediaFile, RelationshipMap } from "../types/document";
+import { sanitizeImageSrc } from "../utils/sanitizeImageSrc";
 import { pixelsToEmu } from "../utils/units";
 import { resolveImageData } from "./imageParser";
 import { isWatermarkShape } from "./watermarkParser";
@@ -106,9 +107,13 @@ function cssLengthToPx(raw: string | undefined): number | undefined {
   }
 }
 
+const PROTOTYPE_POLLUTION_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 /** Read a `style="k1:v1;k2:v2"` attribute into a lowercased key/value record. */
 function parseStyleAttr(style: string | null): Record<string, string> {
-  const out: Record<string, string> = {};
+  // Null prototype: the style string is attacker-controlled when the DOCX is
+  // untrusted, so the record must not inherit from (or shadow) Object.prototype.
+  const out: Record<string, string> = Object.create(null);
   if (!style) {
     return out;
   }
@@ -119,9 +124,12 @@ function parseStyleAttr(style: string | null): Record<string, string> {
     }
     const key = decl.slice(0, colon).trim().toLowerCase();
     const value = decl.slice(colon + 1).trim();
-    if (key) {
-      out[key] = value;
+    // Skip keys that would pollute Object.prototype — the style string is
+    // attacker-controlled when the DOCX is untrusted.
+    if (!key || PROTOTYPE_POLLUTION_KEYS.has(key)) {
+      continue;
     }
+    out[key] = value;
   }
   return out;
 }
@@ -380,8 +388,9 @@ export function parseVmlImageContent(
       },
       wrap: { type: "inline" },
     };
-    if (src) {
-      image.src = src;
+    const safeSrc = sanitizeImageSrc(src);
+    if (safeSrc) {
+      image.src = safeSrc;
     }
     if (mimeType) {
       image.mimeType = mimeType;
