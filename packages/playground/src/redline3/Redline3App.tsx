@@ -209,44 +209,46 @@ export function Redline3App({ config }: { config: R3PageConfig }) {
 
   const setView = useCallback(
     (view: View) => {
-      setState((prev) => {
-        if (!prev) {
-          return prev;
-        }
-        if (view === "redline") {
-          return { ...prev, view, shown: prev.redline };
-        }
-        void (async () => {
-          try {
-            if (view === "monolith") {
-              const monolith =
-                prev.monolith ??
-                (await (async () => {
-                  const aggregated = await aggregateMonolith(prev.redline);
-                  const revisions = await facade.listRevisions(aggregated.buffer);
-                  return { ...aggregated, revisions };
-                })());
-              setStatus(
-                `Monolith: ${monolith.elementsBefore} revision elements aggregated into ${monolith.elementsAfter} — ${monolith.revisions.length} revision(s) after clustering.`,
-              );
-              setState((current) =>
-                current ? { ...current, view, shown: monolith.buffer, monolith } : current,
-              );
-              return;
-            }
-            const shown =
-              view === "accepted"
-                ? await facade.acceptAll(prev.redline)
-                : await facade.rejectAll(prev.redline);
-            setState((current) => (current ? { ...current, view, shown } : current));
-          } catch (error) {
-            setStatus(`${view} view failed: ${error instanceof Error ? error.message : String(error)}`);
+      // Read state directly (not via a setState updater): updaters must stay
+      // pure, and launching the async view materialization inside one
+      // double-fires under StrictMode.
+      const prev = state;
+      if (!prev) {
+        return;
+      }
+      if (view === "redline") {
+        setState({ ...prev, view, shown: prev.redline });
+        return;
+      }
+      void (async () => {
+        try {
+          if (view === "monolith") {
+            const monolith =
+              prev.monolith ??
+              (await (async () => {
+                const aggregated = await aggregateMonolith(prev.redline);
+                const revisions = await facade.listRevisions(aggregated.buffer);
+                return { ...aggregated, revisions };
+              })());
+            setStatus(
+              `Monolith: ${monolith.elementsBefore} revision elements aggregated into ${monolith.elementsAfter} — ${monolith.revisions.length} revision(s) after clustering.`,
+            );
+            setState((current) =>
+              current ? { ...current, view, shown: monolith.buffer, monolith } : current,
+            );
+            return;
           }
-        })();
-        return prev;
-      });
+          const shown =
+            view === "accepted"
+              ? await facade.acceptAll(prev.redline)
+              : await facade.rejectAll(prev.redline);
+          setState((current) => (current ? { ...current, view, shown } : current));
+        } catch (error) {
+          setStatus(`${view} view failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      })();
     },
-    [facade],
+    [facade, state],
   );
 
   const applyPrecomputed = useCallback(
