@@ -1,0 +1,35 @@
+{
+  "name": "@stll/premirror-composer",
+  "version": "0.1.0",
+  "description": "Layout composer for the premirror pagination engine: breaks measured document snapshots into pages, frames, and line boxes, including header/footer furniture, using @chenglou/pretext line measurement.",
+  "homepage": "https://github.com/stella/folio",
+  "bugs": {
+    "url": "https://github.com/stella/folio/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/stella/folio.git",
+    "directory": "packages/premirror-composer"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "bun test src",
+    "typecheck": "tsc --noEmit",
+    "benchmark": "bun scripts/benchmark.ts"
+  },
+  "dependencies": {
+    "@chenglou/pretext": "^0.0.3",
+    "@stll/premirror-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14"
+  }
+}
