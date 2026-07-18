@@ -119,6 +119,7 @@ export default defineConfig({
         "redline3-ts-view": path.join(playgroundRoot, "redline3-ts-view.html"),
         "redline3-native": path.join(playgroundRoot, "redline3-native.html"),
         "redline3-native-view": path.join(playgroundRoot, "redline3-native-view.html"),
+        "redline3-fvue": path.join(playgroundRoot, "redline3-fvue.html"),
         "redline3-vue": path.join(playgroundRoot, "redline3-vue.html"),
         "redline3-vue-ts": path.join(playgroundRoot, "redline3-vue-ts.html"),
         "redline3-vue-native": path.join(playgroundRoot, "redline3-vue-native.html"),

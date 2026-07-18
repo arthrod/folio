@@ -11,15 +11,18 @@ import { chromium } from "@playwright/test";
 const BASE = process.env.BASE_URL ?? "http://localhost:4173";
 const OUT = process.env.OUT ?? "/Users/arthrod/.claude/jobs/2658d635/tmp";
 
+// After the jubarte-first chimera-row fix, the ts pages PASS on the default
+// Services pair (the remaining pPr-mark class only hits Lease + giants).
 const PAGES = [
   { path: "/redline3", kind: "react", expect: "wasm" },
   { path: "/redline3-view", kind: "react", expect: "wasm" },
-  { path: "/redline3-ts", kind: "react", expect: "ts-failure" },
-  { path: "/redline3-ts-view", kind: "react", expect: "ts-failure" },
+  { path: "/redline3-ts", kind: "react", expect: "ts" },
+  { path: "/redline3-ts-view", kind: "react", expect: "ts" },
   { path: "/redline3-native", kind: "react", expect: "native" },
   { path: "/redline3-native-view", kind: "react", expect: "native" },
+  { path: "/redline3-fvue", kind: "react", expect: "wasm" },
   { path: "/redline3-vue", kind: "vue", expect: "wasm" },
-  { path: "/redline3-vue-ts", kind: "vue", expect: "ts-failure" },
+  { path: "/redline3-vue-ts", kind: "vue", expect: "ts" },
   { path: "/redline3-vue-native", kind: "vue", expect: "native" },
 ];
 
@@ -63,7 +66,11 @@ for (const page_def of PAGES) {
               { timeout: 120000 },
             ).then(() => true);
       const engineOk =
-        page_def.expect === "wasm" ? engine === "jubarte-wasm" : engine.includes("jubarte-native");
+        page_def.expect === "wasm"
+          ? engine === "jubarte-wasm"
+          : page_def.expect === "ts"
+            ? engine === "jubarte-first-lossless"
+            : engine.includes("jubarte-native");
       row.ok = revisions > 0 && rendered && engineOk;
       row.detail = `engine=${engine} revisions=${revisions}`;
 

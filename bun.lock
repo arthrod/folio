@@ -118,6 +118,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@stll/folio-react": "workspace:*",
+        "@stll/folio-vue": "workspace:*",
         "jszip": "3.10.1",
         "react": "^19.2.7",
         "react-dom": "^19.2.7",
