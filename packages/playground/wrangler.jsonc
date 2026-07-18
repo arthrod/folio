@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Assets-only Worker: serves the built playground (editor harness, redline,
+  // and the redline3 "drop A · B · poof" tool) as static assets. Workers Static
+  // Assets serves `.wasm` with `application/wasm`, so the jubarte redline engine
+  // streams/instantiates correctly in the browser.
+  "name": "folio-redline",
+  "compatibility_date": "2025-09-01",
+  "assets": {
+    "directory": "./dist"
+  }
+}

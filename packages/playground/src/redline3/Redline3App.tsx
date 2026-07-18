@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ChangeEvent, DragEvent } from "react";
+import type { ChangeEvent, DragEvent, RefObject } from "react";
 import { IntlProvider } from "use-intl";
 
 import { DocxEditor } from "@stll/folio-react";
@@ -7,18 +7,70 @@ import type { DocxEditorRef } from "@stll/folio-react";
 import { getFolioMessages } from "@stll/folio-react/messages";
 import type { RedlineRevision } from "@stll/folio-core/server";
 
-import { acceptAllRevisions, rejectAllRevisions, runRedline } from "../redline/engine";
+import {
+  acceptAllRevisions,
+  listRevisions,
+  RedlineEngineExhaustedError,
+  rejectAllRevisions,
+  runRedline,
+} from "../redline/engine";
 
-const DEFAULT_AUTHOR = "Folio Redline";
-const DEMO_BASE = "/redline/base.docx";
-const DEMO_REVISED = "/redline/revised.docx";
-const SAMPLE_A = "/redline3/sample-a.docx";
-const SAMPLE_B = "/redline3/sample-b.docx";
-const SAMPLE_A_XL = "/redline3/sample-a-xl.docx";
-const SAMPLE_B_XL = "/redline3/sample-b-xl.docx";
+const DEFAULT_AUTHOR = "Jubarte";
+
+// Ready-to-play pairs. All of these run jubarte-wasm live in the browser.
+const EXAMPLES = [
+  {
+    label: "Services",
+    blurb: "Master Services Agreement",
+    a: "/redline3/pair1-a.docx",
+    b: "/redline3/pair1-b.docx",
+  },
+  {
+    label: "Lease",
+    blurb: "Commercial Lease Agreement",
+    a: "/redline3/pair2-a.docx",
+    b: "/redline3/pair2-b.docx",
+  },
+  {
+    label: "NDA",
+    blurb: "Mutual Non-Disclosure Agreement",
+    a: "/redline3/pair3-a.docx",
+    b: "/redline3/pair3-b.docx",
+  },
+] as const;
+
+// ~200-page pairs; jubarte-wasm compares these live in ~10–20 s.
+const GIANTS = [
+  {
+    label: "Giant Services",
+    blurb: "~200pp Master Services Agreement",
+    a: "/redline3/giant1-a.docx",
+    b: "/redline3/giant1-b.docx",
+  },
+  {
+    label: "Giant Credit",
+    blurb: "~200pp Credit Facility Agreement",
+    a: "/redline3/giant2-a.docx",
+    b: "/redline3/giant2-b.docx",
+  },
+] as const;
+
+// A real ~1000-page dissertation (9.8 MB, 276k runs). Its compare peaks at
+// ~11.9 GB of memory — beyond wasm32's 4 GiB address space — so the redline is
+// precomputed by the SAME jubarte engine compiled natively (the server path).
+// Everything else on this page runs the wasm build live.
+const DISSERTATION = {
+  label: "Dissertation",
+  blurb: "Doctoral dissertation, ~1000pp — redline precomputed by native jubarte",
+  a: "/redline3/dissertacao-a.docx",
+  b: "/redline3/dissertacao-b.docx",
+  redline: "/redline3/dissertacao-redline.docx",
+  engineLabel: "jubarte-native (server)",
+} as const;
 
 type View = "redline" | "accepted" | "rejected";
-type Doc = { buffer: ArrayBuffer; name: string };
+type Side = "a" | "b";
+type Doc = { id: number; buffer: ArrayBuffer; name: string };
 
 type RedlineState = {
   redline: ArrayBuffer;
@@ -26,34 +78,52 @@ type RedlineState = {
   view: View;
   revisions: RedlineRevision[];
   engine: string;
-  elapsedMs: number;
+  elapsedMs: number | null;
+};
+
+type EngineFailure = {
+  headline: string;
+  attempts: { engine: string; phase: string; message: string }[];
 };
 
 // Headless-dogfood hook.
 declare global {
   var __redline3:
     | {
-        loadDemo: () => Promise<void>;
+        loadExample: (index: number) => Promise<void>;
+        loadGiant: (index: number) => Promise<void>;
+        loadDissertation: () => Promise<void>;
+        rerun: () => Promise<void>;
         swap: () => void;
-        getState: () => Omit<RedlineState, "redline" | "shown"> | null;
+        getState: () => {
+          view: View;
+          revisions: RedlineRevision[];
+          engine: string;
+          elapsedMs: number | null;
+          failure: EngineFailure | null;
+        } | null;
       }
     | undefined;
 }
 
 export function Redline3App() {
-  const editorRef = useRef<DocxEditorRef>(null);
+  const editorARef = useRef<DocxEditorRef>(null);
+  const editorBRef = useRef<DocxEditorRef>(null);
+  const idRef = useRef(0);
+  const suppressAutoRun = useRef(false);
   const [docA, setDocA] = useState<Doc | null>(null);
   const [docB, setDocB] = useState<Doc | null>(null);
   const [state, setState] = useState<RedlineState | null>(null);
+  const [failure, setFailure] = useState<EngineFailure | null>(null);
   const [busy, setBusy] = useState(false);
-  const [poof, setPoof] = useState(false);
   const [status, setStatus] = useState(
-    "Import A and B — the redline appears the instant both land.",
+    "Drop two versions, or pick a pair — the redline is computed by jubarte, verified by folio.",
   );
 
   const generate = useCallback(async (a: Doc, b: Doc) => {
     setBusy(true);
-    setStatus(`Comparing ${a.name} → ${b.name}…`);
+    setFailure(null);
+    setStatus(`jubarte-wasm comparing ${a.name} → ${b.name}…`);
     try {
       const { result, engine, elapsedMs } = await runRedline(a.buffer, b.buffer, DEFAULT_AUTHOR);
       setState({
@@ -64,35 +134,34 @@ export function Redline3App() {
         engine,
         elapsedMs,
       });
-      setPoof(true);
       setStatus(
-        `Redline via ${engine} in ${elapsedMs.toFixed(0)} ms — ${result.revisions.length} revision(s).`,
+        `Redline by ${engine} in ${(elapsedMs / 1000).toFixed(1)} s — ${result.revisions.length} revision(s), verified by folio's self-check.`,
       );
     } catch (error) {
-      setStatus(`Compare failed: ${error instanceof Error ? error.message : String(error)}`);
+      setState(null);
+      if (error instanceof RedlineEngineExhaustedError) {
+        setFailure({ headline: "jubarte-wasm failed — no fallback, this is the real error", attempts: error.attempts });
+        setStatus("Engine failure. The error above is genuine; nothing was silently substituted.");
+      } else {
+        const message = error instanceof Error ? error.message : String(error);
+        setFailure({ headline: "Compare crashed before the engine ladder", attempts: [{ engine: "-", phase: "load", message }] });
+        setStatus("Compare failed.");
+      }
     } finally {
       setBusy(false);
     }
   }, []);
 
-  // The moment both documents are in, redline. Re-runs on swap.
+  // The moment both documents land, redline them. Presets that carry a
+  // precomputed redline suppress this (they set the result themselves).
   useEffect(() => {
-    if (docA && docB) {
+    if (docA && docB && !suppressAutoRun.current) {
       void generate(docA, docB);
     }
   }, [docA, docB, generate]);
 
-  useEffect(() => {
-    if (!poof) {
-      return;
-    }
-    const id = requestAnimationFrame(() => setTimeout(() => setPoof(false), 650));
-    return () => cancelAnimationFrame(id);
-  }, [poof]);
-
-  const readFile = useCallback(async (file: File, side: "a" | "b") => {
-    const buffer = await file.arrayBuffer();
-    const doc = { buffer, name: file.name };
+  const setDoc = useCallback((side: Side, doc: Doc) => {
+    suppressAutoRun.current = false;
     if (side === "a") {
       setDocA(doc);
     } else {
@@ -100,8 +169,17 @@ export function Redline3App() {
     }
   }, []);
 
+  const readFile = useCallback(
+    async (file: File, side: Side) => {
+      const buffer = await file.arrayBuffer();
+      idRef.current += 1;
+      setDoc(side, { id: idRef.current, buffer, name: file.name });
+    },
+    [setDoc],
+  );
+
   const pickFile = useCallback(
-    (side: "a" | "b") => (event: ChangeEvent<HTMLInputElement>) => {
+    (side: Side) => (event: ChangeEvent<HTMLInputElement>) => {
       const file = event.target.files?.[0];
       event.currentTarget.value = "";
       if (file) {
@@ -112,7 +190,7 @@ export function Redline3App() {
   );
 
   const onDrop = useCallback(
-    (side: "a" | "b") => (event: DragEvent<HTMLLabelElement>) => {
+    (side: Side) => (event: DragEvent<HTMLElement>) => {
       event.preventDefault();
       const file = event.dataTransfer.files?.[0];
       if (file && file.name.toLowerCase().endsWith(".docx")) {
@@ -123,9 +201,34 @@ export function Redline3App() {
   );
 
   const swap = useCallback(() => {
+    suppressAutoRun.current = false;
     setDocA(docB);
     setDocB(docA);
   }, [docA, docB]);
+
+  const clear = useCallback(() => {
+    setDocA(null);
+    setDocB(null);
+    setState(null);
+    setFailure(null);
+    setStatus("Cleared. Drop two versions or pick a pair.");
+  }, []);
+
+  // Re-run the compare from the CURRENT editor contents, so edits made in the
+  // A/B columns feed the next redline.
+  const rerun = useCallback(async () => {
+    if (!docA || !docB) {
+      return;
+    }
+    setStatus("Serializing edited documents…");
+    const [bufA, bufB] = await Promise.all([
+      editorARef.current?.save({ selective: false }),
+      editorBRef.current?.save({ selective: false }),
+    ]);
+    const a: Doc = bufA ? { ...docA, buffer: bufA } : docA;
+    const b: Doc = bufB ? { ...docB, buffer: bufB } : docB;
+    await generate(a, b);
+  }, [docA, docB, generate]);
 
   const setView = useCallback((view: View) => {
     setState((prev) => {
@@ -146,59 +249,110 @@ export function Redline3App() {
     });
   }, []);
 
-  const loadPair = useCallback(
-    async (urlA: string, urlB: string, nameA: string, nameB: string, label: string) => {
-      setStatus(`Loading ${label}…`);
+  const loadPair = useCallback(async (urlA: string, urlB: string, nameA: string, nameB: string, label: string) => {
+    setStatus(`Loading ${label}…`);
+    try {
       const [ra, rb] = await Promise.all([fetch(urlA), fetch(urlB)]);
+      if (!ra.ok || !rb.ok) {
+        throw new Error(`fetch ${ra.status}/${rb.status}`);
+      }
       const [ba, bb] = await Promise.all([ra.arrayBuffer(), rb.arrayBuffer()]);
-      setDocA({ buffer: ba, name: nameA });
-      setDocB({ buffer: bb, name: nameB });
+      idRef.current += 1;
+      const aDoc = { id: idRef.current, buffer: ba, name: nameA };
+      idRef.current += 1;
+      const bDoc = { id: idRef.current, buffer: bb, name: nameB };
+      setDocA(aDoc);
+      setDocB(bDoc);
+    } catch (error) {
+      setStatus(`Load failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }, []);
+
+  const loadExample = useCallback(
+    (index: number) => {
+      suppressAutoRun.current = false;
+      const ex = EXAMPLES[index] ?? EXAMPLES[0];
+      return loadPair(ex.a, ex.b, `${ex.label} A.docx`, `${ex.label} B.docx`, ex.blurb);
     },
-    [],
-  );
-
-  const loadDemo = useCallback(
-    () => loadPair(DEMO_BASE, DEMO_REVISED, "base.docx", "revised.docx", "demo A + B"),
     [loadPair],
   );
 
-  const loadSamples = useCallback(
-    () => loadPair(SAMPLE_A, SAMPLE_B, "sample-a.docx", "sample-b.docx", "the sample pair (~35pp)"),
+  const loadGiant = useCallback(
+    (index: number) => {
+      suppressAutoRun.current = false;
+      const g = GIANTS[index] ?? GIANTS[0];
+      return loadPair(g.a, g.b, `${g.label} A.docx`, `${g.label} B.docx`, g.blurb);
+    },
     [loadPair],
   );
 
-  const loadSamplesXl = useCallback(
-    () =>
-      loadPair(
-        SAMPLE_A_XL,
-        SAMPLE_B_XL,
-        "sample-a-xl.docx",
-        "sample-b-xl.docx",
-        "the 200-page pair (compare can take a few minutes)",
-      ),
-    [loadPair],
-  );
+  // The dissertation ships its redline precomputed by native jubarte: the pair
+  // needs ~11.9 GB to compare, past wasm32's 4 GiB ceiling. The wasm build
+  // still enumerates the revisions and drives the accept/reject views live.
+  const loadDissertation = useCallback(async () => {
+    setStatus(`Loading ${DISSERTATION.blurb}…`);
+    setFailure(null);
+    try {
+      suppressAutoRun.current = true;
+      const [ra, rb, rr] = await Promise.all([
+        fetch(DISSERTATION.a),
+        fetch(DISSERTATION.b),
+        fetch(DISSERTATION.redline),
+      ]);
+      if (!ra.ok || !rb.ok || !rr.ok) {
+        throw new Error(`fetch ${ra.status}/${rb.status}/${rr.status}`);
+      }
+      const [ba, bb, br] = await Promise.all([ra.arrayBuffer(), rb.arrayBuffer(), rr.arrayBuffer()]);
+      idRef.current += 1;
+      setDocA({ id: idRef.current, buffer: ba, name: "Dissertação (original).docx" });
+      idRef.current += 1;
+      setDocB({ id: idRef.current, buffer: bb, name: "Dissertação (revisada).docx" });
+      setBusy(true);
+      setStatus("Enumerating revisions (jubarte-wasm)…");
+      const revisions = await listRevisions(br);
+      setState({
+        redline: br,
+        shown: br,
+        view: "redline",
+        revisions,
+        engine: DISSERTATION.engineLabel,
+        elapsedMs: null,
+      });
+      setStatus(
+        `Dissertation redline by ${DISSERTATION.engineLabel} — ${revisions.length} revision(s). ` +
+          "This pair needs ~11.9 GB to compare, past wasm32's 4 GiB; the identical engine ran natively.",
+      );
+    } catch (error) {
+      setStatus(`Load failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, []);
 
   useEffect(() => {
     globalThis.__redline3 = {
-      loadDemo,
-      loadSamples,
-      loadSamplesXl,
+      loadExample,
+      loadGiant,
+      loadDissertation,
+      rerun,
       swap,
       getState: () =>
-        state
+        state || failure
           ? {
-              view: state.view,
-              revisions: state.revisions,
-              engine: state.engine,
-              elapsedMs: state.elapsedMs,
+              view: state?.view ?? "redline",
+              revisions: state?.revisions ?? [],
+              engine: state?.engine ?? "-",
+              elapsedMs: state?.elapsedMs ?? null,
+              failure,
             }
           : null,
     };
     return () => {
       globalThis.__redline3 = undefined;
     };
-  }, [loadDemo, swap, state]);
+  }, [loadExample, loadGiant, loadDissertation, rerun, swap, state, failure]);
+
+  const bothLoaded = Boolean(docA && docB);
 
   return (
     <IntlProvider
@@ -207,42 +361,84 @@ export function Redline3App() {
       timeZone={Intl.DateTimeFormat().resolvedOptions().timeZone}
     >
       <div className="r3-shell">
-        <header className="r3-header">
-          <h1 className="r3-title">Folio Redline</h1>
-          <span className="r3-sub">import A · import B · poof — redline · pretext line-fitting</span>
-          <button
-            type="button"
-            className="r3-demo"
-            onClick={() => void loadSamples()}
-            data-testid="load-samples"
-          >
-            Play with samples (~35pp)
-          </button>
-          <button
-            type="button"
-            className="r3-demo"
-            onClick={() => void loadSamplesXl()}
-            data-testid="load-samples-xl"
-            title="Two ~200-page documents. Rendering is fast (pretext); the jubarte-wasm compare can take a few minutes."
-          >
-            200-page stress pair ⏳
-          </button>
-          <button type="button" className="r3-demo" onClick={() => void loadDemo()} data-testid="load-demo">
-            Small demo
-          </button>
+        <header className="r3-topbar">
+          <div className="r3-brand">
+            <span className="r3-wordmark">
+              jubarte<span className="r3-wordmark-x">×</span>folio
+            </span>
+            <p className="r3-tagline">
+              Word-grade redlines, computed by <mark>jubarte</mark>, verified &amp; rendered by folio.
+            </p>
+          </div>
+          <nav className="r3-presets" aria-label="Sample document pairs">
+            {EXAMPLES.map((ex, i) => (
+              <button
+                key={ex.label}
+                type="button"
+                className="r3-preset"
+                onClick={() => void loadExample(i)}
+                data-testid={`example-${i}`}
+                title={ex.blurb}
+              >
+                {ex.label}
+              </button>
+            ))}
+            <span className="r3-preset-rule" aria-hidden="true" />
+            {GIANTS.map((g, i) => (
+              <button
+                key={g.label}
+                type="button"
+                className="r3-preset"
+                onClick={() => void loadGiant(i)}
+                data-testid={`giant-${i}`}
+                title={`${g.blurb} — compared live by jubarte-wasm`}
+              >
+                {g.label}
+              </button>
+            ))}
+            <span className="r3-preset-rule" aria-hidden="true" />
+            <button
+              type="button"
+              className="r3-preset r3-preset--marked"
+              onClick={() => void loadDissertation()}
+              data-testid="dissertation"
+              title={DISSERTATION.blurb}
+            >
+              {DISSERTATION.label}
+            </button>
+            {(docA || docB) && (
+              <button type="button" className="r3-preset r3-preset--quiet" onClick={clear} data-testid="clear">
+                Clear
+              </button>
+            )}
+          </nav>
         </header>
 
+        {failure && (
+          <div className="r3-failure" role="alert" data-testid="engine-failure">
+            <strong>{failure.headline}</strong>
+            <ul>
+              {failure.attempts.map((attempt) => (
+                <li key={`${attempt.engine}:${attempt.phase}`}>
+                  <code>{attempt.engine}</code> failed at <code>{attempt.phase}</code>: {attempt.message}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <div className="r3-grid">
-          <DropCard
+          <DocPane
             label="A"
             title="Original"
             doc={docA}
             testid="doc-a-input"
+            editorRef={editorARef}
             onPick={pickFile("a")}
             onDrop={onDrop("a")}
           />
 
-          <div className="r3-swapcol">
+          <div className="r3-spine">
             <button
               type="button"
               className="r3-swap"
@@ -252,31 +448,48 @@ export function Redline3App() {
               aria-label="Swap A and B"
               data-testid="swap"
             >
-              ⇄
+              &#8646;
             </button>
+            {bothLoaded && state && (
+              <button
+                type="button"
+                className="r3-rerun"
+                onClick={() => void rerun()}
+                disabled={busy}
+                title="Serialize the edited columns and redline again"
+                data-testid="rerun"
+              >
+                Redline&nbsp;again
+              </button>
+            )}
           </div>
 
-          <DropCard
+          <DocPane
             label="B"
             title="Revised"
             doc={docB}
             testid="doc-b-input"
+            editorRef={editorBRef}
             onPick={pickFile("b")}
             onDrop={onDrop("b")}
           />
 
-          <section className={`r3-result${poof ? " r3-result--poof" : ""}`}>
-            <div className="r3-result-bar">
-              <span className="r3-badge">Redline</span>
+          <section className="r3-panel r3-result">
+            <header className="r3-panel-bar">
+              <span className="r3-tag">Redline</span>
               {state ? (
                 <>
-                  <span className="r3-meta" data-testid="engine">{state.engine}</span>
-                  <span className="r3-meta">
-                    <strong data-testid="revision-count">{state.revisions.length}</strong> revisions
+                  <span className="r3-meta" data-testid="engine">
+                    {state.engine}
                   </span>
-                  <span className="r3-meta">{state.elapsedMs.toFixed(0)} ms</span>
+                  <span className="r3-meta">
+                    <strong data-testid="revision-count">{state.revisions.length}</strong>&nbsp;revisions
+                  </span>
+                  {state.elapsedMs !== null && (
+                    <span className="r3-meta">{(state.elapsedMs / 1000).toFixed(1)}&nbsp;s</span>
+                  )}
                   <span className="r3-spacer" />
-                  <div className="r3-views">
+                  <div className="r3-views" role="group" aria-label="Redline view">
                     {(["redline", "accepted", "rejected"] as const).map((view) => (
                       <button
                         key={view}
@@ -293,27 +506,32 @@ export function Redline3App() {
                 </>
               ) : (
                 <span className="r3-meta r3-meta--muted">
-                  {busy ? "comparing…" : "waiting for A and B"}
+                  {busy ? "comparing…" : bothLoaded ? "…" : "waiting for A and B"}
                 </span>
               )}
-            </div>
-            <div className="r3-editor">
+            </header>
+            <div className="r3-panel-body">
               {state ? (
                 <DocxEditor
-                  key={state.view}
-                  ref={editorRef}
+                  key={`${state.view}-${state.revisions.length}`}
                   document={null}
                   documentBuffer={state.shown}
                   author={DEFAULT_AUTHOR}
-                  mode="viewing"
-                  showToolbar={false}
+                  mode="editing"
                   showRuler={false}
+                  initialZoom={0.72}
                   onError={(error) => setStatus(`Editor: ${error.message}`)}
                 />
               ) : (
                 <div className="r3-empty">
-                  <div className="r3-empty-poof">✦</div>
-                  <p>Poof — your redline lands here.</p>
+                  {busy ? (
+                    <>
+                      <div className="r3-spinner" aria-hidden="true" />
+                      <p>jubarte is comparing — the result is verified before it is shown.</p>
+                    </>
+                  ) : (
+                    <p>The verified redline lands here.</p>
+                  )}
                 </div>
               )}
             </div>
@@ -328,32 +546,55 @@ export function Redline3App() {
   );
 }
 
-type DropCardProps = {
+type DocPaneProps = {
   label: string;
   title: string;
   doc: Doc | null;
   testid: string;
+  editorRef: RefObject<DocxEditorRef | null>;
   onPick: (event: ChangeEvent<HTMLInputElement>) => void;
-  onDrop: (event: DragEvent<HTMLLabelElement>) => void;
+  onDrop: (event: DragEvent<HTMLElement>) => void;
 };
 
-function DropCard({ label, title, doc, testid, onPick, onDrop }: DropCardProps) {
+function DocPane({ label, title, doc, testid, editorRef, onPick, onDrop }: DocPaneProps) {
   return (
-    <label
-      className={`r3-card${doc ? " r3-card--ready" : ""}`}
+    <section
+      className={`r3-panel r3-pane${doc ? " r3-pane--ready" : ""}`}
       onDrop={onDrop}
       onDragOver={(event) => event.preventDefault()}
     >
-      <span className="r3-card-tag">{label}</span>
-      <span className="r3-card-title">{title}</span>
-      {doc ? (
-        <span className="r3-card-file" title={doc.name}>
-          ✓ {doc.name}
+      <header className="r3-panel-bar">
+        <span className="r3-tag">{label}</span>
+        <span className="r3-panel-title" title={doc?.name ?? title}>
+          {doc ? doc.name : title}
         </span>
-      ) : (
-        <span className="r3-card-hint">Drop a .docx here, or click to choose</span>
-      )}
-      <input type="file" accept=".docx" onChange={onPick} data-testid={testid} hidden />
-    </label>
+        {doc ? (
+          <label className="r3-replace">
+            Replace
+            <input type="file" accept=".docx" hidden onChange={onPick} data-testid={testid} />
+          </label>
+        ) : null}
+      </header>
+      <div className="r3-panel-body">
+        {doc ? (
+          <DocxEditor
+            key={doc.id}
+            ref={editorRef}
+            document={null}
+            documentBuffer={doc.buffer}
+            author={DEFAULT_AUTHOR}
+            mode="editing"
+            showRuler={false}
+            initialZoom={0.72}
+          />
+        ) : (
+          <label className="r3-drop">
+            <span className="r3-drop-title">{title}</span>
+            <span className="r3-drop-hint">Drop a .docx here, or click to choose</span>
+            <input type="file" accept=".docx" hidden onChange={onPick} data-testid={testid} />
+          </label>
+        )}
+      </div>
+    </section>
   );
 }

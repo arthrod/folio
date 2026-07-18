@@ -30,3 +30,9 @@ cp "$CORPUS/docx_lots_of_comments_addition.docx" "$PUBLIC/base.docx"
 cp "$CORPUS/docx_lots_of_comments.docx" "$PUBLIC/revised.docx"
 
 echo "✓ vendored wasm → $DEST and demo fixtures → $PUBLIC"
+
+# Newer wasm-bindgen glue carries Deno-style @ts-self-types, which tsc ignores;
+# mark the generated file ts-nocheck so playground typecheck skips it.
+if ! head -1 "$DEST/jubarte_wasm.js" | grep -q ts-nocheck; then
+  printf '// @ts-nocheck — wasm-bindgen generated glue; typed via jubarte_wasm.d.ts\n%s' "$(cat "$DEST/jubarte_wasm.js")" > "$DEST/jubarte_wasm.js"
+fi

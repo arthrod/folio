@@ -1,3 +1,4 @@
+// @ts-nocheck — wasm-bindgen generated glue; typed via jubarte_wasm.d.ts
 /* @ts-self-types="./jubarte_wasm.d.ts" */
 
 /**

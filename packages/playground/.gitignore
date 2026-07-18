@@ -4,3 +4,7 @@ node_modules/
 # Binary/external artifacts owned by neurotic_docx_bench per GET_JUBARTE_RUST.md.
 src/redline/jubarte-wasm/*.wasm
 public/redline/*.docx
+# redline3 sample pairs: pair*/giant* regenerate via scripts/gen-redline3-*.py +
+# the native jubarte CLI; dissertacao-* are Arthur's local documents (served as
+# deploy assets, never committed).
+public/redline3/*.docx
