@@ -21,7 +21,8 @@
     "y-webrtc": "^10.3.0",
     "yjs": "^13.6.31",
     "vue": "^3.5.13",
-    "jszip": "3.10.1"
+    "jszip": "3.10.1",
+    "@stll/folio-vue": "workspace:*"
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.3.2",

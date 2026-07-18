@@ -8,7 +8,8 @@
  */
 
 export type EngineKind = "wasm" | "ts" | "native";
-export type FrameworkKind = "react" | "vue";
+/** react = folio-react editor; fvue = @stll/folio-vue editor; vue = full-Vue lossless-HTML tier. */
+export type FrameworkKind = "react" | "fvue" | "vue";
 
 export type R3PageConfig = {
   engine: EngineKind;
@@ -34,11 +35,13 @@ export const pagePath = ({ engine, viewOnly, framework }: R3PageConfig): string 
   if (framework === "vue") {
     parts.push("vue");
   }
+  if (framework === "fvue") {
+    parts.push("fvue");
+  }
   if (engine !== "wasm") {
     parts.push(engine);
   }
-  // The Vue tier is single-mode (no folio editor), so only React paths carry
-  // the view suffix.
+  // Only the React tier ships separate view-only paths.
   if (viewOnly && framework === "react") {
     parts.push("view");
   }
@@ -53,8 +56,9 @@ export const PAGE_MATRIX: readonly R3PageConfig[] = [
     { engine, viewOnly: false, framework: "react" as const },
     { engine, viewOnly: true, framework: "react" as const },
   ]),
-  // The Vue tier has no editor (folio's editor is React-only); one path per
-  // engine, rendered via the lossless HTML converter.
+  // The folio-vue editor tier (@stll/folio-vue): full editors, wasm engine.
+  { engine: "wasm", viewOnly: false, framework: "fvue" },
+  // The lossless-HTML tier: featherweight, rendered via WmlToHtmlConverter.
   ...ENGINE_KINDS.map((engine) => ({ engine, viewOnly: true, framework: "vue" as const })),
 ];
 
