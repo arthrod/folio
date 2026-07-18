@@ -1,0 +1,30 @@
+{
+  "name": "@stll/premirror-core",
+  "version": "0.1.0",
+  "description": "Framework-neutral contracts for the premirror pagination engine: page presets, margins, layout policies, and the snapshot/layout data model shared by the composer and adapters.",
+  "homepage": "https://github.com/stella/folio",
+  "bugs": {
+    "url": "https://github.com/stella/folio/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/stella/folio.git",
+    "directory": "packages/premirror-core"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "bun test src",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14"
+  }
+}
