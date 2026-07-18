@@ -107,6 +107,58 @@ describe("compareLossless", () => {
 
 // --- Gated integration: the medium's reason to exist, on real Word files. ---
 
+/**
+ * Minimal quote-aware CSV line splitter. Handles double-quoted fields
+ * containing commas and doubled-quote escapes (`""` → `"`). Sufficient
+ * for the corpus mapping CSV; no external dependency.
+ */
+const splitCsvLine = (line: string): string[] => {
+  const fields: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        current += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ",") {
+      fields.push(current);
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  fields.push(current);
+  return fields;
+};
+
+describe("splitCsvLine", () => {
+  test("handles a quoted field containing a comma", () => {
+    const line = 'a,b,"hello, world",c';
+    expect(splitCsvLine(line)).toEqual(["a", "b", "hello, world", "c"]);
+  });
+
+  test("handles doubled-quote escapes inside a quoted field", () => {
+    const line = 'a,"say ""hi""",c';
+    expect(splitCsvLine(line)).toEqual(["a", 'say "hi"', "c"]);
+  });
+
+  test("handles a plain unquoted line", () => {
+    const line = "a,b,c,d,e,f";
+    expect(splitCsvLine(line)).toEqual(["a", "b", "c", "d", "e", "f"]);
+  });
+});
+
 const wasmPkgPath = process.env["JUBARTE_WASM_PKG"];
 const corpusDir = process.env["REDLINE_CORPUS_DIR"];
 const haveTooling = wasmPkgPath !== undefined && existsSync(wasmPkgPath);
@@ -169,7 +221,7 @@ describe.if(haveCorpusSweep)("engine-lossless corpus sweep (REDLINE_CORPUS_DIR +
 
     const pairs: { stem: string; base: string; revised: string }[] = [];
     for (const row of rows) {
-      const cols = row.split(",");
+      const cols = splitCsvLine(row);
       const baseName = cols[4];
       const revisedName = cols[5];
       if (baseName === undefined || revisedName === undefined) {
