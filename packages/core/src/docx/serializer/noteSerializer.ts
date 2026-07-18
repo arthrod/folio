@@ -48,6 +48,7 @@ const NAMESPACES: Record<string, string> = {
   w16cid: "http://schemas.microsoft.com/office/word/2016/wordml/cid",
   w16sdtdh: "http://schemas.microsoft.com/office/word/2020/wordml/sdtdatahash",
   w16se: "http://schemas.microsoft.com/office/word/2015/wordml/symex",
+  w16du: "http://schemas.microsoft.com/office/word/2023/wordml/word16du",
   wpg: "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup",
   wps: "http://schemas.microsoft.com/office/word/2010/wordprocessingShape",
 };
@@ -98,7 +99,7 @@ function serializeNote(elementName: "footnote" | "endnote", note: Footnote | End
 export function serializeFootnotes(footnotes: readonly Footnote[]): string {
   const nsDecl = buildNamespaceDeclarations();
   const notes = footnotes.map((fn) => serializeNote("footnote", fn)).join("");
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:footnotes ${nsDecl} mc:Ignorable="w14 w15 wp14">${notes}</w:footnotes>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:footnotes ${nsDecl} mc:Ignorable="w14 w15 wp14 w16du">${notes}</w:footnotes>`;
 }
 
 /**
@@ -110,5 +111,5 @@ export function serializeFootnotes(footnotes: readonly Footnote[]): string {
 export function serializeEndnotes(endnotes: readonly Endnote[]): string {
   const nsDecl = buildNamespaceDeclarations();
   const notes = endnotes.map((en) => serializeNote("endnote", en)).join("");
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:endnotes ${nsDecl} mc:Ignorable="w14 w15 wp14">${notes}</w:endnotes>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:endnotes ${nsDecl} mc:Ignorable="w14 w15 wp14 w16du">${notes}</w:endnotes>`;
 }

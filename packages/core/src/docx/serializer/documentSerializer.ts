@@ -170,7 +170,7 @@ export function serializeDocument(doc: Document): string {
 
   // Document element with namespaces
   const nsDecl = buildNamespaceDeclarations();
-  parts.push(`<w:document ${nsDecl} mc:Ignorable="w14 w15 wp14">`);
+  parts.push(`<w:document ${nsDecl} mc:Ignorable="w14 w15 wp14 w16du">`);
 
   // Document body
   parts.push("<w:body>");
