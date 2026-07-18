@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@stll/folio-react": "workspace:*",
+    "@stll/premirror-bridge": "workspace:*",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "use-intl": "^4.13.0",
