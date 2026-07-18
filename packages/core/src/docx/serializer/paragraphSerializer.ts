@@ -970,7 +970,7 @@ function rewriteRunTextAsDeletedDrawingAware(xml: string): string {
 
   return rewritten.replace(
     /\x00FIELD_DEL_(DRAWING|PICT)_(\d+)\x00/gu,
-    (_, key: string, idx: string) => subtrees[Number(idx)] ?? "",
+    (_match, _key: string, idx: string) => subtrees[Number(idx)] ?? "",
   );
 }
 
