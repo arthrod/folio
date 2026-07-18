@@ -14,16 +14,16 @@
   },
   "dependencies": {
     "@stll/folio-react": "workspace:*",
+    "@stll/folio-vue": "workspace:*",
     "@stll/premirror-bridge": "workspace:*",
+    "jszip": "3.10.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "use-intl": "^4.13.0",
+    "vue": "^3.5.13",
     "y-prosemirror": "^1.3.7",
     "y-webrtc": "^10.3.0",
-    "yjs": "^13.6.31",
-    "vue": "^3.5.13",
-    "jszip": "3.10.1",
-    "@stll/folio-vue": "workspace:*"
+    "yjs": "^13.6.31"
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.3.2",

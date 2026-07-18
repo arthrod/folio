@@ -89,8 +89,10 @@ export const createJubarteWasmRedlineEngine = (module: JubarteWasmModule): Redli
         module.compareDocuments(new Uint8Array(base), new Uint8Array(revised), author),
       ),
     })),
-  acceptAll: (docx) => asResolved(() => toArrayBuffer(module.acceptRevisions(new Uint8Array(docx)))),
-  rejectAll: (docx) => asResolved(() => toArrayBuffer(module.rejectRevisions(new Uint8Array(docx)))),
+  acceptAll: (docx) =>
+    asResolved(() => toArrayBuffer(module.acceptRevisions(new Uint8Array(docx)))),
+  rejectAll: (docx) =>
+    asResolved(() => toArrayBuffer(module.rejectRevisions(new Uint8Array(docx)))),
   getRevisions: (docx) =>
     asResolved(() => parseRevisionsJson(module.getRevisions(new Uint8Array(docx)))),
 });

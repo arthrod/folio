@@ -99,7 +99,9 @@ const losslessListRevisions = (redline: ArrayBuffer): RedlineRevision[] => {
   ensureLosslessWired();
   const parsed: unknown = JSON.parse(DocumentComparer.GetRevisionsJson(new Uint8Array(redline)));
   const entries =
-    typeof parsed === "object" && parsed !== null && Array.isArray((parsed as { Revisions?: unknown[] }).Revisions)
+    typeof parsed === "object" &&
+    parsed !== null &&
+    Array.isArray((parsed as { Revisions?: unknown[] }).Revisions)
       ? ((parsed as { Revisions: LosslessRevisionEntry[] }).Revisions ?? [])
       : [];
   const revisions: RedlineRevision[] = [];
@@ -132,12 +134,14 @@ const tsLadderEngine: LadderEngine = {
     }),
   acceptAll: async (docx) => {
     ensureLosslessWired();
-    const { acceptRevisionsDocxBytes } = await import("jubarte-src/lossless/lib/ooxml-package-jszip.ts");
+    const { acceptRevisionsDocxBytes } =
+      await import("jubarte-src/lossless/lib/ooxml-package-jszip.ts");
     return toArrayBuffer(acceptRevisionsDocxBytes(new Uint8Array(docx)));
   },
   rejectAll: async (docx) => {
     ensureLosslessWired();
-    const { rejectRevisionsDocxBytes } = await import("jubarte-src/lossless/lib/ooxml-package-jszip.ts");
+    const { rejectRevisionsDocxBytes } =
+      await import("jubarte-src/lossless/lib/ooxml-package-jszip.ts");
     return toArrayBuffer(rejectRevisionsDocxBytes(new Uint8Array(docx)));
   },
   getRevisions: (docx) => Promise.resolve(losslessListRevisions(docx)),

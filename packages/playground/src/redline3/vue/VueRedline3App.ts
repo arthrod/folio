@@ -94,7 +94,8 @@ export const VueRedline3App = defineComponent({
             headline: `${facade.label} failed — no fallback, this is the real error`,
             attempts: error.attempts,
           };
-          status.value = "Engine failure. The error above is genuine; nothing was silently substituted.";
+          status.value =
+            "Engine failure. The error above is genuine; nothing was silently substituted.";
         } else {
           failure.value = {
             headline: "Compare crashed before the engine ladder",
@@ -150,7 +151,10 @@ export const VueRedline3App = defineComponent({
       failure.value = null;
       status.value = `Loading ${DISSERTATION.blurb}…`;
       try {
-        const [ba, bb] = await Promise.all([fetchBuffer(DISSERTATION.a), fetchBuffer(DISSERTATION.b)]);
+        const [ba, bb] = await Promise.all([
+          fetchBuffer(DISSERTATION.a),
+          fetchBuffer(DISSERTATION.b),
+        ]);
         await loadPane("a", "Dissertação (original).docx", ba);
         await loadPane("b", "Dissertação (revisada).docx", bb);
         const { url, label } = DISSERTATION.redlineByEngine[config.engine];
@@ -272,7 +276,12 @@ export const VueRedline3App = defineComponent({
             const label = `${combo.framework}·${combo.engine}${combo.viewOnly && combo.framework === "react" ? "·view" : ""}`;
             return h(
               "a",
-              { key: path, href: path, class: "r3-switch-link", "aria-current": current ? "page" : undefined },
+              {
+                key: path,
+                href: path,
+                class: "r3-switch-link",
+                "aria-current": current ? "page" : undefined,
+              },
               label,
             );
           }),
@@ -303,7 +312,11 @@ export const VueRedline3App = defineComponent({
                 ? [
                     h("span", { class: "r3-meta", "data-testid": "engine" }, engineLabel.value),
                     h("span", { class: "r3-meta" }, [
-                      h("strong", { "data-testid": "revision-count" }, String(revisionCount.value ?? "…")),
+                      h(
+                        "strong",
+                        { "data-testid": "revision-count" },
+                        String(revisionCount.value ?? "…"),
+                      ),
                       " revisions",
                     ]),
                     elapsedMs.value !== null
@@ -341,11 +354,22 @@ export const VueRedline3App = defineComponent({
               "div",
               { class: "r3-panel-body" },
               shownHtml.value
-                ? [h("iframe", { class: "r3-htmlframe", srcdoc: shownHtml.value, title: "Redline" })]
+                ? [
+                    h("iframe", {
+                      class: "r3-htmlframe",
+                      srcdoc: shownHtml.value,
+                      title: "Redline",
+                    }),
+                  ]
                 : [
                     h("div", { class: "r3-empty" }, [
                       busy.value ? h("div", { class: "r3-spinner", "aria-hidden": "true" }) : null,
-                      h("p", busy.value ? "Working — results are verified before they are shown." : "The verified redline lands here."),
+                      h(
+                        "p",
+                        busy.value
+                          ? "Working — results are verified before they are shown."
+                          : "The verified redline lands here.",
+                      ),
                     ]),
                   ],
             ),

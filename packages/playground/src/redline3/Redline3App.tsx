@@ -115,7 +115,9 @@ export function Redline3App({ config }: { config: R3PageConfig }) {
             headline: `${facade.label} failed — no fallback, this is the real error`,
             attempts: error.attempts,
           });
-          setStatus("Engine failure. The error above is genuine; nothing was silently substituted.");
+          setStatus(
+            "Engine failure. The error above is genuine; nothing was silently substituted.",
+          );
         } else {
           const message = error instanceof Error ? error.message : String(error);
           setFailure({
@@ -245,7 +247,9 @@ export function Redline3App({ config }: { config: R3PageConfig }) {
               : await facade.rejectAll(prev.redline);
           setState((current) => (current ? { ...current, view, shown } : current));
         } catch (error) {
-          setStatus(`${view} view failed: ${error instanceof Error ? error.message : String(error)}`);
+          setStatus(
+            `${view} view failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
         }
       })();
     },
@@ -272,7 +276,9 @@ export function Redline3App({ config }: { config: R3PageConfig }) {
           elapsedMs: null,
           monolith: null,
         });
-        setStatus(`Redline by ${engineLabel} — ${revisions.length} revision(s), precomputed server-side.`);
+        setStatus(
+          `Redline by ${engineLabel} — ${revisions.length} revision(s), precomputed server-side.`,
+        );
       } finally {
         setBusy(false);
       }
@@ -449,7 +455,12 @@ export function Redline3App({ config }: { config: R3PageConfig }) {
               {DISSERTATION.label}
             </button>
             {(docA || docB) && (
-              <button type="button" className="r3-preset r3-preset--quiet" onClick={clear} data-testid="clear">
+              <button
+                type="button"
+                className="r3-preset r3-preset--quiet"
+                onClick={clear}
+                data-testid="clear"
+              >
                 Clear
               </button>
             )}
@@ -462,7 +473,12 @@ export function Redline3App({ config }: { config: R3PageConfig }) {
             const current = path === pagePath(config);
             const label = `${combo.framework}·${combo.engine}${combo.viewOnly && combo.framework === "react" ? "·view" : ""}`;
             return (
-              <a key={path} href={path} className="r3-switch-link" aria-current={current ? "page" : undefined}>
+              <a
+                key={path}
+                href={path}
+                className="r3-switch-link"
+                aria-current={current ? "page" : undefined}
+              >
                 {label}
               </a>
             );
@@ -475,7 +491,8 @@ export function Redline3App({ config }: { config: R3PageConfig }) {
             <ul>
               {failure.attempts.map((attempt) => (
                 <li key={`${attempt.engine}:${attempt.phase}`}>
-                  <code>{attempt.engine}</code> failed at <code>{attempt.phase}</code>: {attempt.message}
+                  <code>{attempt.engine}</code> failed at <code>{attempt.phase}</code>:{" "}
+                  {attempt.message}
                 </li>
               ))}
             </ul>
@@ -540,7 +557,8 @@ export function Redline3App({ config }: { config: R3PageConfig }) {
                     {state.engine}
                   </span>
                   <span className="r3-meta">
-                    <strong data-testid="revision-count">{state.revisions.length}</strong>&nbsp;revisions
+                    <strong data-testid="revision-count">{state.revisions.length}</strong>
+                    &nbsp;revisions
                   </span>
                   {state.elapsedMs !== null && (
                     <span className="r3-meta">{(state.elapsedMs / 1000).toFixed(1)}&nbsp;s</span>

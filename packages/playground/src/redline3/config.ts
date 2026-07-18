@@ -26,7 +26,11 @@ declare global {
 }
 
 /** Idle-state label for the redline panel header, shared by all three tiers. */
-export const idleStatusLabel = (busyNow: boolean, bothLoaded: boolean, busyLabel: string): string => {
+export const idleStatusLabel = (
+  busyNow: boolean,
+  bothLoaded: boolean,
+  busyLabel: string,
+): string => {
   if (busyNow) return busyLabel;
   if (bothLoaded) return "…";
   return "waiting for A and B";
