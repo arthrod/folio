@@ -7,7 +7,12 @@ import { serializeEndnotes, serializeFootnotes } from "./noteSerializer";
 const W16DU_NS = 'xmlns:w16du="http://schemas.microsoft.com/office/word/2023/wordml/word16du"';
 const W16DU_IGNORABLE = "w16du";
 
-const dateUtcInfo = { id: 1, author: "Reviewer", date: "2026-01-01T00:00:00Z", dateUtc: "2026-01-01T00:00:00Z" };
+const dateUtcInfo = {
+  id: 1,
+  author: "Reviewer",
+  date: "2026-01-01T00:00:00Z",
+  dateUtc: "2026-01-01T00:00:00Z",
+};
 
 describe("w16du namespace declaration on part roots", () => {
   test("header root declares xmlns:w16du and keeps w16du:dateUtc on a tracked insertion", () => {

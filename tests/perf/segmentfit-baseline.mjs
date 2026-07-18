@@ -89,8 +89,7 @@ async function measure(engineLabel, url) {
 
 const on = await measure("pretext", `${BASE}/?paragraphs=${PARAGRAPHS}`);
 const off = await measure("legacy", `${BASE}/?paragraphs=${PARAGRAPHS}&segmentfit=off`);
-const p50Delta =
-  on.relayoutMs && off.relayoutMs ? on.relayoutMs.p50 - off.relayoutMs.p50 : null;
+const p50Delta = on.relayoutMs && off.relayoutMs ? on.relayoutMs.p50 - off.relayoutMs.p50 : null;
 const baseline = {
   harness: "segmentfit-baseline",
   doc: { paragraphs: PARAGRAPHS },

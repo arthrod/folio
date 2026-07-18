@@ -217,7 +217,10 @@ const haveCorpusSweep =
 describe.if(haveCorpusSweep)("engine-lossless corpus sweep (REDLINE_CORPUS_DIR + mapping)", () => {
   test("verifies via jubarte-wasm on the overwhelming majority of present pairs", async () => {
     const module = loadWasm();
-    const rows = readFileSync(csvPath as string, "utf8").trim().split("\n").slice(1);
+    const rows = readFileSync(csvPath as string, "utf8")
+      .trim()
+      .split("\n")
+      .slice(1);
 
     const pairs: { stem: string; base: string; revised: string }[] = [];
     for (const row of rows) {
@@ -252,7 +255,9 @@ describe.if(haveCorpusSweep)("engine-lossless corpus sweep (REDLINE_CORPUS_DIR +
     }
     const passRate = (pairs.length - failures.length) / pairs.length;
     // eslint-disable-next-line no-console -- surfaces the honest residual when a run regresses
-    console.log(`engine-lossless sweep: ${pairs.length - failures.length}/${pairs.length} verified`);
+    console.log(
+      `engine-lossless sweep: ${pairs.length - failures.length}/${pairs.length} verified`,
+    );
     for (const failure of failures) {
       // eslint-disable-next-line no-console -- name each residual for triage
       console.log(`  fallback: ${failure}`);

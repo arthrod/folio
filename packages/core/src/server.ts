@@ -136,10 +136,7 @@ export {
   type RedlineRevisionType,
 } from "./redline-engine";
 export { storyRedlineEngine } from "./redline-engine-story";
-export {
-  createJubarteWasmRedlineEngine,
-  type JubarteWasmModule,
-} from "./redline-engine-jubarte";
+export { createJubarteWasmRedlineEngine, type JubarteWasmModule } from "./redline-engine-jubarte";
 export type {
   FolioAIComment,
   FolioAIEditApplyMode,

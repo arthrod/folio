@@ -249,11 +249,7 @@ describe("pPrMark accept / reject — paragraph-mark resolution", () => {
       EditorState.create({
         schema: tableSchema,
         doc: tableDoc(
-          tableSchema.node(
-            "paragraph",
-            { pPrMark: delMark({ id: 1 }) },
-            tableSchema.text("kept"),
-          ),
+          tableSchema.node("paragraph", { pPrMark: delMark({ id: 1 }) }, tableSchema.text("kept")),
         ),
       }),
     );

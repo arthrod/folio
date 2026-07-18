@@ -33,7 +33,9 @@ const PAGES = (
   "/redline3,/redline3-view,/redline3-ts,/redline3-native,/redline3-vue,/redline3-vue-ts,/redline3-vue-native"
 ).split(",");
 const SLICES_DIR = path.resolve(process.env.SLICES_DIR ?? "bench-fixtures/dissertacao-slices");
-const FIXTURES = (process.env.FIXTURES ?? "slice0,slice1,slice2,slice3,slice4,slice5,slice6,slice7,slice8,slice9").split(",");
+const FIXTURES = (
+  process.env.FIXTURES ?? "slice0,slice1,slice2,slice3,slice4,slice5,slice6,slice7,slice8,slice9"
+).split(",");
 const REPS = Number(process.env.REPS ?? 3);
 const RUN_TIMEOUT_MS = Number(process.env.RUN_TIMEOUT_MS ?? 300000);
 const SETTLE_MS = Number(process.env.SETTLE_MS ?? 2500);
@@ -47,7 +49,9 @@ const summaryPath = path.join(OUT_DIR, `redline3-stats-${stamp}.summary.json`);
 const MB = (bytes) => Math.round((bytes / 1048576) * 10) / 10;
 
 const getMetrics = async (cdp) =>
-  Object.fromEntries((await cdp.send("Performance.getMetrics")).metrics.map((m) => [m.name, m.value]));
+  Object.fromEntries(
+    (await cdp.send("Performance.getMetrics")).metrics.map((m) => [m.name, m.value]),
+  );
 
 const runOnce = async (browser, pagePath, fixture, rep) => {
   const context = await browser.newContext({ viewport: { width: 1680, height: 1000 } });
@@ -61,8 +65,12 @@ const runOnce = async (browser, pagePath, fixture, rep) => {
     await cdp.send("Performance.enable");
     await cdp.send("HeapProfiler.enable");
 
-    await page.route("**/redline3/pair1-a.docx", (r) => r.fulfill({ path: path.join(SLICES_DIR, `${fixture}-a.docx`) }));
-    await page.route("**/redline3/pair1-b.docx", (r) => r.fulfill({ path: path.join(SLICES_DIR, `${fixture}-b.docx`) }));
+    await page.route("**/redline3/pair1-a.docx", (r) =>
+      r.fulfill({ path: path.join(SLICES_DIR, `${fixture}-a.docx`) }),
+    );
+    await page.route("**/redline3/pair1-b.docx", (r) =>
+      r.fulfill({ path: path.join(SLICES_DIR, `${fixture}-b.docx`) }),
+    );
     await page.route("**/redline3/pair1-redline.docx", (r) =>
       r.fulfill({ path: path.join(SLICES_DIR, `${fixture}-redline.docx`) }),
     );
@@ -142,10 +150,13 @@ const runOnce = async (browser, pagePath, fixture, rep) => {
     const failureEl = page.isClosed() ? null : await page.$('[data-testid="engine-failure"]');
     const countText = page.isClosed()
       ? null
-      : await page.textContent('[data-testid="revision-count"]', { timeout: 2000 }).catch(() => null);
+      : await page
+          .textContent('[data-testid="revision-count"]', { timeout: 2000 })
+          .catch(() => null);
     if (failureEl) {
       row.outcome = "failure-banner";
-      row.failure = (await page.textContent('[data-testid="engine-failure"]'))?.slice(0, 300) ?? null;
+      row.failure =
+        (await page.textContent('[data-testid="engine-failure"]'))?.slice(0, 300) ?? null;
     } else if (countText && /^\d+$/.test(countText.trim())) {
       row.outcome = "ok";
       row.revisions = Number(countText.trim());
@@ -218,7 +229,10 @@ const stats = (values) => {
   const nums = values.filter((v) => typeof v === "number" && Number.isFinite(v));
   if (nums.length === 0) return null;
   const mean = nums.reduce((a, b) => a + b, 0) / nums.length;
-  const sd = nums.length > 1 ? Math.sqrt(nums.reduce((a, b) => a + (b - mean) ** 2, 0) / (nums.length - 1)) : 0;
+  const sd =
+    nums.length > 1
+      ? Math.sqrt(nums.reduce((a, b) => a + (b - mean) ** 2, 0) / (nums.length - 1))
+      : 0;
   const sorted = [...nums].sort((a, b) => a - b);
   const round = (v) => Math.round(v * 10) / 10;
   return {
@@ -246,7 +260,7 @@ const METRIC_KEYS = [
   "styleMs",
   "scriptMs",
   "revisions",
-] ;
+];
 
 const aggregate = (rows, keyOf) => {
   const groups = new Map();

@@ -114,7 +114,8 @@ export const aggregateMonolith = async (redline: ArrayBuffer): Promise<MonolithR
   // Reuse an existing revision's author/date for the wrappers we mint; ids
   // continue past the current maximum.
   const someRevision =
-    doc.getElementsByTagNameNS(W_NS, "ins").item(0) ?? doc.getElementsByTagNameNS(W_NS, "del").item(0);
+    doc.getElementsByTagNameNS(W_NS, "ins").item(0) ??
+    doc.getElementsByTagNameNS(W_NS, "del").item(0);
   const attrs: RevisionAttrs = {
     author: someRevision?.getAttributeNS(W_NS, "author") ?? "Jubarte",
     date: someRevision?.getAttributeNS(W_NS, "date") ?? "2026-01-01T00:00:00Z",
@@ -122,9 +123,10 @@ export const aggregateMonolith = async (redline: ArrayBuffer): Promise<MonolithR
   let nextId =
     Math.max(
       0,
-      ...[...Array.from(doc.getElementsByTagNameNS(W_NS, "ins")), ...Array.from(doc.getElementsByTagNameNS(W_NS, "del"))].map(
-        (el) => Number(el.getAttributeNS(W_NS, "id")) || 0,
-      ),
+      ...[
+        ...Array.from(doc.getElementsByTagNameNS(W_NS, "ins")),
+        ...Array.from(doc.getElementsByTagNameNS(W_NS, "del")),
+      ].map((el) => Number(el.getAttributeNS(W_NS, "id")) || 0),
     ) + 1;
 
   const makeRevisionElement = (kind: "ins" | "del"): Element => {
@@ -222,9 +224,7 @@ export const aggregateMonolith = async (redline: ArrayBuffer): Promise<MonolithR
 
   // Top-level body paragraphs only; leave the terminal one word-diffed (a
   // doc-terminal deleted mark has no join target on accept).
-  const children = Array.from(body.childNodes).filter((node): node is Element =>
-    isW(node, "p"),
-  );
+  const children = Array.from(body.childNodes).filter((node): node is Element => isW(node, "p"));
   const lastParagraph = children.at(-1) ?? null;
 
   let cluster: Element[] = [];

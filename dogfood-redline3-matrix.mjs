@@ -57,14 +57,17 @@ for (const page_def of PAGES) {
       const engine = (await page.textContent('[data-testid="engine"]')).trim();
       const rendered =
         page_def.kind === "vue"
-          ? await page.waitForFunction(
-              () => document.querySelectorAll("iframe.r3-htmlframe").length >= 3,
-              { timeout: 120000 },
-            ).then(() => true)
-          : await page.waitForFunction(
-              () => document.querySelectorAll(".r3-result .layout-page").length >= 1,
-              { timeout: 120000 },
-            ).then(() => true);
+          ? await page
+              .waitForFunction(() => document.querySelectorAll("iframe.r3-htmlframe").length >= 3, {
+                timeout: 120000,
+              })
+              .then(() => true)
+          : await page
+              .waitForFunction(
+                () => document.querySelectorAll(".r3-result .layout-page").length >= 1,
+                { timeout: 120000 },
+              )
+              .then(() => true);
       const engineOk =
         page_def.expect === "wasm"
           ? engine === "jubarte-wasm"
@@ -77,10 +80,9 @@ for (const page_def of PAGES) {
       // Monolith experiment on the main react wasm page.
       if (page_def.path === "/redline3") {
         await page.click('[data-testid="view-monolith"]');
-        await page.waitForFunction(
-          () => globalThis.__redline3?.getState()?.monolith != null,
-          { timeout: 120000 },
-        );
+        await page.waitForFunction(() => globalThis.__redline3?.getState()?.monolith != null, {
+          timeout: 120000,
+        });
         const monolith = await page.evaluate(() => globalThis.__redline3.getState().monolith);
         const monolithOk =
           monolith.elementsAfter < monolith.elementsBefore && monolith.revisions > 0;

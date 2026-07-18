@@ -29,45 +29,45 @@ import knownThrows from "./reviewer-views-known-throws.json";
 
 const CORPUS = process.env.REVIEWER_REDLINE_CORPUS_DIR;
 const files = CORPUS
-	? readdirSync(CORPUS)
-			.filter((f) => f.endsWith(".docx"))
-			.sort()
-	: [];
+  ? readdirSync(CORPUS)
+      .filter((f) => f.endsWith(".docx"))
+      .sort()
+  : [];
 
 const toArrayBuffer = (buffer: Buffer): ArrayBuffer =>
-	buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
+  buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
 
 /** Both views of every main story; returns the first thrown error, if any. */
 const materializeViews = async (docx: ArrayBuffer): Promise<string | null> => {
-	for (const view of ["final", "original"] as const) {
-		try {
-			const reviewer = await FolioDocxReviewer.fromBuffer(docx);
-			for (const { handle } of reviewer.listStories()) {
-				if (handle.type !== "main") {
-					continue;
-				}
-				reviewer.readReviewedStory({ story: handle, view });
-			}
-		} catch (error) {
-			return `${view}: ${String(error)}`;
-		}
-	}
-	return null;
+  for (const view of ["final", "original"] as const) {
+    try {
+      const reviewer = await FolioDocxReviewer.fromBuffer(docx);
+      for (const { handle } of reviewer.listStories()) {
+        if (handle.type !== "main") {
+          continue;
+        }
+        reviewer.readReviewedStory({ story: handle, view });
+      }
+    } catch (error) {
+      return `${view}: ${String(error)}`;
+    }
+  }
+  return null;
 };
 
 describe.if(Boolean(CORPUS))("reviewer views materialize on corpus redlines", () => {
-	for (const file of files) {
-		test(file, async () => {
-			const buffer = readFileSync(join(CORPUS as string, file));
-			const failure = await materializeViews(toArrayBuffer(buffer));
-			const known = (knownThrows as Record<string, string>)[file];
-			if (known) {
-				// Ratchet: a ledgered file must still throw; a clean run means the
-				// entry is stale and must be removed.
-				expect(failure, `ledger entry "${known}" is stale — remove it`).not.toBeNull();
-				return;
-			}
-			expect(failure).toBeNull();
-		});
-	}
+  for (const file of files) {
+    test(file, async () => {
+      const buffer = readFileSync(join(CORPUS as string, file));
+      const failure = await materializeViews(toArrayBuffer(buffer));
+      const known = (knownThrows as Record<string, string>)[file];
+      if (known) {
+        // Ratchet: a ledgered file must still throw; a clean run means the
+        // entry is stale and must be removed.
+        expect(failure, `ledger entry "${known}" is stale — remove it`).not.toBeNull();
+        return;
+      }
+      expect(failure).toBeNull();
+    });
+  }
 });

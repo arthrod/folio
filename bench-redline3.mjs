@@ -8,7 +8,10 @@
 import { chromium } from "@playwright/test";
 
 const BASE = process.env.BASE_URL ?? "https://folio-redline.cicero-im.workers.dev";
-const PAGES = (process.env.PAGES ?? "/redline3,/redline3-view,/redline3-ts,/redline3-native,/redline3-vue,/redline3-vue-ts,/redline3-vue-native").split(",");
+const PAGES = (
+  process.env.PAGES ??
+  "/redline3,/redline3-view,/redline3-ts,/redline3-native,/redline3-vue,/redline3-vue-ts,/redline3-vue-native"
+).split(",");
 
 const MB = (bytes) => Math.round((bytes / 1048576) * 10) / 10;
 
