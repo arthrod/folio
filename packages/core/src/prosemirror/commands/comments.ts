@@ -309,7 +309,13 @@ function resolveChange(
           // Leave the marker in place — Word treats this the same way.
           continue;
         }
-        if (canJoin(tr.doc, joinPos)) {
+        // `canJoin` alone is not a safe gate: it approves a paragraph|atom
+        // boundary (pageBreak — the atom's empty content reads as
+        // "compatible"), but `join`'s structural ReplaceStep then sees the
+        // atom as content between the boundary tokens and throws. A
+        // paragraph-mark resolution only ever merges PARAGRAPHS, so require a
+        // textblock on the far side of the boundary.
+        if (tr.doc.resolve(joinPos).nodeAfter?.isTextblock && canJoin(tr.doc, joinPos)) {
           tr.join(joinPos);
           // PM's `join` keeps the first paragraph's attrs, so the marker
           // would survive an otherwise-resolved revision. Drop it now.
