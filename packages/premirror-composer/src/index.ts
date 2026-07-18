@@ -386,7 +386,7 @@ function fixWordBoundarySplits(
 
     const moved: PlacedRun[] = [];
     while (current.runs.length > 0) {
-      const last = current.runs[current.runs.length - 1]!;
+      const last = current.runs.at(-1)!;
       let j = last.text.length;
       while (j > 0 && isWordChar(last.text[j - 1])) j--;
       if (j === last.text.length) break;
@@ -751,8 +751,9 @@ function composeFurniture(
     // block.runs may be field-substituted; measuredRuns keys are unchanged.
     const drafts = breakBlockIntoLineDrafts(block, snapshot, contentWidth, input.engine);
     if (drafts.length === 0) continue;
+    const yStart = y;
     const lines: LineBox[] = drafts.map((d, li) => ({
-      y: y + li * lineHeight,
+      y: yStart + li * lineHeight,
       height: lineHeight,
       runs: offsetRunsForSlot(d.runs, 0),
       pmRange: { from: d.pmFrom, to: d.pmTo },
@@ -804,8 +805,9 @@ function composeNotes(
     for (const block of snapshot.blocks) {
       const drafts = breakBlockIntoLineDrafts(block, snapshot, area.width, input.engine);
       if (drafts.length === 0) continue;
+      const yStart = y;
       const lines: LineBox[] = drafts.map((d, li) => ({
-        y: y + li * lineHeight,
+        y: yStart + li * lineHeight,
         height: lineHeight,
         runs: offsetRunsForSlot(d.runs, 0),
         pmRange: { from: d.pmFrom, to: d.pmTo },
@@ -959,7 +961,7 @@ export function composeLayout(
     const flushPage = (reasonForLastFragment?: BreakReason): void => {
       if (currentFragments.length === 0) return;
       if (reasonForLastFragment !== undefined) {
-        const last = currentFragments[currentFragments.length - 1]!;
+        const last = currentFragments.at(-1)!;
         currentFragments[currentFragments.length - 1] = {
           ...last,
           breakReason: reasonForLastFragment,
@@ -1042,8 +1044,9 @@ export function composeLayout(
         }
 
         const chunk = drafts.slice(lineCursor, lineCursor + useFit);
+        const yStart = currentY;
         const assigned: LineBox[] = chunk.map((d, li) => {
-          const y = currentY + li * lineHeight;
+          const y = yStart + li * lineHeight;
           const bt = frame.y + y;
           const bb = bt + lineHeight;
           const s = usableSlotForBand(frame.width, bt, bb, obstacles, policies.minSlotWidthPx);

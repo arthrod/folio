@@ -86,7 +86,8 @@ describe("composer line wrapping", () => {
     expect((frag?.lines.length ?? 0) > 1).toBe(true);
     // Wrapped lines never exceed the frame width.
     for (const line of frag?.lines ?? []) {
-      const lineWidth = line.runs.reduce((acc, r) => Math.max(acc, r.x + r.width), 0);
+      let lineWidth = 0;
+      for (const r of line.runs) lineWidth = Math.max(lineWidth, r.x + r.width);
       expect(lineWidth).toBeLessThanOrEqual(200 + 1e-6);
     }
   });
@@ -149,7 +150,7 @@ describe("composer keep-with-next", () => {
     expect(out.pages.length).toBeGreaterThanOrEqual(2);
     const page0 = out.pages[0]?.frames[0]?.fragments ?? [];
     expect(page0.map((f) => f.blockId)).toEqual(["b0"]);
-    expect(page0[page0.length - 1]?.breakReason).toBe("keep_with_next");
+    expect(page0.at(-1)?.breakReason).toBe("keep_with_next");
     // block1 and block2 stay together on the next page.
     const page1Ids = out.pages[1]?.frames[0]?.fragments.map((f) => f.blockId) ?? [];
     expect(page1Ids).toContain("b1");

@@ -31,9 +31,9 @@ export function getPageLayoutGeometry(
 
   if (pageLayoutMode === "spread") {
     const rows = Math.ceil(layout.pages.length / 2);
-    const rowTops: number[] = new Array(rows).fill(0);
-    const rowHeights: number[] = new Array(rows).fill(0);
-    const rowWidths: number[] = new Array(rows).fill(0);
+    const rowTops: number[] = Array.from({ length: rows }, () => 0);
+    const rowHeights: number[] = Array.from({ length: rows }, () => 0);
+    const rowWidths: number[] = Array.from({ length: rows }, () => 0);
 
     let runningTop = 0;
     for (let row = 0; row < rows; row++) {

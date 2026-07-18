@@ -215,7 +215,7 @@ function xForPmPos(line: LineBox, pmPos: number): number {
     }
   }
   if (line.runs.length > 0) {
-    const last = line.runs[line.runs.length - 1]!;
+    const last = line.runs.at(-1)!;
     if (pmPos >= last.pmRange.to) return last.x + last.width;
     return Math.min(...line.runs.map((r) => r.x));
   }
