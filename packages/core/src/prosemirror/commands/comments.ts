@@ -7,6 +7,7 @@
 import type { Mark, Node as PMNode } from "prosemirror-model";
 import type { Command, EditorState, Transaction } from "prosemirror-state";
 import { removeRow, TableMap } from "prosemirror-tables";
+import { canJoin } from "prosemirror-transform";
 
 import type {
   RunPropertyChange,
@@ -308,16 +309,27 @@ function resolveChange(
           // Leave the marker in place — Word treats this the same way.
           continue;
         }
-        try {
+        if (canJoin(tr.doc, joinPos)) {
           tr.join(joinPos);
           // PM's `join` keeps the first paragraph's attrs, so the marker
           // would survive an otherwise-resolved revision. Drop it now.
           tr.setNodeAttribute(mappedPos, "pPrMark", null);
-        } catch {
-          // PM rejects the join if the two blocks aren't structurally
-          // compatible (e.g. paragraph followed by a table). Leaving the
-          // marker is the safe fallback.
+          continue;
         }
+        // The next block cannot merge into this paragraph (a table follows,
+        // or the paragraph is the last child of its parent). `tr.join` must
+        // not run unguarded here: since prosemirror-transform 1.8 it applies
+        // destructive `clearIncompatible` steps BEFORE failing on the
+        // incompatible boundary, so a try/catch around it keeps a
+        // half-applied transaction that eats the neighbour's content.
+        if (paragraph.content.size === 0) {
+          // Word resolves an accepted deletion of an empty paragraph's mark
+          // before a table by dropping the paragraph entirely.
+          tr.delete(mappedPos, mappedPos + paragraph.nodeSize);
+          continue;
+        }
+        // Non-empty paragraph with nowhere to merge: leave the marker in
+        // place, same as the doc-terminal case above.
       }
 
       tableRowStructuralOps.sort((left, right) => right.rowPos - left.rowPos);
