@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
+import type { SegmentFitEngineLike } from "./index";
 import {
   DEFAULT_LAYOUT_POLICIES,
   LETTER_PAGE_PX,
@@ -43,5 +44,26 @@ describe("defaultPremirrorOptions policies merge (PR #110 review)", () => {
     expect(policies.widowLinesMin).toBe(DEFAULT_LAYOUT_POLICIES.widowLinesMin);
     expect(policies.orphanLinesMin).toBe(DEFAULT_LAYOUT_POLICIES.orphanLinesMin);
     expect(policies.minSlotWidthPx).toBe(DEFAULT_LAYOUT_POLICIES.minSlotWidthPx);
+  });
+});
+
+describe("segment-fit engine threading (E-4 unification)", () => {
+  const fakeEngine: SegmentFitEngineLike = {
+    prepare: (text: string) => ({ text }),
+    fitLine: () => null,
+  };
+
+  it("defaultPremirrorOptions carries an engine override through", () => {
+    expect(defaultPremirrorOptions({ engine: fakeEngine }).engine).toBe(fakeEngine);
+  });
+
+  it("createLayoutInputFromOptions threads the engine into the layout input", () => {
+    const input = createLayoutInputFromOptions(defaultPremirrorOptions({ engine: fakeEngine }));
+    expect(input.engine).toBe(fakeEngine);
+  });
+
+  it("leaves the engine absent when not provided", () => {
+    expect(defaultPremirrorOptions().engine).toBeUndefined();
+    expect(createLayoutInputFromOptions(defaultPremirrorOptions()).engine).toBeUndefined();
   });
 });

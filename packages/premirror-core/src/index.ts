@@ -43,6 +43,65 @@ export type PremirrorOptions = {
   typography: TypographyConfig;
   policies?: LayoutPolicyConfig;
   features?: Record<string, boolean>;
+  /**
+   * Line-fitting engine used for text measurement (E-4 unification). Absent
+   * engine means measurement falls back to the deterministic per-character
+   * widths; no premirror package talks to a concrete engine directly.
+   */
+  engine?: SegmentFitEngineLike;
+};
+
+// --- Segment-fit engine seam -------------------------------------------------
+
+/**
+ * One fitted line piece returned by the engine. Structural mirror of
+ * folio-core's `SegmentFitLine` (`packages/core/src/layout-engine/measure/
+ * segmentFit.ts`); see `SegmentFitEngineLike`.
+ */
+export type SegmentFitLineLike = {
+  /** Exclusive end offset in the prepared text (UTF-16 code units). */
+  endChar: number;
+  /** Measured advance width of the fitted piece in px. */
+  width: number;
+  /** Opaque continuation cursor; pass back to `fitLine` for the next piece. */
+  cursor: unknown;
+};
+
+/** A prepared (segmented + measured) text handle. Opaque to premirror. */
+export type SegmentFitPreparedLike = unknown;
+
+/**
+ * Pluggable line-fitting engine injected into the premirror measurement
+ * pipeline. This is a STRUCTURAL mirror of folio-core's `SegmentFitEngine`
+ * seam type (`packages/core/src/layout-engine/measure/segmentFit.ts`) —
+ * deliberately declared here without a folio-core dependency so the premirror
+ * packages stay standalone and upstreamable to samwillis/premirror. Any object
+ * with this shape satisfies it: `@stll/premirror-bridge`'s
+ * `pretextSegmentFitEngine`, or a deterministic test fake.
+ */
+export type SegmentFitEngineLike = {
+  /**
+   * Whether the engine can fit `text` with offsets that stay aligned to the
+   * original string. Engines that normalize input before segmenting must
+   * decline such texts here; declined texts measure through the fallback.
+   */
+  supportsText?: (text: string) => boolean;
+  /**
+   * Prepare `text` for fitting under the given CSS font string.
+   * Implementations should cache.
+   */
+  prepare: (text: string, cssFont: string) => SegmentFitPreparedLike;
+  /**
+   * Fit the next line piece starting at `cursor` (null = start of text) into
+   * `maxWidth` px. Returns null when nothing fits.
+   */
+  fitLine: (
+    prepared: SegmentFitPreparedLike,
+    cursor: unknown | null,
+    maxWidth: number,
+  ) => SegmentFitLineLike | null;
+  /** Drop any prepared/measured state. */
+  clearCaches?: () => void;
 };
 
 // --- Snapshot model ----------------------------------------------------------
@@ -213,6 +272,11 @@ export type LayoutInput = {
   margins: PageMargins;
   typography: TypographyConfig;
   policies: LayoutPolicyConfig;
+  /**
+   * Line-fitting engine for runs without usable measured widths (E-4
+   * unification). Absent engine means the deterministic fallback widths.
+   */
+  engine?: SegmentFitEngineLike;
   obstacles?: BandObstacle[];
   /** Optional header content laid into the top-margin band on every page. */
   header?: PageFurnitureInput;
@@ -336,12 +400,14 @@ export function defaultPremirrorOptions(overrides?: Partial<PremirrorOptions>): 
   // override must not drop the unspecified policy defaults.
   const policies = { ...DEFAULT_LAYOUT_POLICIES, ...overrides?.policies };
   const features = overrides?.features;
+  const engine = overrides?.engine;
   return {
     page,
     margins,
     typography,
     policies,
     ...(features !== undefined ? { features } : {}),
+    ...(engine !== undefined ? { engine } : {}),
   };
 }
 
@@ -351,6 +417,7 @@ export function createLayoutInputFromOptions(options: PremirrorOptions): LayoutI
     margins: options.margins,
     typography: options.typography,
     policies: { ...DEFAULT_LAYOUT_POLICIES, ...options.policies },
+    ...(options.engine !== undefined ? { engine: options.engine } : {}),
   };
 }
 
