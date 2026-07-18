@@ -25,8 +25,20 @@ import { DEFAULT_LAYOUT_POLICIES } from "@stll/premirror-core";
 const UNBOUNDED_WIDTH = 1_000_000_000;
 // Bounded LRU: long editing sessions probe many transient substrings; an
 // uncapped map is a slow leak. Refresh-on-get keeps hot fonts/words resident.
+// One cache PER ENGINE (WeakMap keyed on the injected instance): widths are a
+// property of (engine, font, text), and a host may inject different engines
+// in one process; keying on (font, text) alone would leak widths across them.
 const SEGMENT_FIT_WIDTH_CACHE_MAX = 4000;
-const segmentFitWidthCache = new Map<string, number>();
+const segmentFitWidthCaches = new WeakMap<SegmentFitEngineLike, Map<string, number>>();
+
+function widthCacheFor(engine: SegmentFitEngineLike): Map<string, number> {
+  let cache = segmentFitWidthCaches.get(engine);
+  if (!cache) {
+    cache = new Map<string, number>();
+    segmentFitWidthCaches.set(engine, cache);
+  }
+  return cache;
+}
 
 /**
  * Full-run width via the injected segment-fit engine (E-4 unification: the
@@ -42,11 +54,12 @@ function widthBySegmentFit(
 ): number | null {
   if (!engine) return null;
   if (engine.supportsText && !engine.supportsText(text)) return null;
+  const widthCache = widthCacheFor(engine);
   const key = `${font}\n${text}`;
-  const cached = segmentFitWidthCache.get(key);
+  const cached = widthCache.get(key);
   if (cached !== undefined) {
-    segmentFitWidthCache.delete(key);
-    segmentFitWidthCache.set(key, cached);
+    widthCache.delete(key);
+    widthCache.set(key, cached);
     return cached;
   }
   try {
@@ -56,10 +69,10 @@ function widthBySegmentFit(
       return null;
     }
     const width = Math.max(0, line?.width ?? 0);
-    segmentFitWidthCache.set(key, width);
-    if (segmentFitWidthCache.size > SEGMENT_FIT_WIDTH_CACHE_MAX) {
-      const oldest = segmentFitWidthCache.keys().next().value;
-      if (oldest !== undefined) segmentFitWidthCache.delete(oldest);
+    widthCache.set(key, width);
+    if (widthCache.size > SEGMENT_FIT_WIDTH_CACHE_MAX) {
+      const oldest = widthCache.keys().next().value;
+      if (oldest !== undefined) widthCache.delete(oldest);
     }
     return width;
   } catch {

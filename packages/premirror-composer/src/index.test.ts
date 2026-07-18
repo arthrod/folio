@@ -256,4 +256,30 @@ describe("segment-fit engine injection (E-4 unification)", () => {
     expect(run?.text).toBe("fallback");
     expect(run?.width).toBe(56);
   });
+
+  it("keeps width caches per engine: a second engine's widths are its own, not the first's", () => {
+    const fakeTwentyPxEngine: SegmentFitEngineLike = {
+      prepare: (text: string) => ({ text }),
+      fitLine: (prepared) => {
+        const { text } = prepared as { text: string };
+        if (text.length === 0) return null;
+        return { endChar: text.length, width: text.length * 20, cursor: null };
+      },
+    };
+    // Same font + text through both engines, deliberately: engine identity
+    // must be part of the cache identity, or the second measure returns the
+    // first engine's cached width.
+    const first = composeLayout(
+      unmeasuredSnapshot("shared"),
+      null,
+      makeInput({ engine: fakeTenPxEngine }),
+    );
+    expect(first.pages[0]?.frames[0]?.fragments[0]?.lines[0]?.runs[0]?.width).toBe(60);
+    const second = composeLayout(
+      unmeasuredSnapshot("shared"),
+      null,
+      makeInput({ engine: fakeTwentyPxEngine }),
+    );
+    expect(second.pages[0]?.frames[0]?.fragments[0]?.lines[0]?.runs[0]?.width).toBe(120);
+  });
 });
