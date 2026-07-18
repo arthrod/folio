@@ -942,6 +942,38 @@ function rewriteRunTextAsDeleted(xml: string): string {
     .replace(/<\/w:instrText>/gu, "</w:delInstrText>");
 }
 
+/**
+ * Drawing-aware variant for the field-level deletion path. A serialized field
+ * may carry `<w:drawing>`/`<w:pict>` subtrees whose nested `<w:txbxContent>`
+ * runs use `<w:t>` that must NOT be rewritten to `<w:delText>`. Extract those
+ * subtrees into placeholders, rewrite the remainder, then restore them.
+ * These elements do not self-nest in valid OOXML.
+ */
+const DRAWING_PLACEHOLDER_PREFIX = "\x00FIELD_DEL_DRAWING_";
+const PICT_PLACEHOLDER_PREFIX = "\x00FIELD_DEL_PICT_";
+
+function rewriteRunTextAsDeletedDrawingAware(xml: string): string {
+  const subtrees: string[] = [];
+  const protectedXml = xml
+    .replace(/<w:drawing\b[\s\S]*?<\/w:drawing>/gu, (match) => {
+      const i = subtrees.length;
+      subtrees.push(match);
+      return `${DRAWING_PLACEHOLDER_PREFIX}${i}\x00`;
+    })
+    .replace(/<w:pict\b[\s\S]*?<\/w:pict>/gu, (match) => {
+      const i = subtrees.length;
+      subtrees.push(match);
+      return `${PICT_PLACEHOLDER_PREFIX}${i}\x00`;
+    });
+
+  const rewritten = rewriteRunTextAsDeleted(protectedXml);
+
+  return rewritten.replace(
+    /\x00FIELD_DEL_(DRAWING|PICT)_(\d+)\x00/gu,
+    (_, key: string, idx: string) => subtrees[Number(idx)] ?? "",
+  );
+}
+
 function normalizedTrackedChangeAttrs(info: TrackedChangeInfo): string {
   const normalizedId = Number.isInteger(info.id) && info.id >= 0 ? info.id : 0;
   const authorCandidate = typeof info.author === "string" ? info.author.trim() : "";
@@ -979,7 +1011,9 @@ function wrapFieldTrackedChange(field: SimpleField | ComplexField, xml: string):
   }
   const tag = FIELD_TRACKED_CHANGE_TAGS[change.kind];
   const inner =
-    change.kind === "deletion" || change.kind === "moveFrom" ? rewriteRunTextAsDeleted(xml) : xml;
+    change.kind === "deletion" || change.kind === "moveFrom"
+      ? rewriteRunTextAsDeletedDrawingAware(xml)
+      : xml;
   return `<w:${tag} ${normalizedTrackedChangeAttrs(change.info)}>${inner}</w:${tag}>`;
 }
 
