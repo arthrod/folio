@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * ONE-pretext-surface invariant (E-4 unification): `@stll/premirror-bridge` is
@@ -16,11 +18,11 @@ const GUARD_FILE = "one-pretext-surface.test.ts";
 
 describe("one-pretext-surface guard", () => {
   it("no src file references the pretext package", () => {
-    const srcDir = new URL(".", import.meta.url).pathname;
+    const srcDir = fileURLToPath(new URL(".", import.meta.url));
     const offenders: string[] = [];
     for (const rel of new Bun.Glob("**/*.{ts,tsx}").scanSync({ cwd: srcDir })) {
       if (rel.endsWith(GUARD_FILE)) continue;
-      const content = readFileSync(`${srcDir}${rel}`, "utf8");
+      const content = readFileSync(join(srcDir, rel), "utf8");
       if (content.includes(FORBIDDEN_SPECIFIER)) offenders.push(rel);
     }
     expect(offenders).toEqual([]);

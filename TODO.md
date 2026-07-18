@@ -57,3 +57,30 @@ TARGET_MS (plan §12.6), then the budget assertion is committed as a test.
   upstreaming as a folio-core redline post-processing option.
 - `bench-redline3.mjs` (CDP load/render/memory snapshot) is committed at the
   repo root; run Lighthouse separately for scored vitals.
+
+## 6. Premirror port follow-ups — bot-review triage on PR #7 (MEDIUM)
+
+Findings from adversarial triage of the CodeAnt/Gemini review of the E-3/E-4
+port branch. All are in PORTED upstream logic (samwillis/premirror lineage +
+eigenport furniture superset); the port deliberately preserved upstream
+behavior, so these are follow-ups, not port blockers. Refuted claims are
+recorded in the PR conversation, not here.
+
+- CONFIRMED (react projection): `fragmentProjection.tsx` resolves blocks to
+  paragraph nodes only (`paragraphRangeFromBlockId` / `paragraphRangeAtPos`
+  both require `type.name === "paragraph"`), but the adapter also emits
+  `heading` blocks (`pushParagraphLike(..., "heading", ...)`); heading run
+  decorations are silently skipped. Broaden to the block types the adapter
+  emits, red-first.
+- CONFIRMED (composer, latent): newline-split pieces reuse per-piece char
+  offsets (`pushPlacedSegment(..., piece, 0, piece.length, ...)`) while
+  `pmPosAtRunOffset` expects offsets into the ORIGINAL run text, so a run
+  containing `\n` maps later pieces to duplicate pmRanges. Latent today
+  because the PM adapter never emits `\n` inside a run (hard breaks are
+  nodes); real for any host feeding raw multi-line runs.
+- PLAUSIBLE, unverified (composer pagination family): endnote pages are
+  appended after the header/footer composition loop (no furniture on endnote
+  pages) and NUMPAGES is substituted from the body-page count before endnote
+  pages exist; `fixWordBoundarySplits` moves trailing word chars to the next
+  line without re-checking that line's fit. Verify against upstream behavior
+  before changing — these may be Milestone-1 scope cuts, not bugs.
