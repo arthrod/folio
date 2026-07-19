@@ -39,6 +39,27 @@ export type ImageVisualAttrs = {
   cropLeft?: number;
 };
 
+export type ImageBorderAttrs = {
+  borderWidth?: number;
+  borderColor?: string;
+  borderStyle?: string;
+};
+
+/**
+ * Paint image borders carried through the layout model. Folio's PM schema
+ * uses `borderStyle` (not upstream's `borderKind`); the painter mirrors the
+ * editor DOM serialization while keeping the authored image box size stable.
+ */
+export function applyImageBorder(element: HTMLElement, border: ImageBorderAttrs): void {
+  if (border.borderWidth == null || border.borderWidth <= 0) {
+    return;
+  }
+  const borderStyle = border.borderStyle || "solid";
+  const borderColor = border.borderColor || "#000000";
+  element.style.border = `${border.borderWidth}px ${borderStyle} ${borderColor}`;
+  element.style.boxSizing = "border-box";
+}
+
 /**
  * True when any visual attribute is set. Cheap call-site guard so the no-op
  * common case skips the helper call.
@@ -266,6 +287,15 @@ export function renderImageFragment(
     containerEl.append(linkEl);
   } else {
     containerEl.append(imgEl);
+  }
+
+  // Cropped images clip an overflow-hidden container around a scaled `<img>`,
+  // so a border on the `<img>` itself is invisible. Paint on the container
+  // instead; uncropped images keep the border on the `<img>`.
+  if (hasImageCrop(block)) {
+    applyImageBorder(containerEl, block);
+  } else {
+    applyImageBorder(imgEl, block);
   }
 
   return containerEl;
